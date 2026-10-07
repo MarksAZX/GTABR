@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw
 
 def load(path):
     b = open(path, 'rb').read()
-    hdr_fmt = '<5I3f3f3f' + '48s' * 4 + '12f2f6f6f'
+    hdr_fmt = '<5I3f3f3f' + '48s' * 4 + '12f2f6f6f' + 'f3f'   # + animRootScale, pad
     hs = struct.calcsize(hdr_fmt)
     h = struct.unpack(hdr_fmt, b[:hs])
     magic, ver, flags, bones, lods = h[:5]

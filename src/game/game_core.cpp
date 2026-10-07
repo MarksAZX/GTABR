@@ -15,6 +15,7 @@ bool Game::init(const Init& i) {
   fileio::setSaveDir(i.saveDir);
   assets_.startLoading(r_, jobs_);
   queueModels();
+  audio_.init();
   startWorldJob();
   cam_.init(CamMode::TopDown);
   return true;
@@ -23,6 +24,7 @@ bool Game::init(const Init& i) {
 void Game::shutdown() {
   if (phase_ == Phase::Playing) saveGame();
   jobs_->waitIdle();
+  audio_.shutdown();
 }
 
 void Game::startWorldJob() {
@@ -46,6 +48,16 @@ void Game::finishLoading() {
   }
   materials_ = assets_.materials;
   finishModels();
+  buildWeaponMeshes(*r_, weaponMeshes_);
+  // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
+  pickups_ = {{kWpnBat, 0, {-20.0f, 0, -8.0f}}, {kWpnKnife, 0, {10.0f, 0, 8.0f}}, {kWpnCrowbar, 0, {-30.0f, 0, 8.0f}},
+              {kWpnBaton, 0, {30.0f, 0, -8.0f}}, {kWpnPistol, 45, {-40.5f, 0, -20.0f}}, {kWpnRevolver, 24, {40.5f, 0, 20.0f}},
+              {kWpnSmg, 90, {-7.5f, 0, 30.0f}}, {kWpnShotgun, 24, {7.5f, 0, -30.0f}}};
+  for (Pickup& k : pickups_) {
+    Vec2 p{k.pos.x, k.pos.z};
+    phys::depenetrateCircle(world_, p, 0.5f);
+    k.pos = {p.x, world_.heightAt(p.x, p.y), p.y};
+  }
   worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
@@ -189,9 +201,10 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   // ---- radial wheel
   if (in.wheelPressed && !panel_.open && fadeAlpha_ < 0.3f && !player_.entering && !player_.exiting) {
     wheel_.open = true;
-    wheel_.category = 1;
+    wheel_.category = 0;
     wheel_.slots[0].clear();
-    wheel_.slots[0].push_back(0);
+    for (int w = 0; w < kWeaponCount; ++w)
+      if (player_.owned[w]) wheel_.slots[0].push_back(w);   // weapon ids (category 0), item ids (category 1)
     wheel_.slots[1].clear();
     for (int i = 1; i < kItemCount; ++i)
       if (inventory_[i] > 0) wheel_.slots[1].push_back(i);
@@ -212,7 +225,8 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     } else if (len >= R * 0.5f) {
       float ang = std::atan2(d.x, -d.y);
       if (ang < 0) ang += kTau;
-      int slot = (int)std::floor((ang + kTau / 16.0f) / (kTau / 8.0f)) % 8;
+      int nSec = wheel_.category == 0 ? kWeaponCount : 8;
+      int slot = (int)std::floor((ang + kTau / (2.0f * nSec)) / (kTau / nSec)) % nSec;
       wheel_.hovered = slot < (int)wheel_.slots[wheel_.category].size() ? slot : -1;
     } else if (len < R * 0.12f) {
       wheel_.hovered = -1;
@@ -220,11 +234,13 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     (void)prevHover;
     if (in.wheelReleased || (!in.wheelHeld && !useScripted_)) {
       if (wheel_.hovered >= 0 && wheel_.hovered < (int)wheel_.slots[wheel_.category].size()) {
-        int item = wheel_.slots[wheel_.category][wheel_.hovered];
-        if (itemDef(item).category == ItemCategory::Weapon) {
-          player_.weapon = item;
-          toast(std::string("Equipado: ") + itemDef(item).name, "fist");
-        } else useItem(item);
+        int id = wheel_.slots[wheel_.category][wheel_.hovered];
+        if (wheel_.category == 0) {
+          if (id != player_.weapon) {
+            equipWeapon(id);
+            toast(std::string("Equipado: ") + weaponDef(id).name, weaponDef(id).icon);
+          }
+        } else useItem(id);
       }
       wheel_.open = false;
     }
@@ -246,7 +262,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   }
 
   // slow motion while the wheel is open
-  float targetScale = wheel_.open ? 0.15f : 1.0f;
+  float targetScale = wheel_.open ? 0.3f : 1.0f;   // the world keeps moving, slowly, while choosing
   timeScale_ += (targetScale - timeScale_) * expDecay(10.0f, dtReal);
   float dt = dtReal * timeScale_;
   time_ += dt;
@@ -255,8 +271,11 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (panel_.open || wheel_.open || fadeAlpha_ > 0.6f) { gameIn.move = {}; gameIn.runHeld = false; }
 
   updatePlayer(dt, gameIn);
+  updateCombat(dt, gameIn);
   updateVehicles(dt, gameIn);
   updateNpcs(dt);
+  updateWanted(dt);
+  updatePolice(dt);
   updateParticles(dt);
 
   // fuelling
@@ -293,6 +312,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     if (!panel_.open && !wheel_.open) cam_.update(dtReal, ci, world_, screenW_ / std::max(1.0f, screenH_));
     else { CameraInput frozen = ci; frozen.look = {}; frozen.zoomDelta = 0; cam_.update(dtReal, frozen, world_, screenW_ / std::max(1.0f, screenH_)); }
     cameraShake_ = std::max(0.0f, cameraShake_ - dtReal * 2.5f);
+    audio_.setListener(cam_.focus(), cam_.right());
   }
   indoorBlend_ += ((player_.indoors ? 1.0f : 0.0f) - indoorBlend_) * expDecay(6.0f, dtReal);
 
@@ -440,8 +460,21 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     return;
   }
 
+  // ---- on the floor / dead: no control (combat code slides and gets the character up)
+  if (p.down || p.dead) {
+    p.vel = {};
+    p.speed = 0;
+    p.running = false;
+    p.y += (world_.heightAt(p.pos.x, p.pos.y) - p.y) * expDecay(18.0f, dt);
+    return;
+  }
   // ---- walking
   Vec2 mv = in.move;
+  // attacking / hit / reloading slows the character; aiming turns it into a strafe
+  float moveMul = 1.0f;
+  if (p.attackT >= 0) moveMul = p.attackKind == 2 ? 0.05f : 0.3f;
+  if (p.hitStun > 0) moveMul = std::min(moveMul, 0.15f);
+  mv = mv * moveMul;
   float mag = std::min(1.0f, mv.length());
   Vec2 camF2 = {std::sin(cam_.yaw()), -std::cos(cam_.yaw())};
   Vec2 camR2 = {std::cos(cam_.yaw()), std::sin(cam_.yaw())};
@@ -471,11 +504,15 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
       p.pos += h.normal * h.depth;
       float closing = -(v.vel - p.vel).dot(h.normal);
       if (std::fabs(v.speed) > 2.5f && closing > 2.0f && p.hurtTimer <= 0.0f) {
-        p.health = std::max(1.0f, p.health - closing * 3.0f);
+        DamageInfo d;
+        d.type = DamageType::RunOver;
+        d.amount = closing * 3.0f;
+        d.attacker = {ActorKind::Vehicle, v.id};
+        d.dir = h.normal;
+        d.knockback = std::min(8.0f, closing * 0.8f);
+        applyDamage({ActorKind::Player, 0}, d);
         p.hurtTimer = 1.0f;
-        p.vel += h.normal * 4.0f;
-        cameraShake_ = std::max(cameraShake_, 0.5f);
-        toast("Ai! Cuidado com os carros", "heart", rgba(1.0f, 0.55f, 0.5f));
+        if (!p.dead) toast("Ai! Cuidado com os carros", "heart", rgba(1.0f, 0.55f, 0.5f));
       }
     }
   }
@@ -492,7 +529,8 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   }
   Vec2 actual = (p.pos - before) / std::max(dt, 1e-4f);
   p.speed = actual.length();
-  if (p.speed > 0.35f) {
+  if (p.aimHold > 0 && isFirearm(p.weapon)) p.targetYaw = yawFromDir(p.aimDir);   // keep facing the aim while strafing
+  else if (p.speed > 0.35f && p.attackT < 0) {
     float want = yawFromDir(p.vel.length() > 0.2f ? p.vel : actual);
     p.targetYaw = want;
   }
@@ -512,6 +550,7 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
   float h = dt / steps;
   for (int s = 0; s < steps; ++s) {
     for (Vehicle& v : vehicles_) {
+      if (v.despawn || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
       VehicleInput vi;
       bool driven = (player_.vehicle == v.id && !player_.exiting);
       if (driven) {
@@ -529,8 +568,16 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
       if (impact > 2.0f && driven) {
         cameraShake_ = std::max(cameraShake_, clamp(impact / 12.0f, 0.1f, 1.0f));
         if (impact > 7.0f) {
-          player_.health = std::max(1.0f, player_.health - (impact - 7.0f) * 1.6f);
+          DamageInfo d;
+          d.type = DamageType::Crash;
+          d.amount = (impact - 7.0f) * 1.6f;
+          d.attacker = {ActorKind::World, -1};
+          applyDamage({ActorKind::Player, 0}, d);
           toast("Batida forte!", "car", rgba(1.0f, 0.55f, 0.45f));
+        }
+        if (impact > 4.0f) {
+          emitEvent(EventKind::Crash, v.pos, 22.0f, {ActorKind::Player, 0}, {}, 0);
+          audio_.play("crash", {v.pos.x, 0.8f, v.pos.y}, clamp(impact / 14.0f, 0.3f, 1.0f));
         }
       }
       // pedestrians
@@ -538,15 +585,22 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
         phys::OBB o = vehicleObb(v);
         for (Npc& n : npcs_) {
           if (n.interior) continue;
+          if (n.state == NpcState::Dead) continue;
           phys::Hit hh = phys::circleVsObb(n.pos, 0.3f, o);
           if (!hh.hit) continue;
           n.pos += hh.normal * hh.depth;
-          if (n.state != NpcState::Stunned) {
-            n.state = NpcState::Stunned;
-            n.stateTimer = 2.2f;
-            n.bubble = "Ei!!";
-            n.bubbleTimer = 1.6f;
-            n.path.clear();
+          if (n.hitStun <= 0) {
+            // run over: damage scales with the impact speed (central damage system)
+            DamageInfo d;
+            d.type = DamageType::RunOver;
+            d.amount = std::fabs(v.speed) * 6.0f;
+            d.attacker = driven ? ActorRef{ActorKind::Player, 0} : ActorRef{ActorKind::Vehicle, v.id};
+            d.dir = hh.normal;
+            d.knockback = std::min(9.0f, std::fabs(v.speed) * 0.7f);
+            applyDamage({ActorKind::Npc, n.id}, d);
+            n.hitStun = 1.0f;
+            audio_.play("body", {n.pos.x, 0.9f, n.pos.y}, 0.9f);
+            emitEvent(EventKind::RunOver, n.pos, 25.0f, d.attacker, {ActorKind::Npc, n.id}, 0);
             if (driven) cameraShake_ = std::max(cameraShake_, 0.3f);
           }
         }
@@ -578,8 +632,10 @@ void Game::updateParticles(float dt) {
   particles_.forEach([&](Particle& p, int idx) {
     p.life -= dt;
     if (p.life <= 0) { particles_.release(idx); return; }
+    p.vel.y -= p.gravity * dt;
     p.pos += p.vel * dt;
-    p.size += dt * 0.7f;
+    if (p.gravity > 0 && p.pos.y < 0.03f) { p.pos.y = 0.03f; p.vel = p.vel * 0.2f; }
+    else p.size += dt * (p.gravity > 0 ? 0.05f : 0.7f);
   });
 }
 
@@ -606,7 +662,7 @@ void Game::collectInteractables() {
   if (!driving) {
     for (size_t i = 0; i < vehicles_.size(); ++i) {
       const Vehicle& v = vehicles_[i];
-      if (v.occupant >= 0 || player_.indoors) continue;
+      if (v.occupant >= 0 || player_.indoors || v.despawn || v.wrecked || (v.police && v.driver >= 0)) continue;
       float d = distToObb(pp, vehicleObb(v));
       if (d < 2.4f) {
         Interactable it;
@@ -617,9 +673,11 @@ void Game::collectInteractables() {
     }
     for (size_t i = 0; i < npcs_.size(); ++i) {
       const Npc& n = npcs_[i];
-      if (n.interior != player_.indoors) continue;
+      if (n.interior != player_.indoors || n.despawn || n.state == NpcState::Dead || n.state == NpcState::Down || n.state == NpcState::Fight ||
+          n.state == NpcState::Flee || n.police)
+        continue;
       Interactable it;
-      it.kind = IKind::Npc; it.id = (int)i; it.pos = {n.pos.x, 0, n.pos.y}; it.radius = n.role == 4 ? 3.6f : 2.3f;
+      it.kind = IKind::Npc; it.id = (int)i; it.pos = {n.pos.x, 0, n.pos.y}; it.radius = n.role == 4 ? 4.6f : 2.3f;   // the clerk is reached across the counter
       it.label = n.role == 1 || n.role == 4 || n.role == 2 ? "Falar" : "Conversar";
       switch (n.role) {
         case 1: it.sub = "Frentista"; break;

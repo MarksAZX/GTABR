@@ -378,6 +378,26 @@ def build_icons(quality):
     # store (market), shopping cart
     im, d = new(); poly(d, [(12, 20), (32, 20), (44, 80), (100, 80), (112, 34), (38, 34)]); circ(d, (52, 100), 9); circ(d, (92, 100), 9); fin("cart", im)
 
+    # ---- weapons (side silhouettes, muzzle to the right)
+    im, d = new(); rrect(d, (10, 58, 54, 74), 6); poly(d, [(54, 56), (112, 62), (118, 66), (54, 76)]); rrect(d, (50, 52, 58, 80), 2); fin("knife", im)
+    im, d = new(); rrect(d, (8, 58, 120, 72), 7); rrect(d, (26, 72, 38, 104), 5); rrect(d, (8, 56, 30, 74), 5); fin("baton", im)
+    im, d = new(); line(d, (14, 100), (104, 22), 9); d.arc([P(92, 6), P(124, 40)], 200, 20, fill=W, width=9 * SS); line(d, (14, 100), (6, 112), 7); fin("crowbar", im)
+    im, d = new(); poly(d, [(8, 92), (16, 84), (100, 26), (118, 22), (122, 34), (114, 42), (22, 104), (12, 104)]); circ(d, (12, 100), 7); fin("bat", im)
+    im, d = new(); rrect(d, (16, 36, 112, 58), 5); poly(d, [(24, 56), (52, 56), (48, 104), (22, 104), (18, 96)]); d.arc([P(48, 52), P(76, 80)], 0, 180, fill=W, width=5 * SS); fin("pistol", im)
+    im, d = new(); rrect(d, (52, 42, 120, 54), 4); rrect(d, (36, 36, 70, 68), 10); poly(d, [(36, 62), (54, 62), (40, 108), (16, 104)]); d.arc([P(50, 58), P(74, 82)], 0, 180, fill=W, width=5 * SS); fin("revolver", im)
+    im, d = new(); rrect(d, (26, 38, 104, 60), 5); rrect(d, (104, 44, 124, 52), 3); rrect(d, (58, 58, 72, 108), 4); rrect(d, (34, 58, 48, 84), 4); rrect(d, (4, 42, 28, 54), 3); fin("smg", im)
+    im, d = new(); rrect(d, (40, 44, 124, 54), 4); rrect(d, (40, 54, 104, 62), 3); rrect(d, (66, 52, 96, 66), 4); poly(d, [(42, 44), (42, 62), (8, 80), (4, 68), (20, 48)]); fin("shotgun", im)
+    # wanted star and ammo
+    im, d = new()
+    pts = []
+    for k in range(10):
+        r = 56 if k % 2 == 0 else 24; a = k * math.pi / 5
+        pts.append((64 + math.sin(a) * r, 66 - math.cos(a) * r))
+    poly(d, pts); fin("star", im)
+    im, d = new(); rrect(d, (50, 36, 78, 112), 4); poly(d, [(50, 38), (64, 10), (78, 38)]); fin("ammo", im)
+    im, d = new(); circ(d, (64, 64), 50); circ(d, (64, 64), 38, (0, 0, 0, 0)); line(d, (64, 4), (64, 40), 7); line(d, (64, 88), (64, 124), 7); line(d, (4, 64), (40, 64), 7); line(d, (88, 64), (124, 64), 7); circ(d, (64, 64), 6); fin("crosshair", im)
+    im, d = new(); line(d, (40, 30), (40, 100), 10); line(d, (40, 100), (100, 100), 10); d.arc([P(40, 30), P(110, 100)], 270, 360, fill=W, width=10 * SS); poly(d, [(104, 56), (122, 74), (88, 74)]); fin("reload", im)
+
     cols = 8
     rows = (len(imgs) + cols - 1) // cols
     atlas = Image.new("RGBA", (cols * S, rows * S), (0, 0, 0, 0))

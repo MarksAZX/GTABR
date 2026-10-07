@@ -31,7 +31,7 @@ if(ANDROID)
   target_compile_options(gtabr PRIVATE -Wall -Wextra -Wno-unused-parameter)
   # keep ANativeActivity_onCreate exported
   set_target_properties(gtabr PROPERTIES LINK_FLAGS "-u ANativeActivity_onCreate")
-  target_link_libraries(gtabr_engine PUBLIC vulkan android log z)
+  target_link_libraries(gtabr_engine PUBLIC vulkan android log z aaudio)
   target_compile_definitions(gtabr_engine PUBLIC VK_USE_PLATFORM_ANDROID_KHR=1)
 else()
   find_package(Vulkan REQUIRED)

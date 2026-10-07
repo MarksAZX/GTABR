@@ -45,15 +45,25 @@ InputLayout Game::makeLayout() const {
   L.width = screenW_; L.height = screenH_;
   L.joyZoneRight = screenW_ * 0.44f;
   L.joyRadius = 105.0f * S;
-  Vec2 A{screenW_ - 230.0f * S, screenH_ - 200.0f * S};
-  L.run = {A + Vec2{30, 40} * S, 88.0f * S, true};
-  L.interact = {A + Vec2{-130, -20} * S, 70.0f * S, true};
-  L.enterExit = {A + Vec2{-10, -150} * S, 62.0f * S, true};
-  L.camera = {A + Vec2{-250, 70} * S, 46.0f * S, true};
-  L.wheel = {A + Vec2{-250, -105} * S, 48.0f * S, true};
+  // right thumb cluster: the primary action (attack / shoot) is the big button; secondary ones are smaller and
+  // contextual (interact, enter/exit, reload only show up when they can be used)
+  Vec2 A{screenW_ - 210.0f * S, screenH_ - 190.0f * S};
+  bool driving = player_.vehicle >= 0;
+  L.attack = {A + Vec2{40, 40} * S, 84.0f * S, !driving && !player_.dead};
+  L.run = {A + Vec2{-128, 92} * S, 58.0f * S, true};
+  L.interact = {A + Vec2{-138, -46} * S, 56.0f * S, focusValid_};
+  L.enterExit = {A + Vec2{36, -122} * S, 54.0f * S, driving || nearestVehicleTo(player_.pos, 2.4f) >= 0};
+  L.reload = {A + Vec2{-70, -150} * S, 42.0f * S,
+              !driving && isFirearm(player_.weapon) && player_.mag[player_.weapon] < weaponDef(player_.weapon).magazine &&
+                  player_.reserve[player_.weapon] > 0};
+  L.camera = {A + Vec2{-270, 96} * S, 40.0f * S, true};
+  L.wheel = {A + Vec2{-262, -44} * S, 46.0f * S, true};
   L.pause = {Vec2{screenW_ - 64.0f * S, 64.0f * S}, 34.0f * S, true};
   L.modal = panel_.open || menu_ != MenuState::None;
-  if (L.modal) { L.run.visible = L.interact.visible = L.enterExit.visible = L.camera.visible = L.wheel.visible = L.pause.visible = false; }
+  if (L.modal) {
+    L.run.visible = L.interact.visible = L.enterExit.visible = L.camera.visible = L.wheel.visible = L.pause.visible = false;
+    L.attack.visible = L.reload.visible = false;
+  }
   return L;
 }
 
@@ -102,17 +112,34 @@ void Game::drawTouchControls(const InputFrame& in) {
     ui_.circle(h.x, h.y, L.joyRadius, C(0.05f, 0.06f, 0.09f, 0.16f * a), 2.0f * S, C(1, 1, 1, 0.20f * a));
     ui_.circle(h.x, h.y, L.joyRadius * 0.42f, C(1, 1, 1, 0.14f * a), 0, 0);
   }
-  glassButton(ui_, L.run.c, L.run.r, in.runHeld, false, driving ? "target" : "run", kAccent, a, 0.78f);
-  ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r * 0.52f, 17 * S, C(1, 1, 1, 0.75f * a), Align::Center);
-  bool can = focusValid_;
-  float pulse = can ? 0.5f + 0.5f * std::sin(realTime_ * 5.0f) : 0.0f;
-  if (can) ui_.circle(L.interact.c.x, L.interact.c.y, L.interact.r + (5 + 5 * pulse) * S, C(1, 1, 1, 0), 2.0f * S, withAlpha(kAccent, (0.5f - 0.3f * pulse) * a));
-  glassButton(ui_, L.interact.c, L.interact.r, in.interactHeld, can, can ? focus_.icon : "hand", kAccent, can ? a : a * 0.55f);
-  bool canEnter = driving || nearestVehicleTo(player_.pos, 2.4f) >= 0 || (player_.indoors && false);
-  glassButton(ui_, L.enterExit.c, L.enterExit.r, in.enterExitHeld, canEnter, driving ? "door" : "car", kMint, canEnter ? a : a * 0.55f);
+  glassButton(ui_, L.run.c, L.run.r, in.runHeld, false, driving ? "target" : "run", kAccent, a, 0.72f);
+  ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r * 0.5f, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
+  // primary action: attack with the current weapon (fist / melee / firearm)
+  if (L.attack.visible) {
+    const WeaponDef& w = weaponDef(player_.weapon);
+    bool gun = w.magazine > 0;
+    bool empty = gun && player_.mag[player_.weapon] == 0 && player_.reserve[player_.weapon] == 0;
+    glassButton(ui_, L.attack.c, L.attack.r, in.attackHeld, player_.attackT >= 0 || player_.fireCooldown > 0.05f, w.icon, gun ? kRed : kAccent,
+                empty ? a * 0.5f : a, 0.62f);
+    if (gun) {
+      std::string ammo = std::to_string(player_.mag[player_.weapon]) + " | " + std::to_string(player_.reserve[player_.weapon]);
+      ui_.text(true, ammo, L.attack.c.x, L.attack.c.y + L.attack.r * 0.46f, 17 * S, C(1, 1, 1, 0.85f * a), Align::Center);
+      if (player_.reloadT >= 0) {
+        float k = player_.reloadT / w.reloadTime;
+        ui_.arc(L.attack.c.x, L.attack.c.y, L.attack.r + 3 * S, L.attack.r + 8 * S, 0, kTau * k, withAlpha(kAccent, 0.9f * a));
+      }
+    }
+  }
+  if (L.reload.visible) glassButton(ui_, L.reload.c, L.reload.r, false, false, "reload", kAccent, a, 0.6f);
+  if (L.interact.visible) {
+    float pulse = 0.5f + 0.5f * std::sin(realTime_ * 5.0f);
+    ui_.circle(L.interact.c.x, L.interact.c.y, L.interact.r + (5 + 5 * pulse) * S, C(1, 1, 1, 0), 2.0f * S, withAlpha(kAccent, (0.5f - 0.3f * pulse) * a));
+    glassButton(ui_, L.interact.c, L.interact.r, in.interactHeld, true, focus_.icon, kAccent, a);
+  }
+  if (L.enterExit.visible) glassButton(ui_, L.enterExit.c, L.enterExit.r, in.enterExitHeld, true, driving ? "door" : "car", kMint, a);
   glassButton(ui_, L.camera.c, L.camera.r, in.cameraHeld, false, "camera", kAccent, a);
   glassButton(ui_, L.wheel.c, L.wheel.r, in.wheelBtnHeld, wheel_.open, "wheel", kAccent, 1.0f - 0.0f * wheel_.anim);
-  ui_.text(false, "ITENS", L.wheel.c.x, L.wheel.c.y + L.wheel.r + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
+  ui_.text(false, "ARMAS", L.wheel.c.x, L.wheel.c.y + L.wheel.r + 6 * S, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
   ui_.text(false, cam_.mode() == CamMode::TopDown ? "TOP DOWN" : "3ª PESSOA", L.camera.c.x, L.camera.c.y + L.camera.r + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
   glassButton(ui_, L.pause.c, L.pause.r, in.pauseHeld, false, "pause", kAccent, a, 0.62f);
 }
@@ -157,7 +184,13 @@ void Game::drawMinimap() {
     marker({world_.poiMarketDoor.x, world_.poiMarketDoor.z}, "cart", kAccent, 30 * S, true);
     marker({world_.poiWorkshop.x, world_.poiWorkshop.z}, "wrench", kSky, 30 * S, true);
     for (const Vehicle& v : vehicles_)
-      if (player_.vehicle != v.id) marker(v.pos, "car", C(1, 1, 1, 0.95f), 22 * S, false);
+      if (player_.vehicle != v.id && !v.despawn) marker(v.pos, "car", v.police && v.siren ? (std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky) : C(1, 1, 1, 0.95f), 22 * S, false);
+    // officers on the radar while wanted (blink red/blue); weapon pickups as small markers
+    if (wanted_ > 0)
+      for (const Npc& c : npcs_)
+        if (c.police && !c.despawn && c.state != NpcState::Dead) marker(c.pos, "dot", std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky, 16 * S, false);
+    for (const Pickup& k : pickups_)
+      if (k.active) marker({k.pos.x, k.pos.z}, weaponDef(k.weapon).icon, C(1.0f, 0.85f, 0.4f, 0.95f), 20 * S, false);
     if (waypoint_.active) marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", kRed, 34 * S, true);
   }
   // player heading wedge + dot
@@ -300,6 +333,21 @@ void Game::drawHud(float dt, const InputFrame& in) {
     drawPrompt();
     drawToasts(dt);
     drawTouchControls(in);
+    // wanted level: three stars under the minimap; blinking while an officer sees the player, dim while searching
+    if (wanted_ > 0 || wantedHeat_ > 0.01f) {
+      float a = 1.0f - 0.85f * wheel_.anim;
+      float sz = 34 * S;
+      float x0 = screenW_ - 64 * S * 2 - 18 * S - 8 * S - sz * 3.4f, y0 = 30 * S + 236 * S + 14 * S;
+      bool seenNow = sinceSeen_ < 0.5f;
+      bool blink = seenNow && std::fmod(realTime_ * 3.0f, 1.0f) < 0.5f;
+      for (int i = 0; i < 3; ++i) {
+        bool on = i < wanted_;
+        Color col = on ? (blink ? kWhite : (seenNow ? kAccent : withAlpha(kAccent, 0.55f))) : C(1, 1, 1, 0.18f);
+        ui_.icon("star", x0 + sz * 0.5f + i * sz * 1.15f, y0 + sz * 0.5f, sz, withAlpha(col, ((col >> 24) / 255.0f) * a));
+      }
+      if (wanted_ > 0 && !seenNow && sinceSeen_ > 2.0f)
+        ui_.text(false, "Polícia procurando...", x0 + sz * 1.7f, y0 + sz + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
+    }
     // waypoint pill
     if (waypoint_.active) {
       float d = dist2(player_.pos, {waypoint_.pos.x, waypoint_.pos.z});
@@ -433,24 +481,32 @@ void Game::drawWheel(float dt) {
   Vec2 c{screenW_ * 0.5f, screenH_ * 0.5f};
   ui_.rect(0, 0, screenW_, screenH_, C(0.0f, 0.0f, 0.02f, 0.28f * a));
   const auto& slots = wheel_.slots[wheel_.category];
-  const float gap = 0.045f;
+  const bool weapons = wheel_.category == 0;
+  const int nSec = weapons ? kWeaponCount : 8;
+  const float gap = weapons ? 0.035f : 0.045f;
   // outer sectors
-  for (int i = 0; i < 8; ++i) {
-    float a0 = i * kTau / 8 - kTau / 16 + gap, a1 = (i + 1) * kTau / 8 - kTau / 16 - gap;
+  for (int i = 0; i < nSec; ++i) {
+    float a0 = i * kTau / nSec - kTau / (2 * nSec) + gap, a1 = (i + 1) * kTau / nSec - kTau / (2 * nSec) - gap;
     bool has = i < (int)slots.size();
     bool hov = wheel_.hovered == i;
+    bool current = weapons && has && slots[i] == player_.weapon;
     Color col = hov ? withAlpha(kAccent, 0.88f * a) : C(0.05f, 0.06f, 0.09f, (has ? 0.62f : 0.30f) * a);
     ui_.arc(c.x, c.y, R * 0.52f, R, a0, a1, col);
+    if (current && !hov) ui_.arc(c.x, c.y, R * 0.985f, R * 1.02f, a0, a1, withAlpha(kAccent, 0.9f * a));
     float am = (a0 + a1) * 0.5f;
     Vec2 p{c.x + std::sin(am) * R * 0.76f, c.y - std::cos(am) * R * 0.76f};
-    if (has) {
+    Color ink = hov ? C(0.1f, 0.1f, 0.12f, a) : C(1, 1, 1, a);
+    if (has && weapons) {
+      const WeaponDef& w = weaponDef(slots[i]);
+      ui_.icon(w.icon, p.x, p.y - 6 * S, 64 * S, ink);
+      if (w.magazine > 0)
+        ui_.text(true, std::to_string(player_.mag[w.id]) + "/" + std::to_string(player_.reserve[w.id]), p.x, p.y + 26 * S, 18 * S, ink, Align::Center);
+    } else if (has) {
       const ItemDef& d = itemDef(slots[i]);
       if (d.art) ui_.art(d.art, p.x - 40 * S, p.y - 40 * S, 80 * S, 80 * S, C(1, 1, 1, a * (hov ? 1.0f : 0.92f)), 16 * S);
-      else ui_.icon(d.icon, p.x, p.y, 62 * S, hov ? C(0.1f, 0.1f, 0.12f, a) : C(1, 1, 1, a));
-      if (d.category == ItemCategory::Item) {
-        std::string cnt = "x" + std::to_string(inventory_[slots[i]]);
-        ui_.text(true, cnt, p.x + 30 * S, p.y + 18 * S, 24 * S, hov ? C(0.1f, 0.1f, 0.12f, a) : C(1, 1, 1, a), Align::Center, C(0, 0, 0, 0.7f), 0.1f);
-      }
+      else ui_.icon(d.icon, p.x, p.y, 62 * S, ink);
+      std::string cnt = "x" + std::to_string(inventory_[slots[i]]);
+      ui_.text(true, cnt, p.x + 30 * S, p.y + 18 * S, 24 * S, ink, Align::Center, C(0, 0, 0, 0.7f), 0.1f);
     } else {
       ui_.circle(p.x, p.y, 7 * S, C(1, 1, 1, 0.18f * a));
     }
@@ -466,15 +522,23 @@ void Game::drawWheel(float dt) {
     Vec2 p{c.x + std::sin(am) * R * 0.30f, c.y - std::cos(am) * R * 0.30f};
     ui_.text(true, cat == 0 ? "ARMAS" : "ITENS", p.x, p.y - 12 * S, 22 * S, sel ? C(0.08f, 0.08f, 0.1f, a) : C(1, 1, 1, 0.85f * a), Align::Center);
   }
-  // centre info
-  if (wheel_.hovered >= 0 && wheel_.hovered < (int)slots.size()) {
-    const ItemDef& d = itemDef(slots[wheel_.hovered]);
-    ui_.text(true, d.name, c.x, c.y - 24 * S, 28 * S, C(1, 1, 1, a), Align::Center, C(0, 0, 0, 0.6f), 0.1f);
+  // centre info: name, type and ammo of the hovered (or current) weapon / item
+  int show = wheel_.hovered >= 0 && wheel_.hovered < (int)slots.size() ? slots[wheel_.hovered] : (weapons ? player_.weapon : -1);
+  if (weapons && show >= 0) {
+    const WeaponDef& w = weaponDef(show);
+    ui_.text(true, w.name, c.x, c.y - 30 * S, 26 * S, C(1, 1, 1, a), Align::Center, C(0, 0, 0, 0.6f), 0.1f);
+    ui_.text(false, w.typeLabel, c.x, c.y + 2 * S, 18 * S, C(1, 1, 1, 0.65f * a), Align::Center);
+    if (w.magazine > 0)
+      ui_.text(false, "Munição " + std::to_string(player_.mag[w.id]) + " + " + std::to_string(player_.reserve[w.id]), c.x, c.y + 26 * S, 18 * S,
+               withAlpha(kAccent, a), Align::Center);
+    else if (show == player_.weapon) ui_.text(false, "Equipada", c.x, c.y + 26 * S, 18 * S, withAlpha(kAccent, a), Align::Center);
+  } else if (!weapons && show >= 0) {
+    ui_.text(true, itemDef(show).name, c.x, c.y - 24 * S, 28 * S, C(1, 1, 1, a), Align::Center, C(0, 0, 0, 0.6f), 0.1f);
   } else {
-    ui_.text(false, wheel_.category == 0 ? "Armas" : "Itens", c.x, c.y - 14 * S, 22 * S, C(1, 1, 1, 0.55f * a), Align::Center);
+    ui_.text(false, weapons ? "Armas" : "Itens", c.x, c.y - 14 * S, 22 * S, C(1, 1, 1, 0.55f * a), Align::Center);
   }
-  if (slots.empty()) ui_.text(false, wheel_.category == 0 ? "Sem armas" : "Nenhum item — compre no mercado", c.x, c.y + R * 1.06f, 24 * S, C(1, 1, 1, 0.65f * a), Align::Center);
-  else if (wheel_.hovered >= 0) ui_.text(false, itemDef(slots[wheel_.hovered]).desc, c.x, c.y + R * 1.06f, 24 * S, C(1, 1, 1, 0.8f * a), Align::Center);
+  if (slots.empty()) ui_.text(false, weapons ? "Sem armas" : "Nenhum item — compre no mercado", c.x, c.y + R * 1.06f, 24 * S, C(1, 1, 1, 0.65f * a), Align::Center);
+  else if (!weapons && wheel_.hovered >= 0) ui_.text(false, itemDef(slots[wheel_.hovered]).desc, c.x, c.y + R * 1.06f, 24 * S, C(1, 1, 1, 0.8f * a), Align::Center);
   // finger marker
   Vec2 f = wheel_.finger - c;
   float fl = f.length();

@@ -38,11 +38,26 @@ struct Bot {
     for (int i = 0; i < n; ++i) {
       g.injectInput(in);
       g.frame(dt, fd);
-      r.renderFrame(fd);
+      if (render) r.renderFrame(fd);
       ++frames;
     }
   }
   void idle(int n) { InputFrame in; step(in, n); }
+  bool render = true;
+  // faces and attacks a target position for n frames (re-pressing the attack button like a player would)
+  void attackToward(Vec2 target, int n, bool hold = false) {
+    for (int i = 0; i < n; ++i) {
+      InputFrame in;
+      Vec2 d = target - g.player().pos;
+      float yaw = g.camera().yaw();
+      Vec2 f{std::sin(yaw), -std::cos(yaw)}, rt{std::cos(yaw), std::sin(yaw)};
+      Vec2 nn = d.normalized();
+      if (d.length() > 1.2f) in.move = {nn.dot(rt) * 0.6f, nn.dot(f) * 0.6f};
+      in.attackPressed = (i % 9) == 0;
+      in.attackHeld = hold || in.attackPressed;
+      step(in, 1);
+    }
+  }
   void press(bool InputFrame::*field) {
     InputFrame in;
     in.*field = true;
@@ -64,18 +79,29 @@ struct Bot {
     return false;
   }
   bool driveTo(Vec2 target, float tol, int maxFrames, float maxSpeed = 12.0f) {
+    int reverse = 0;
+    Vec2 lastPos = g.vehicles()[g.player().vehicle].pos;
     for (int i = 0; i < maxFrames; ++i) {
       Vehicle& v = g.vehicles()[g.player().vehicle];
       Vec2 d = target - v.pos;
       float dist = d.length();
       if (dist < tol) return true;
       float err = wrapAngle(yawFromDir(d) - v.yaw);
+      InputFrame in;
+      if (reverse > 0) {
+        // back up with opposite lock to open the turning angle (three-point turn)
+        --reverse;
+        in.move = {err > 0 ? -1.0f : 1.0f, -0.8f};
+        step(in, 1);
+        continue;
+      }
       float steer = clamp(err * 2.2f, -1.0f, 1.0f);
       float tgt = clamp(dist * 0.7f, 2.5f, maxSpeed) * clamp(1.0f - std::fabs(err) / 1.6f, 0.25f, 1.0f);
       float thr = clamp((tgt - v.speed) * 0.5f, -1.0f, 1.0f);
-      InputFrame in;
       in.move = {steer, thr};
       step(in, 1);
+      // stuck: barely moved over the last second while pushing forward -> three-point turn
+      if (i % 45 == 0) { if (i > 0 && (v.pos - lastPos).length() < 0.4f && thr > 0.2f) reverse = 35; lastPos = v.pos; }
     }
     return false;
   }
@@ -101,6 +127,125 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(45);
     b.shot("02_third");
     return 0;
+  }
+  if (name == "clerk") {
+    g.teleportPlayer({300.0f, 3.5f}, 0);
+    b.idle(20);
+    CHECK(b.walkTo({304.2f, -1.6f}, 0.8f, 500), "walked to the counter");
+    b.idle(10);
+    for (auto& n : g.npcs()) if (n.role == 4) LOGI("clerk at %.2f %.2f interior %d state %d", n.pos.x, n.pos.y, (int)n.interior, (int)n.state);
+    LOGI("player %.2f %.2f indoors %d, focus count %zu", g.player().pos.x, g.player().pos.y, (int)g.player().indoors, g.focusList().size());
+    for (auto& it : g.focusList()) LOGI(" focus kind %d dist %.2f", (int)it.kind, it.dist);
+    b.shot("clerk");
+    return g_failures;
+  }
+  if (name == "workshop") {
+    Vehicle& car = g.vehicles()[0];
+    car.pos = {22.0f, 2.5f}; car.yaw = kPi * 0.5f; car.vel = {}; car.speed = 0;
+    g.teleportPlayer({22.0f, 4.6f}, 0);
+    b.idle(5);
+    InputFrame in; in.enterExitPressed = true; b.step(in, 1); b.idle(30);
+    LOGI("in car %d", g.player().vehicle);
+    Vec2 pts[4] = {{-3.0f, 3.0f}, {-26.0f, 3.0f}, {-26.0f, 12.0f}, {-26.0f, 24.0f}};
+    for (Vec2 p : pts) {
+      bool ok = b.driveTo(p, 3.0f, 900, 8.0f);
+      LOGI("target %.1f %.1f ok %d car %.2f %.2f yaw %.2f", p.x, p.y, (int)ok, car.pos.x, car.pos.y, car.yaw);
+    }
+    b.shot("workshop");
+    return 0;
+  }
+  if (name == "gameplay") {
+    // full loop: brawl -> weapons -> gunfire -> panic -> witnesses -> police -> pursuit -> lose them
+    b.render = false;
+    b.idle(30);
+    Player& p = g.player();
+    CHECK(p.owned[kWpnFists], "fists always available");
+    // ---- melee: find the nearest pedestrian and punch until something happens
+    int victim = -1;
+    float best = 1e9f;
+    for (auto& n : g.npcs()) {
+      if (n.stationary || n.interior || n.police) continue;
+      float d = (n.pos - p.pos).length();
+      if (d < best) { best = d; victim = n.id; }
+    }
+    CHECK(victim >= 0, "found a pedestrian");
+    Npc& v = g.npcs()[victim];
+    g.teleportPlayer(v.pos + Vec2{0.0f, 1.6f}, 0);
+    b.idle(3);
+    float h0 = v.health;
+    b.attackToward(v.pos, 120);
+    LOGI("victim health %.1f -> %.1f state %d", h0, v.health, (int)v.state);
+    CHECK(v.health < h0, "punches really damage the pedestrian (hit detection)");
+    CHECK(v.state == NpcState::Fight || v.state == NpcState::Flee || v.state == NpcState::Down || v.state == NpcState::Cower,
+          "the victim reacts (fights back, flees or is knocked down)");
+    b.render = true; b.shot("40_brawl"); b.render = false;
+    // ---- weapon pickups: walk into the pistol
+    g.teleportPlayer({-40.5f, -17.0f}, 0);
+    b.idle(3);
+    b.walkTo({-40.5f, -20.5f}, 0.5f, 200);
+    b.idle(5);
+    CHECK(p.owned[kWpnPistol] && p.mag[kWpnPistol] > 0, "picked up the pistol with ammo");
+    CHECK(p.weapon == kWpnPistol, "pistol equipped");
+    // also try every melee weapon and firearm through the same paths the wheel uses
+    for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 60);
+    // ---- gunfire at a pedestrian + panic
+    int target = -1; best = 1e9f;
+    for (auto& n : g.npcs()) {
+      if (n.stationary || n.interior || n.police || n.state == NpcState::Dead) continue;
+      float d = (n.pos - p.pos).length();
+      if (d < best) { best = d; target = n.id; }
+    }
+    CHECK(target >= 0, "found a target for the firearm test");
+    Npc& t = g.npcs()[target];
+    g.teleportPlayer(t.pos + Vec2{0.0f, 6.0f}, 0);
+    b.idle(3);
+    int mag0 = p.mag[kWpnPistol];
+    float th0 = t.health;
+    b.attackToward(t.pos, 60, false);
+    LOGI("target health %.1f -> %.1f state %d, mag %d -> %d", th0, t.health, (int)t.state, mag0, p.mag[kWpnPistol]);
+    CHECK(p.mag[kWpnPistol] < mag0, "shots consume ammo");
+    CHECK(t.health < th0, "bullets hit and damage the target (raycast)");
+    CHECK(g.audio().playedCount("pistol") > 0, "gunshot sound played");
+    int fleeing = 0;
+    for (auto& n : g.npcs()) if (!n.police && (n.state == NpcState::Flee || n.state == NpcState::Cower) && (n.pos - p.pos).length() < 40.0f) ++fleeing;
+    LOGI("pedestrians fleeing/cowering after the shots: %d", fleeing);
+    CHECK(fleeing > 0, "pedestrians react to gunfire (flee / cower)");
+    b.render = true; b.shot("41_gunfire"); b.render = false;
+    // ---- reload
+    InputFrame rl; rl.reloadPressed = true; b.step(rl, 1);
+    b.idle(60);
+    CHECK(p.mag[kWpnPistol] == weaponDef(kWpnPistol).magazine, "reload refills the magazine");
+    // ---- wanted + police dispatch (witnesses need a few seconds to call)
+    for (int i = 0; i < 400 && g.wantedLevel() == 0; ++i) b.idle(1);
+    LOGI("wanted level %d", g.wantedLevel());
+    CHECK(g.wantedLevel() >= 1, "crime reported: wanted level");
+    Vec2 crimeSpot = p.pos;
+    int cops = 0;
+    for (int i = 0; i < 1800 && cops == 0; ++i) { b.idle(1); cops = g.aliveCops(); }
+    LOGI("officers on foot: %d after %.0f s", cops, 0.0f);
+    CHECK(cops > 0, "police arrived and deployed officers");
+    for (int i = 0; i < 900 && g.copsChasing() == 0; ++i) b.idle(1);
+    CHECK(g.copsChasing() > 0, "officers see and chase the player");
+    b.render = true; b.shot("42_police"); g.toggleCamera(); b.idle(40); b.shot("43_police_third"); g.toggleCamera(); b.render = false;
+    // ---- escape: break line of sight far away; police must not know where the player went
+    g.teleportPlayer({70.0f, 70.0f}, 0);
+    float minDist = 1e9f;
+    int frames = 0;
+    while (g.wantedLevel() > 0 && frames < 30 * 140) {
+      b.idle(1); ++frames;
+      for (auto& c : g.npcs()) if (c.police && !c.despawn && c.state != NpcState::Dead) minDist = std::min(minDist, (c.pos - p.pos).length());
+    }
+    LOGI("escaped: wanted %d after %.1f s, closest officer got to %.1f m of the hideout, crime spot was %.1f m away", g.wantedLevel(),
+         frames / 30.0f, minDist, (crimeSpot - p.pos).length());
+    CHECK(g.wantedLevel() == 0, "police lost the trail and called off the search");
+    CHECK(minDist > 15.0f, "police searched the last known area instead of homing in on the player");
+    b.render = true; b.shot("44_escaped");
+    // ---- persistence of weapons and ammo
+    int magBefore = p.mag[kWpnSmg], resBefore = p.reserve[kWpnSmg];
+    CHECK(g.saveGame(), "saved");
+    p.owned[kWpnSmg] = false; p.mag[kWpnSmg] = 0;
+    CHECK(g.loadGame() && p.owned[kWpnSmg] && p.mag[kWpnSmg] == magBefore && p.reserve[kWpnSmg] == resBefore, "weapons and ammo persist in the save");
+    return g_failures;
   }
   if (name == "char") {
     g.toggleCamera();
@@ -161,8 +306,10 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(b.driveTo({-4.0f, -2.5f}, 3.5f, 900, 11.0f), "drove east along the main street");
     CHECK(b.driveTo({11.0f, -4.5f}, 3.0f, 900, 10.0f), "reached the station entrance");
     b.shot("14_driving");
-    CHECK(b.driveTo({14.5f, -14.0f}, 3.0f, 900, 8.0f), "entered the forecourt");
-    CHECK(b.driveTo({17.0f, -17.5f}, 1.6f, 900, 6.0f), "reached the pump lane");
+    // the islands span x 14..30 at z -15 and -23: enter the middle lane (z -19) from its west end
+    CHECK(b.driveTo({10.6f, -13.5f}, 2.0f, 900, 6.0f), "entered the forecourt");
+    CHECK(b.driveTo({10.8f, -18.6f}, 1.8f, 900, 4.0f), "lined up with the pump lane");
+    CHECK(b.driveTo({18.5f, -19.0f}, 1.6f, 900, 5.0f), "reached the pump lane");
     b.stopCar();
     b.idle(10);
     b.shot("15_at_pump");
@@ -182,7 +329,8 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(car.fuel > fuel0 + 2.5f, "fuel was added to the tank");
     LOGI("fuel %.1f -> %.1f L, money %d -> %d", fuel0, car.fuel, money0, g.money());
     // ---- go to the market
-    CHECK(b.driveTo({14.5f, -9.0f}, 3.0f, 900, 8.0f), "left the forecourt");
+    CHECK(b.driveTo({34.8f, -19.0f}, 2.0f, 900, 6.0f), "drove out of the pump lane");
+    CHECK(b.driveTo({36.0f, -11.0f}, 2.5f, 900, 6.0f), "left the forecourt");
     CHECK(b.driveTo({20.0f, -2.0f}, 3.0f, 900, 9.0f), "back on the main street");
     CHECK(b.driveTo({22.0f, 2.5f}, 2.0f, 900, 8.0f), "parked near the market");
     b.stopCar();

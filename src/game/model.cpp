@@ -420,7 +420,46 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   a.lean += (a.leanTarget - a.lean) * expDecay(5.0f, dt);
   a.headYaw += (a.headYawTarget - a.headYaw) * expDecay(5.0f, dt);
   a.gestureClock += dt;
+  // action slot
+  if (a.action >= 0) {
+    float dur = actionDuration(a.action);
+    a.actT += dt * a.actSpeed;
+    if (a.actT >= dur) {
+      if (a.actHold) a.actT = dur;
+      else a.actFading = true;
+    }
+    float target = a.actFading ? 0.0f : 1.0f;
+    a.actW += (target - a.actW) * expDecay(a.actFading ? 9.0f : 14.0f, dt);
+    if (a.actFading && a.actW < 0.01f) { a.action = -1; a.actW = 0; }
+  }
+  if (a.prevAction >= 0) {
+    a.prevT = std::min(a.prevT + dt * a.actSpeed, actionDuration(a.prevAction));
+    a.prevW *= 1.0f - expDecay(10.0f, dt);
+    if (a.prevW < 0.01f) a.prevAction = -1;
+  }
+  a.aim += (a.aimTarget - a.aim) * expDecay(12.0f, dt);
+  a.recoil *= 1.0f - expDecay(14.0f, dt);
   if (doEval) evaluate(a, m);
+}
+
+bool Animator::hasAction(int action) const {
+  int i = kClipCount + action;
+  return clips_ && action >= 0 && i < (int)clips_->size() && (*clips_)[i].frames > 1;
+}
+float Animator::actionDuration(int action) const {
+  return hasAction(action) ? (*clips_)[kClipCount + action].duration : 0.6f;
+}
+void Animator::play(CharAnim& a, int action, float speed, bool upperBody, bool hold) const {
+  if (a.action >= 0 && a.actW > 0.05f) {
+    a.prevAction = a.action; a.prevT = a.actT; a.prevW = a.actW; a.prevUpper = a.actUpper;
+  }
+  a.action = action;
+  a.actT = 0;
+  a.actSpeed = speed;
+  a.actUpper = upperBody;
+  a.actHold = hold;
+  a.actFading = false;
+  a.actW = a.prevAction >= 0 ? 0.0f : a.actW;
 }
 
 void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
@@ -444,6 +483,27 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     first = false;
   }
   if (first) pose_ = sk.rest;
+  // action clips over locomotion (upper-body mask keeps the legs walking)
+  auto upperBone = [&](size_t b) {
+    const std::string& n = sk.names[b];
+    return n.find("Leg") == std::string::npos && n.find("Foot") == std::string::npos && n.find("Toe") == std::string::npos &&
+           n != "Hips";
+  };
+  auto applyAction = [&](int act, float t, float w, bool upper) {
+    if (act < 0 || w < 0.01f || !hasAction(act)) return;
+    int ci = kClipCount + act;
+    if (ci >= (int)m.clipMap.size()) return;
+    const AnimClip& c = (*clips_)[ci];
+    samplePose(sk, c, m.clipMap[ci], std::min(t, c.duration - 1e-3f), m.animRootScale, tmp_);
+    for (size_t b = 0; b < nb; ++b) {
+      if (upper && !upperBone(b)) continue;
+      float k = w;
+      pose_[b].r = nlerp(pose_[b].r, tmp_[b].r, k);
+      if (!upper && sk.parent[b] < 0) pose_[b].t = lerp(pose_[b].t, tmp_[b].t, k);
+    }
+  };
+  applyAction(a.prevAction, a.prevT, a.prevW, a.prevUpper);
+  applyAction(a.action, a.actT, a.actW, a.actUpper);
 
   // model-space procedural rotations about each joint (independent of the rig's local axes)
   std::vector<Quat> extra(nb, Quat{});
@@ -513,6 +573,61 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     if (has[b]) {
       Vec3 p = global_[b].transformPoint({0, 0, 0});
       global_[b] = Mat4::translation(p) * quatMatrix(extra[b]) * Mat4::translation(-p) * global_[b];
+    }
+  }
+  // aiming: rotate the arm chain so arm and forearm point along the aim direction (second pass)
+  if (a.aim > 0.01f) {
+    auto P = [&](const char* n) { int b = sk.find(n); return b >= 0 ? global_[b].transformPoint({0, 0, 0}) : Vec3{}; };
+    Vec3 aimDir = Vec3{0, std::sin(a.aimPitch), -std::cos(a.aimPitch)}.normalized();
+    auto rotBetween = [](Vec3 from, Vec3 to, float w) {
+      from = from.normalized(); to = to.normalized();
+      Vec3 ax = from.cross(to);
+      float s2 = ax.length(), c2 = from.dot(to);
+      if (s2 < 1e-5f) return Quat{};
+      return Quat::axisAngle(ax / s2, std::atan2(s2, c2) * w);
+    };
+    Vec3 rArm = P("RightArm"), rFore = P("RightForeArm"), rHand = P("RightHand");
+    float lift = a.recoil * 0.35f;
+    Vec3 dirR = (aimDir + Vec3{0, lift, 0}).normalized();
+    Quat qa = rotBetween(rHand - rArm, dirR, a.aim);
+    int ba = sk.find("RightArm"), bf = sk.find("RightForeArm");
+    if (ba >= 0) { extra[ba] = qa * extra[ba]; has[ba] = true; }
+    // straighten the elbow: forearm follows the upper arm direction
+    if (bf >= 0) {
+      Vec3 upperDir = rFore - rArm, foreDir = rHand - rFore;
+      Quat qf = rotBetween(foreDir, upperDir, a.aim * 0.85f);
+      extra[bf] = qf * extra[bf]; has[bf] = true;
+    }
+    if (a.twoHanded) {
+      Vec3 lArm = P("LeftArm"), lHand = P("LeftHand"), lFore = P("LeftForeArm");
+      // support hand reaches to a point under the weapon, ahead of the right hand
+      Vec3 target = rArm + dirR * 0.62f + Vec3{-0.02f, -0.05f, 0};
+      Quat ql = rotBetween(lHand - lArm, target - lArm, a.aim);
+      int bl = sk.find("LeftArm"), blf = sk.find("LeftForeArm");
+      if (bl >= 0) { extra[bl] = ql * extra[bl]; has[bl] = true; }
+      if (blf >= 0) { Quat q2 = rotBetween(lHand - lFore, lFore - lArm, a.aim * 0.5f); extra[blf] = q2 * extra[blf]; has[blf] = true; }
+    }
+    int bs = sk.find("Spine01");
+    if (bs >= 0 && a.recoil > 0.01f) { extra[bs] = Quat::axisAngle({1, 0, 0}, a.recoil * 0.08f) * extra[bs]; has[bs] = true; }
+    for (size_t b = 0; b < nb; ++b) {
+      Mat4 l = pose_[b].matrix();
+      global_[b] = sk.parent[b] >= 0 ? global_[sk.parent[b]] * l : m.rootFix * l;
+      if (has[b]) {
+        Vec3 p = global_[b].transformPoint({0, 0, 0});
+        global_[b] = Mat4::translation(p) * quatMatrix(extra[b]) * Mat4::translation(-p) * global_[b];
+      }
+    }
+  }
+  {
+    int bh = sk.find("RightHand"), bf = sk.find("RightForeArm");
+    a.handValid = bh >= 0 && bf >= 0;
+    if (a.handValid) {
+      Vec3 hp = global_[bh].transformPoint({0, 0, 0}), fp = global_[bf].transformPoint({0, 0, 0});
+      a.handPos = hp;
+      a.handDir = (hp - fp).normalized();
+      // the palm side: the hand bone's local axis that is most perpendicular to the forearm
+      Vec3 ax = Vec3{global_[bh].m[0], global_[bh].m[1], global_[bh].m[2]}.normalized();
+      a.handSide = (ax - a.handDir * ax.dot(a.handDir)).normalized();
     }
   }
   for (size_t b = 0; b < nb && b < (size_t)gfx::kMaxBones; ++b) a.palette[b] = global_[b] * sk.invBind[b];

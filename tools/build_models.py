@@ -24,10 +24,15 @@ CARS = {  # name: (length m, wheels zf,zr,yc,r,track, paint rule)
     "compacto": (3.90, "-1.237,1.191,0.288,0.288,0.778", "white"),
     "sedan": (4.55, "-1.434,1.210,0.321,0.321,0.895", None),
     "picape": (4.95, "-1.684,1.407,0.425,0.425,0.958", "blue"),
+    "viatura": (4.45, "-1.394,1.180,0.349,0.349,0.863", None),
 }
 CHARS = {"protagonista": 1.78, "frentista": 1.74, "atendente": 1.65, "pedestre_mulher": 1.64,
-         "mecanico": 1.76, "pedestre_homem": 1.75}
-CLIPS = {"idle": "protagonista_idle.glb", "walk": "protagonista_walk.glb", "run": "protagonista_run.glb"}
+         "mecanico": 1.76, "pedestre_homem": 1.75, "policial": 1.80}
+CLIPS = {"idle": "protagonista_idle.glb", "walk": "protagonista_walk.glb", "run": "protagonista_run.glb",
+         # action clips (Meshy library on the same rig): runtime ActionId order lives in src/game/model.h
+         "punch": "protagonista_punch.glb", "kick": "protagonista_kick.glb", "hit": "protagonista_hit.glb",
+         "knockdown": "protagonista_knockdown.glb", "standup": "protagonista_standup.glb", "slash": "protagonista_slash.glb",
+         "reload": "protagonista_reload.glb", "chat": "protagonista_chat.glb"}
 
 
 def run(args):

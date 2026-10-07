@@ -17,7 +17,9 @@
 #include "items.h"
 #include "navmesh.h"
 #include "ui.h"
+#include "../core/audio.h"
 #include "model.h"
+#include "weapons.h"
 #include "timeofday.h"
 #include "world.h"
 
@@ -58,7 +60,7 @@ inline const QualityPreset& qualityPreset(int q) {
 
 struct Toast { std::string text; float t = 0; float dur = 2.6f; uint32_t color = 0xFFFFFFFFu; const char* icon = nullptr; };
 
-struct Particle { Vec3 pos, vel; float life = 0, maxLife = 1, size = 1; uint32_t color = 0xFFFFFFFFu; };
+struct Particle { Vec3 pos, vel; float life = 0, maxLife = 1, size = 1; uint32_t color = 0xFFFFFFFFu; float gravity = 0; };
 
 enum class IKind { Npc, Vehicle, Door, Product, FuelPump, Workshop };
 struct Interactable {
@@ -98,6 +100,9 @@ struct Panel {
 enum class MenuState { None, Pause, Settings };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
+
+// Per-actor animation inputs: a pending one-shot request (consumed), lying on the floor, held weapon.
+struct AnimIn { int* req = nullptr; float reqSpeed = 1; bool reqUpper = false, reqHold = false; bool lying = false; int weapon = 0; };
 
 class Game {
  public:
@@ -180,7 +185,6 @@ class Game {
   void updateNpcs(float dt);
   void npcThink(Npc& n, float dt);
   const NavMesh& navFor(const Npc& n) const { return n.interior ? navIndoor_ : navOutdoor_; }
-  std::string chatLine(const Npc& n);
 
   // ---- panels / dialogs (game_actions.cpp)
   void openPanel(Panel p);
@@ -346,6 +350,74 @@ class Game {
   float pitchHighWeight() const;
   void addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary,
                  float emissive = 0.0f);
+  // ---- combat (game_combat.cpp)
+ public:
+  void applyDamage(ActorRef target, const DamageInfo& d);
+  void giveWeapon(int weapon, int ammo);
+  void equipWeapon(int weapon);
+  int wantedLevel() const { return wanted_; }
+  Audio& audio() { return audio_; }
+  bool playerDead() const { return player_.dead; }
+  int aliveCops() const;
+  int copsChasing() const;
+  float sinceCopsSawPlayer() const { return sinceSeen_; }
+ private:
+  void updateCombat(float dt, const InputFrame& in);
+  void updatePlayerAttack(float dt, const InputFrame& in);
+  void startMelee(ActorRef who, int kind);
+  bool meleeStrike(ActorRef attacker, Vec2 pos, float yaw, int weapon, int kind);
+  void fireWeapon(ActorRef shooter, Vec3 origin, Vec2 dir, int weapon);
+  int findAimTarget(Vec2 from, Vec2 dir, float range, float cosCone, bool preferHostile) const;
+  bool lineOfSight(Vec2 a, Vec2 b, float height = 1.3f) const;
+  Vec2 actorPos(ActorRef r) const;
+  bool actorAlive(ActorRef r) const;
+  void emitEvent(EventKind k, Vec2 pos, float radius, ActorRef who, ActorRef victim, float severity);
+  void updateEffects(float dt);
+  void updatePickups(float dt);
+  void emitCombatVisuals(gfx::FrameData& fd);
+  void killPlayer(const DamageInfo& d);
+  void respawnPlayer();
+  void spawnBlood(Vec3 p, Vec2 dir, int n);
+  void spawnImpact(Vec3 p, int n);
+  void requestAnim(Player& p, int act, float speed = 1, bool upper = false, bool hold = false) { p.animReq = act; p.animReqSpeed = speed; p.animReqUpper = upper; p.animReqHold = hold; }
+  void requestAnim(Npc& n, int act, float speed = 1, bool upper = false, bool hold = false) { n.animReq = act; n.animReqSpeed = speed; n.animReqUpper = upper; n.animReqHold = hold; }
+  // ---- NPC behaviour (game_npc.cpp)
+  void perceiveEvents(Npc& n);
+  void npcFight(Npc& n, float dt);
+  void npcStartFlee(Npc& n, Vec2 from, float secs);
+  std::string npcLine(Npc& n, int context);
+  void npcSay(Npc& n, const std::string& line, float secs = 2.4f);
+  // ---- police / wanted (game_police.cpp)
+  void reportCrime(Vec2 where, float severity, bool witnessedByCop);
+  void updateWanted(float dt);
+  void updatePolice(float dt);
+  void copThink(Npc& c, float dt);
+  void spawnPoliceUnit(Vec2 dest, bool onFoot);
+  void driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt);
+  bool copCanSee(const Npc& c, Vec2 target) const;
+  Vec2 roadPointNear(Vec2 p) const;
+
+  struct Tracer { Vec3 a, b; float life; };
+  struct Stain { Vec3 pos; float r, life; };
+  struct Pickup { int weapon; int ammo; Vec3 pos; bool active = true; float respawn = 0; };
+  Audio audio_;
+  WeaponMeshes weaponMeshes_;
+  std::vector<WorldEvent> events_;
+  std::vector<Tracer> tracers_;
+  std::vector<Stain> stains_;
+  std::vector<Pickup> pickups_;
+  int wanted_ = 0;
+  float wantedHeat_ = 0;      // accumulated crime weight
+  float sinceSeen_ = 1e9f;    // seconds since any officer saw the player
+  Vec2 wantedLastKnown_;
+  float evadeT_ = 0;          // search phase timer when no cop sees the player
+  float policeSpawnT_ = 0;
+  int sirenHandle_ = 0;
+  float deathT_ = 0;
+  float slowMo_ = 1.0f;
+  float muzzleT_ = 0;
+  Vec3 muzzlePos_;
+  bool attackBtnPrev_ = false;
   // ---- 3D models (game_models.cpp)
   void queueModels();
   void finishModels();
@@ -354,7 +426,7 @@ class Game {
   const ModelAsset* modelForArchetype(const std::string& a, int id) const;
   int modelLod(const ModelAsset& m, float dist) const;
   void emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, Vec3 pos, float yaw, float scale, float speed, float dt,
-                     bool fullRate, Vec4 tint);
+                     bool fullRate, Vec4 tint, const AnimIn& in = AnimIn{});
   void emitVehicle(gfx::FrameData& fd, int model, int color, Vec3 pos, float yaw, float pitch, float roll, float steer, float spin,
                    bool lightsOn, bool braking, int signal, bool reversing);
   struct PendingLight { Vec3 pos, dir, color; float radius, cone, dist; };

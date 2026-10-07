@@ -102,6 +102,12 @@ void buildWheelMesh(std::vector<gfx::ModelVertex>& v, std::vector<uint32_t>& idx
 void buildWheelTextures(std::vector<uint8_t>& albedo, std::vector<uint8_t>& orm, uint32_t& w, uint32_t& h);
 
 enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipCount = 3 };
+// One-shot action clips (Meshy library, same skeleton), stored after the locomotion clips.
+enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActCount };
+inline const char* actionFile(int a) {
+  static const char* k[kActCount] = {"punch", "kick", "hit", "knockdown", "standup", "slash", "reload", "chat"};
+  return k[a];
+}
 
 // Per-character animation state: locomotion blend tree (idle/walk/run by real speed, stride matched) plus
 // procedural layers applied in model space (talk gestures, reach/interact, refuel, crouch into a car, turn lean, head look).
@@ -114,6 +120,17 @@ struct CharAnim {
   float talkTarget = 0, reachTarget = 0, refuelTarget = 0, crouchTarget = 0, waveTarget = 0;
   float leanTarget = 0, headYawTarget = 0;
   float gestureClock = 0;
+  // action slot (one-shot clip over locomotion; upper = arms/torso only) with a crossfade from the previous action
+  int action = -1, prevAction = -1;
+  float actT = 0, actSpeed = 1, actW = 0, prevT = 0, prevW = 0;
+  bool actUpper = false, actHold = false, prevUpper = false, actFading = false;
+  // aiming (procedural arms toward the aim direction) + recoil
+  float aim = 0, aimTarget = 0, recoil = 0;
+  bool twoHanded = false;
+  float aimPitch = 0;
+  // right hand frame in model space for held weapons
+  Vec3 handPos, handDir, handSide;
+  bool handValid = false;
   float accum = 0;                       // reduced-rate update accumulator
   bool valid = false;
   std::array<Mat4, gfx::kMaxBones> palette;
@@ -125,6 +142,11 @@ class Animator {
   // Advances state with the character's real ground speed and evaluates the skinning palette.
   void update(CharAnim& a, const ModelAsset& m, float speed, float dt, bool evaluate);
   const AnimClip* clip(int i) const { return clips_ && i < (int)clips_->size() ? &(*clips_)[i] : nullptr; }
+  // Starts a one-shot action. speed scales playback; hold keeps the last frame (knock-down) until another action.
+  void play(CharAnim& a, int action, float speed = 1.0f, bool upperBody = false, bool hold = false) const;
+  void stop(CharAnim& a) const { a.actFading = true; }
+  float actionDuration(int action) const;
+  bool hasAction(int action) const;
 
  private:
   void evaluate(CharAnim& a, const ModelAsset& m);

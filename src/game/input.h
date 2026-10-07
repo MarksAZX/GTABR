@@ -17,7 +17,7 @@ struct HudButton {
 // Layout computed by the HUD every frame (pixels).
 struct InputLayout {
   float width = 1920, height = 1080;
-  HudButton run, interact, enterExit, camera, wheel, pause;
+  HudButton run, interact, enterExit, camera, wheel, pause, attack, reload;
   float joyZoneRight = 0;       // touches left of this x start the joystick
   float joyRadius = 120;
   bool modal = false;           // a menu/panel is open: touches go to the UI instead of gameplay
@@ -41,6 +41,7 @@ struct InputFrame {
   bool wheelHeld = false, wheelPressed = false, wheelReleased = false;
   Vec2 wheelPos;
   bool interactHeld = false, enterExitHeld = false, cameraHeld = false, wheelBtnHeld = false, pauseHeld = false;
+  bool attackPressed = false, attackHeld = false, reloadPressed = false;
   std::vector<UiPointer> ui;  // pointers for menus
 };
 
@@ -64,7 +65,8 @@ class InputSystem {
   float pendingZoom_ = 0;
   Vec2 joyBase_, joyKnob_;
   int joyId_ = -1;
-  bool pressedBtn_[6] = {}, heldBtn_[6] = {};
+  static constexpr int kBtn = 8;
+  bool pressedBtn_[kBtn] = {}, heldBtn_[kBtn] = {};
   bool wheelReleased_ = false, wheelPressed_ = false;
   int wheelId_ = -1;
   InputLayout lastLayout_;

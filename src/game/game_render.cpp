@@ -261,7 +261,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
 
   // ---- NPCs
   for (const Npc& n : npcs_) {
-    if (n.interior != indoors) continue;
+    if (n.interior != indoors || n.despawn) continue;
     Vec3 pos{n.pos.x, n.y, n.pos.y};
     if (!visible(pos, 1.6f)) continue;
     if (modelsReady_) { addDecalEllipse(pos, 0.3f, 0.3f, 0.3f, 0, 0); continue; }
@@ -276,7 +276,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
 
   // ---- vehicles (drivable + parked scenery)
   auto vehicleSprite = [&](int model, int color, float yaw, Vec3 pos, float alpha, bool sil) {
-    const VehSprites& vs = vehSpr_[model][color];
+    const VehSprites& vs = vehSpr_[std::min(model, 2)][color];
     int dl = dirIndex(yaw, 16), dh = dirIndex(yaw, 32);
     emit(vs.s[0][dl], vs.s[1][dh], pos, 1.0f, alpha, false, 0xFFFFFFFFu, sil);
   };
@@ -288,6 +288,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
   };
   if (!indoors) {
     for (const Vehicle& v : vehicles_) {
+      if (v.despawn) continue;
       Vec3 pos{v.pos.x, world_.heightAt(v.pos.x, v.pos.y), v.pos.y};
       if (!visible(pos, 4.0f)) continue;
       if (!carsReady_) { vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, false); vehicleShadow(v.model, pos, v.yaw); }
@@ -359,6 +360,7 @@ void Game::buildScene(gfx::FrameData& fd) {
   emitWorld(fd);
   emitSprites(fd);
   emitModels(fd, lastDt_);
+  emitCombatVisuals(fd);
   flushSprites(fd);
 }
 

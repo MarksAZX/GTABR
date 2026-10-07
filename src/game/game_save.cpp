@@ -20,10 +20,14 @@ bool Game::saveGame() {
   o << "playerX=" << player_.pos.x << "\nplayerZ=" << player_.pos.y << "\nplayerYaw=" << player_.yaw << "\n";
   o << "indoors=" << (player_.indoors ? 1 : 0) << "\n";
   o << "health=" << player_.health << "\nstamina=" << player_.stamina << "\nweapon=" << player_.weapon << "\n";
-  o << "currentVehicle=" << player_.vehicle << "\n";
+  // only the persistent cars (police units are temporary and respawn with the wanted level)
+  o << "currentVehicle=" << (player_.vehicle >= 0 && !vehicles_[player_.vehicle].police ? player_.vehicle : -1) << "\n";
   for (const Vehicle& v : vehicles_) {
+    if (v.police || v.despawn) continue;
     o << "veh" << v.id << "=" << v.pos.x << "," << v.pos.y << "," << v.yaw << "," << v.fuel << "," << v.health << "\n";
   }
+  for (int w = 1; w < kWeaponCount; ++w)
+    if (player_.owned[w]) o << "wpn_" << weaponDef(w).key << "=" << player_.mag[w] << "," << player_.reserve[w] << "\n";
   for (int i = 1; i < kItemCount; ++i) o << "item_" << itemDef(i).key << "=" << inventory_[i] << "\n";
   o << "camera=" << (cam_.mode() == CamMode::TopDown ? 0 : 1) << "\ncamZoom=" << cam_.topDownZoom() << "\n";
   o << "set_sensitivity=" << settings_.sensitivity << "\nset_invertY=" << (settings_.invertY ? 1 : 0) << "\nset_shadows=" << (settings_.shadows ? 1 : 0)
@@ -55,7 +59,18 @@ bool Game::loadGame() {
   moneyDisplay_ = (float)moneyCents_;
   player_.health = clamp(num("health", 100), 1.0f, 100.0f);
   player_.stamina = clamp(num("stamina", 100), 0.0f, 100.0f);
-  player_.weapon = (int)num("weapon", 0);
+  for (int w = 1; w < kWeaponCount; ++w) {
+    auto it = kv.find(std::string("wpn_") + weaponDef(w).key);
+    if (it == kv.end()) continue;
+    int mag = 0, res = 0;
+    if (std::sscanf(it->second.c_str(), "%d,%d", &mag, &res) == 2) {
+      player_.owned[w] = true;
+      player_.mag[w] = clamp(mag, 0, weaponDef(w).magazine);
+      player_.reserve[w] = clamp(res, 0, weaponDef(w).reserveMax);
+    }
+  }
+  player_.weapon = clamp((int)num("weapon", 0), 0, kWeaponCount - 1);
+  if (!player_.owned[player_.weapon]) player_.weapon = kWpnFists;
   for (Vehicle& v : vehicles_) {
     auto it = kv.find("veh" + std::to_string(v.id));
     if (it == kv.end()) continue;

@@ -301,9 +301,41 @@ void Game::openNpcPanel(int idx) {
     }
     default: {
       p.title = "Morador";
-      p.text = chatLine(n);
+      // contextual dialogue: armed / wanted player, mood of the person, otherwise small talk with variety
+      if (player_.weapon != kWpnFists) {
+        p.text = npcLine(n, 4);
+        n.fear = std::min(1.0f, n.fear + 0.3f);
+      } else if (wanted_ > 0) p.text = npcLine(n, 11);
+      else if (n.mood == Mood::Angry) p.text = npcLine(n, 10);
+      else p.text = npcLine(n, rng_.chance(0.4f) ? 0 : 1);
       n.bubble = "";
-      whereOptions(p);
+      if (player_.weapon == kWpnFists && wanted_ == 0) {
+        PanelOption more;
+        more.label = "Puxar mais papo";
+        more.icon = "chat";
+        more.closes = false;
+        more.action = [this, idx]() { panel_.text = npcLine(npcs_[idx], rng_.chance(0.5f) ? 1 : 9); };
+        p.options.push_back(more);
+        whereOptions(p);
+      }
+      {
+        PanelOption push;
+        push.label = "Empurrar";
+        push.icon = "fist";
+        push.action = [this, idx]() {
+          Npc& m = npcs_[idx];
+          m.knockVel += (m.pos - player_.pos).normalized() * 2.5f;
+          emitEvent(EventKind::Assault, m.pos, 8.0f, {ActorKind::Player, 0}, {ActorKind::Npc, idx}, 0.2f);
+          if (m.temper > 0.45f || m.bravery > 0.7f) {
+            m.state = NpcState::Fight; m.target = {ActorKind::Player, 0}; m.stateTimer = 15.0f;
+            npcSay(m, npcLine(m, 10));
+          } else {
+            npcSay(m, npcLine(m, 2));
+            npcStartFlee(m, player_.pos, 6.0f);
+          }
+        };
+        p.options.push_back(push);
+      }
       p.options.push_back({"Tchau", "", nullptr, "", true, true, nullptr});
       break;
     }
