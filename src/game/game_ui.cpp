@@ -548,8 +548,9 @@ void Game::drawMenus(float dt) {
     };
     slider("Sensibilidade da câmera", settings_.sensitivity, 0.4f, 2.0f, 100, fmtFloat(settings_.sensitivity, 2) + "x");
     slider("Tamanho dos controles", settings_.hudScale, 0.75f, 1.35f, 101, std::to_string((int)(settings_.hudScale * 100)) + "%");
-    static const char* q[4] = {"Automática", "Baixa", "Média", "Alta"};
-    toggle("Qualidade gráfica", false, 303, q[settings_.quality]);
+    static const char* q[4] = {"BAIXO", "MÉDIO", "ALTO", "ULTRA"};
+    toggle("Qualidade gráfica", false, 303, q[clamp(settings_.quality, 0, 3)]);
+    toggle("Resolução dinâmica", settings_.dynamicRes, 305);
     toggle("Sombras dinâmicas", settings_.shadows, 301);
     toggle("Inverter eixo Y da câmera", settings_.invertY, 300);
     toggle("Mostrar FPS", settings_.showFps, 302);
@@ -594,7 +595,8 @@ void Game::handleUiPointers(const InputFrame& in) {
           if (id == 300) settings_.invertY = !settings_.invertY;
           else if (id == 301) settings_.shadows = !settings_.shadows;
           else if (id == 302) settings_.showFps = !settings_.showFps;
-          else if (id == 303) settings_.quality = (settings_.quality + 1) % 4;
+          else if (id == 303) { settings_.quality = (settings_.quality + 1) % 4; applySettings(); }
+          else if (id == 305) settings_.dynamicRes = !settings_.dynamicRes;
           else if (id == 304) { menu_ = MenuState::Pause; saveGame(); }
           applySettings();
         } else if (panel_.open && id >= 0 && id < 100) {

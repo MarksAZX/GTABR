@@ -383,6 +383,7 @@ class Gen {
     b.box(AABB({mnx, h - 0.1f, mnz}, {mxx, h, mxz}), mat::metal, mat::metal, 1.0f);
     MeshBuilder l = mb(x, z, {1.0f, 0.95f, 0.8f});
     l.box(AABB({ax - 0.28f, h - 0.16f, az - 0.14f}, {ax + 0.28f, h - 0.08f, az + 0.14f}), mat::white, mat::white, 1.0f);
+    w_.lampLights.push_back({ax, h - 0.25f, az});
   }
 
   void furniture() {

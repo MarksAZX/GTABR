@@ -14,6 +14,7 @@ bool Game::init(const Init& i) {
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
   assets_.startLoading(r_, jobs_);
+  queueModels();
   startWorldJob();
   cam_.init(CamMode::TopDown);
   return true;
@@ -44,6 +45,7 @@ void Game::finishLoading() {
                                                 world_.marketCeiling.idx.size());
   }
   materials_ = assets_.materials;
+  finishModels();
   worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
@@ -121,6 +123,7 @@ void Game::teleportPlayer(Vec2 p, float yaw) {
 void Game::frame(float dtReal, gfx::FrameData& fd) {
   dtReal = clamp(dtReal, 0.0005f, 0.1f);
   realTime_ += dtReal;
+  lastDt_ = dtReal;
   fd_ = &fd;
   fd.clear();
   timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
@@ -239,7 +242,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (in.cameraPressed && !wheel_.open) toggleCamera();
   if (!panel_.open && !wheel_.open && fadeAlpha_ < 0.5f) {
     if (in.enterExitPressed) tryEnterExit();
-    if (in.interactPressed && focusValid_) activateInteractable(focus_);
+    if (in.interactPressed && focusValid_) { activateInteractable(focus_); interactPulse_ = 0.7f; }
   }
 
   // slow motion while the wheel is open

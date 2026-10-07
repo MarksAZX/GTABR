@@ -17,6 +17,7 @@
 #include "items.h"
 #include "navmesh.h"
 #include "ui.h"
+#include "model.h"
 #include "timeofday.h"
 #include "world.h"
 
@@ -343,11 +344,36 @@ class Game {
   int archIndex(const std::string& a) const;
   void buildSpriteTables();
   float pitchHighWeight() const;
-  void addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary);
+  void addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary,
+                 float emissive = 0.0f);
+  // ---- 3D models (game_models.cpp)
+  void queueModels();
+  void finishModels();
+  void emitModels(gfx::FrameData& fd, float dt);
+  const ModelAsset* charModel(const std::string& name) const;
+  const ModelAsset* modelForArchetype(const std::string& a, int id) const;
+  int modelLod(const ModelAsset& m, float dist) const;
+  void emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, Vec3 pos, float yaw, float scale, float speed, float dt,
+                     bool fullRate, Vec4 tint);
+  void emitVehicle(gfx::FrameData& fd, int model, int color, Vec3 pos, float yaw, float pitch, float roll, float steer, float spin,
+                   bool lightsOn, bool braking, int signal, bool reversing);
+  struct PendingLight { Vec3 pos, dir, color; float radius, cone, dist; };
+  std::vector<ModelAsset> charModels_, carModels_;
+  std::vector<AnimClip> clips_;
+  Animator animator_;
+  CharAnim playerAnim_;
+  std::vector<CharAnim> npcAnim_;
+  gfx::ModelHandle wheelModel_;
+  gfx::MaterialHandle wheelMaterial_;
+  bool modelsReady_ = false, carsReady_ = false;
+  std::vector<PendingLight> pendingLights_;
+  std::unordered_map<int, bool> npcModelDrawn_;
+  float interactPulse_ = 0;
+  float lastDt_ = 1.0f / 30.0f;
   void addDecalEllipse(Vec3 pos, float hx, float hz, float alpha, float yaw, float kind);
   void projectToScreen(const Vec3& p, Vec2& out, bool& visible) const;
   void selectPanelOption(int idx);
-  struct Stat { int drawnChunks = 0, drawnSprites = 0, npcNear = 0, npcMid = 0, npcFar = 0; } stats_;
+  struct Stat { int drawnChunks = 0, drawnSprites = 0, drawnModels = 0, npcNear = 0, npcMid = 0, npcFar = 0; } stats_;
 };
 
 }  // namespace gtabr

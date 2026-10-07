@@ -76,6 +76,7 @@ struct World {
   std::vector<Chunk> chunks;
   MeshData marketCeiling;
   gfx::MeshHandle marketCeilingHandle;
+  std::vector<Vec3> lampLights;   // street lamp heads (night lights)
 
   std::vector<Collider> colliders;
   std::vector<DecorInstance> decor;

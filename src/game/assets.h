@@ -48,6 +48,13 @@ class Assets {
   // Measures / helpers for text
   static std::vector<uint32_t> decodeUtf8(const std::string& s);
 
+  // Generic textures (3D model maps); key -> handle once uploaded.
+  void queueTexture(const std::string& key, const std::string& file, gfx::SamplerKind sampler);
+  gfx::TexHandle texture(const std::string& key) const {
+    auto it = extraTex_.find(key);
+    return it == extraTex_.end() ? gfx::TexHandle{} : it->second;
+  }
+
  private:
   struct Pending {
     std::string key;
@@ -55,7 +62,6 @@ class Assets {
     gfx::SamplerKind sampler;
     bool ok = false;
   };
-  void queueTexture(const std::string& key, const std::string& file, gfx::SamplerKind sampler);
   void onTexture(const Pending& p);
   void parseSprites(const std::string& text);
   void parseFont(const std::string& text, FontData& f);
@@ -67,7 +73,8 @@ class Assets {
   std::vector<Pending> done_;
   std::atomic<int> total_{0}, finished_{0};
   bool failed_ = false;
-  std::unordered_map<std::string, gfx::TexHandle> pageTex_;  // "atlas_page" -> texture
+  std::unordered_map<std::string, gfx::TexHandle> pageTex_;
+  std::unordered_map<std::string, gfx::TexHandle> extraTex_;  // "atlas_page" -> texture
   std::unordered_map<std::string, SpriteDef> sprites_;
   std::unordered_map<std::string, UvRect> icons_, art_;
   std::string spriteText_;

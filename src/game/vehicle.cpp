@@ -7,6 +7,8 @@ namespace gtabr {
 float stepVehicle(Vehicle& v, const VehicleInput& inIn, float dt, const World& w, const std::vector<Vehicle>& others) {
   const VehicleDef& d = vehicleDef(v.model);
   VehicleInput in = inIn;
+  v.steerInput = in.steer;
+  v.braking = in.handbrake || (in.throttle < -0.05f && v.speed > 0.5f) || (in.throttle > 0.05f && v.speed < -0.5f);
   bool canDrive = v.fuel > 0.0f && v.engineOn;
   if (!canDrive) { in.throttle = 0; if (v.fuel <= 0.0f && v.engineOn) v.outOfFuelTimer += dt; }
   float healthFactor = v.health < 25.0f ? 0.72f : (v.health < 50.0f ? 0.9f : 1.0f);

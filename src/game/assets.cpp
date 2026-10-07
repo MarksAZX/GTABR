@@ -89,7 +89,7 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
 }
 
 void Assets::onTexture(const Pending& p) {
-  if (!p.ok) { failed_ = true; return; }
+  if (!p.ok) { if (p.key.rfind("model:", 0) != 0) failed_ = true; return; }  // models fall back to neutral maps
   gfx::TexHandle h = r_->createTexture(p.data, p.sampler);
   if (!h.valid()) { LOGE("GPU upload failed for %s", p.key.c_str()); failed_ = true; return; }
   if (p.key == "materials") materials = h;
@@ -99,6 +99,7 @@ void Assets::onTexture(const Pending& p) {
   else if (p.key == "icons") iconsTex = h;
   else if (p.key == "ui_art") artTex = h;
   else if (p.key.rfind("page:", 0) == 0) pageTex_[p.key.substr(5)] = h;
+  else extraTex_[p.key] = h;
 }
 
 bool Assets::pump() {

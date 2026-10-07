@@ -71,7 +71,8 @@ int Game::dirIndex(float objYaw, int n) const {
   return ((idx % n) + n) % n;
 }
 
-void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary) {
+void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary,
+                     float emissive) {
   if (!d || !d->valid || alpha < 0.01f) return;
   gfx::SpriteInst s{};
   s.pos[0] = pos.x; s.pos[1] = pos.y; s.pos[2] = pos.z;
@@ -80,6 +81,7 @@ void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, boo
   s.uv[0] = mirror ? d->u1 : d->u0; s.uv[1] = d->v0; s.uv[2] = mirror ? d->u0 : d->u1; s.uv[3] = d->v1;
   uint32_t a = (uint32_t)clamp(alpha * 255.0f, 0.0f, 255.0f);
   s.tint = (rgb & 0x00FFFFFFu) | (a << 24);
+  s.extra = emissive;
   int key = d->tex.id + (secondary ? 100000 : 0);
   (silhouette ? silBuckets_ : spriteBuckets_)[key].push_back(s);
 }
@@ -248,9 +250,13 @@ void Game::emitSprites(gfx::FrameData& fd) {
     if (player_.entering) alpha = 1.0f - smoothstep(player_.transition * 1.4f);
     if (player_.exiting) alpha = smoothstep(player_.transition * 3.0f);
     Vec3 pos{player_.pos.x, player_.y, player_.pos.y};
-    emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, false);
-    emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, true);
-    addDecalEllipse({pos.x + shadowDir.x * 0.5f, pos.y, pos.z + shadowDir.y * 0.5f}, 0.5f, 0.38f, 0.5f * alpha, std::atan2(shadowDir.x, -shadowDir.y) , 0);
+    if (!modelsReady_) {
+      emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, false);
+      addDecalEllipse({pos.x + shadowDir.x * 0.5f, pos.y, pos.z + shadowDir.y * 0.5f}, 0.5f, 0.38f, 0.5f * alpha, std::atan2(shadowDir.x, -shadowDir.y) , 0);
+    } else {
+      addDecalEllipse(pos, 0.32f, 0.32f, 0.35f, 0, 0);   // contact occlusion under the real shadow
+    }
+    if (!modelsReady_) emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, true);
   }
 
   // ---- NPCs
@@ -258,6 +264,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
     if (n.interior != indoors) continue;
     Vec3 pos{n.pos.x, n.y, n.pos.y};
     if (!visible(pos, 1.6f)) continue;
+    if (modelsReady_) { addDecalEllipse(pos, 0.3f, 0.3f, 0.3f, 0, 0); continue; }
     int a = archIndex(n.archetype);
     const CharSprites& cs = charSpr_[a];
     int an = n.speed < 0.25f ? 0 : 1;
@@ -283,15 +290,15 @@ void Game::emitSprites(gfx::FrameData& fd) {
     for (const Vehicle& v : vehicles_) {
       Vec3 pos{v.pos.x, world_.heightAt(v.pos.x, v.pos.y), v.pos.y};
       if (!visible(pos, 4.0f)) continue;
-      vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, false);
-      vehicleShadow(v.model, pos, v.yaw);
+      if (!carsReady_) { vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, false); vehicleShadow(v.model, pos, v.yaw); }
+      else addDecalEllipse(pos, vehicleDef(v.model).width * 0.5f, vehicleDef(v.model).length * 0.5f, 0.35f, v.yaw, 1);
       if (player_.vehicle == v.id) vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, true);
     }
     for (const ParkedCarDef& p : world_.parked) {
       Vec3 pos{p.pos.x, world_.heightAt(p.pos.x, p.pos.z), p.pos.z};
       if (!visible(pos, 4.0f)) continue;
-      vehicleSprite(p.model, p.color, p.yaw, pos, 1.0f, false);
-      vehicleShadow(p.model, pos, p.yaw);
+      if (!carsReady_) { vehicleSprite(p.model, p.color, p.yaw, pos, 1.0f, false); vehicleShadow(p.model, pos, p.yaw); }
+      else addDecalEllipse(pos, vehicleDef(p.model).width * 0.5f, vehicleDef(p.model).length * 0.5f, 0.35f, p.yaw, 1);
     }
     // ---- trees and props
     for (size_t i = 0; i < world_.decor.size(); ++i) {
@@ -351,6 +358,7 @@ void Game::flushSprites(gfx::FrameData& fd) {
 void Game::buildScene(gfx::FrameData& fd) {
   emitWorld(fd);
   emitSprites(fd);
+  emitModels(fd, lastDt_);
   flushSprites(fd);
 }
 

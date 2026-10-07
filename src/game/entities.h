@@ -64,6 +64,8 @@ struct Vehicle {
   float outOfFuelTimer = 0;
   float y = 0;
   float wheelSpin = 0;
+  float steerInput = 0;   // last steering input (turn signals)
+  bool braking = false;   // brake lights
 };
 
 // Steps one vehicle. Returns the impact speed of a collision this step (0 if none).

@@ -102,6 +102,19 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("02_third");
     return 0;
   }
+  if (name == "char") {
+    g.toggleCamera();
+    b.idle(60);
+    b.shot("char_idle");
+    InputFrame in;
+    in.move = {0, -1};
+    b.step(in, 20);
+    b.shot("char_walk");
+    in.runHeld = true;
+    b.step(in, 25);
+    b.shot("char_run");
+    return 0;
+  }
   if (name == "look") {
     // visual review: both cameras at morning, afternoon, dusk and night
     const float hours[4] = {8.5f, 15.5f, 17.9f, 21.5f};

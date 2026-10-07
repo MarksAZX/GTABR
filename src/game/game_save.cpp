@@ -27,7 +27,7 @@ bool Game::saveGame() {
   for (int i = 1; i < kItemCount; ++i) o << "item_" << itemDef(i).key << "=" << inventory_[i] << "\n";
   o << "camera=" << (cam_.mode() == CamMode::TopDown ? 0 : 1) << "\ncamZoom=" << cam_.topDownZoom() << "\n";
   o << "set_sensitivity=" << settings_.sensitivity << "\nset_invertY=" << (settings_.invertY ? 1 : 0) << "\nset_shadows=" << (settings_.shadows ? 1 : 0)
-    << "\nset_quality=" << settings_.quality << "\nset_hudScale=" << settings_.hudScale << "\nset_showFps=" << (settings_.showFps ? 1 : 0) << "\n";
+    << "\nset_quality=" << settings_.quality << "\nset_dynres=" << (settings_.dynamicRes ? 1 : 0) << "\ntime_of_day=" << timeOfDay_ << "\nset_hudScale=" << settings_.hudScale << "\nset_showFps=" << (settings_.showFps ? 1 : 0) << "\n";
   o << "playtime=" << time_ << "\n";
   std::string s = o.str();
   bool ok = fileio::writeFileAtomic(savePath(), s.data(), s.size());
@@ -71,7 +71,9 @@ bool Game::loadGame() {
   settings_.sensitivity = num("set_sensitivity", 1.0f);
   settings_.invertY = num("set_invertY", 0) > 0.5f;
   settings_.shadows = num("set_shadows", 1) > 0.5f;
-  settings_.quality = (int)num("set_quality", 0);
+  settings_.quality = clamp((int)num("set_quality", 2), 0, 3);
+  settings_.dynamicRes = num("set_dynres", 1) != 0;
+  timeOfDay_ = (float)num("time_of_day", 10.0);
   settings_.hudScale = num("set_hudScale", 1.0f);
   settings_.showFps = num("set_showFps", 0) > 0.5f;
   time_ = num("playtime", 0);
