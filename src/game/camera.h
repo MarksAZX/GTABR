@@ -52,7 +52,10 @@ class CameraRig {
   CamMode mode_ = CamMode::TopDown;
   float blend_ = 0, blendEased_ = 0;
   // per-mode state
-  float tdYaw_ = 0, tdDist_ = 30.0f;
+  float tdYaw_ = 0, tdDist_ = 25.0f;
+  float tdSpeedZoom_ = 0;      // smoothed extra distance from vehicle speed
+  float tdPitchLift_ = 0;      // extra pitch to look over buildings that hide the focus
+  float tdIdle_ = 0;
   float tpYaw_ = 0, tpPitch_ = 16.0f * kDeg2Rad, tpDist_ = 5.4f;
   float idleTimer_ = 0;
   // outputs

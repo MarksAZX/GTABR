@@ -9,7 +9,7 @@ float stepVehicle(Vehicle& v, const VehicleInput& inIn, float dt, const World& w
   VehicleInput in = inIn;
   v.steerInput = in.steer;
   v.braking = in.handbrake || (in.throttle < -0.05f && v.speed > 0.5f) || (in.throttle > 0.05f && v.speed < -0.5f);
-  bool canDrive = v.fuel > 0.0f && v.engineOn;
+  bool canDrive = v.fuel > 0.0f && v.engineOn && v.health > 0.0f;   // a wrecked engine does not run
   if (!canDrive) { in.throttle = 0; if (v.fuel <= 0.0f && v.engineOn) v.outOfFuelTimer += dt; }
   float healthFactor = v.health < 25.0f ? 0.72f : (v.health < 50.0f ? 0.9f : 1.0f);
   float vmax = d.maxSpeed * healthFactor;

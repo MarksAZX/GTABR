@@ -57,7 +57,13 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
     if (in.driving && in.speed < -1.0f) want = in.headingYaw;
     tpYaw_ = lerpAngle(tpYaw_, want, expDecay(followRate, dt));
   }
-  // top-down: when driving the map rotates only if the user rotated it; no auto-follow (north up classic view)
+  // top-down: driving slowly turns the view to the travel direction once the user stops rotating it, so the road
+  // ahead is always readable; on foot the view stays where the user left it
+  if (mode_ == CamMode::TopDown) {
+    tdIdle_ = dragging ? 0.0f : tdIdle_ + dt;
+    if (in.driving && tdIdle_ > 2.0f && std::fabs(in.speed) > 6.0f)
+      tdYaw_ = lerpAngle(tdYaw_, in.headingYaw, expDecay(0.35f, dt));
+  }
 
   // ---- focus with look-ahead
   Vec2 vel = in.velocity;
@@ -82,7 +88,25 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   focus_ = smoothFocus_ + Vec3{0, lerp(0.0f, headH, t), 0};
 
   // ---- orbit parameters per mode
-  float tdDist = tdDist_ * (in.indoors ? 0.62f : 1.0f) * (1.0f + (in.driving ? clamp(in.speed / 40.0f, 0.0f, 0.6f) * 0.9f : 0.0f));
+  // top-down pulls back with speed (smoothed so braking does not snap the view)
+  float speedZoom = in.driving ? clamp(std::fabs(in.speed) / 30.0f, 0.0f, 1.0f) * 0.85f : (in.speed > 4.0f ? 0.12f : 0.0f);
+  tdSpeedZoom_ += (speedZoom - tdSpeedZoom_) * expDecay(speedZoom > tdSpeedZoom_ ? 1.2f : 0.6f, dt);
+  if (first_) tdSpeedZoom_ = speedZoom;
+  float tdDist = tdDist_ * (in.indoors ? 0.62f : 1.0f) * (1.0f + tdSpeedZoom_);
+  // look over buildings: if a building between the camera and the focus would hide it, raise the pitch
+  if (t < 0.99f && !in.indoors) {
+    Vec3 back = -forwardFromYaw(lerpAngle(tdYaw_, tpYaw_, t));
+    float tanP = std::tan(kTdPitch + tdPitchLift_);
+    float need = 0;
+    for (float h : {3.0f, 6.0f, 9.0f, 13.0f}) {
+      float d = phys::raycast(w, {focus_.x, focus_.z}, {back.x, back.z}, tdDist, h);
+      if (d < tdDist && d * std::tan(kTdPitch) < h + 0.5f) need = std::max(need, std::atan2(h + 1.0f, std::max(d, 0.5f)) - kTdPitch);
+    }
+    (void)tanP;
+    need = clamp(need, 0.0f, 16.0f * kDeg2Rad);
+    tdPitchLift_ += (need - tdPitchLift_) * expDecay(need > tdPitchLift_ ? 5.0f : 1.2f, dt);
+    if (first_) tdPitchLift_ = need;
+  }
   float tpDist = tpDist_ * (in.driving ? 1.55f : 1.0f);
   if (in.driving) tpDist *= 1.0f + clamp(std::fabs(in.speed) / 45.0f, 0.0f, 0.5f) * 0.5f;
   // third-person camera collision: pull the camera in front of walls and buildings
@@ -105,7 +129,7 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
     // sweep the shorter way
     yaw = tdYaw_ + angleDiff(tdYaw_, tpYaw_) * t;
   }
-  pitch_ = lerp(kTdPitch, tpPitch_, t);
+  pitch_ = lerp(kTdPitch + tdPitchLift_, tpPitch_, t);
   dist_ = std::exp(lerp(std::log(tdDist), std::log(tpDist), t));
   fov_ = lerp(kTdFov, kTpFov + (in.driving ? clamp(in.speed / 40.0f, 0.0f, 1.0f) * 6.0f * kDeg2Rad : 0.0f), t);
   yaw_ = yaw;

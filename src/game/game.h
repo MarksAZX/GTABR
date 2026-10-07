@@ -412,6 +412,8 @@ class Game {
   Vec2 wantedLastKnown_;
   float evadeT_ = 0;          // search phase timer when no cop sees the player
   float policeSpawnT_ = 0;
+  float lastReportT_ = -100.0f, lastReportSev_ = 0;
+  Vec2 lastReportPos_;
   int sirenHandle_ = 0;
   float deathT_ = 0;
   float slowMo_ = 1.0f;

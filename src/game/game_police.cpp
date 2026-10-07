@@ -81,12 +81,29 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
   v.engineOn = true;
   float impact = stepVehicle(v, in, dt, world_, vehicles_);
   if (impact > 6.0f) audio_.play("crash", {v.pos.x, 0.8f, v.pos.y}, 0.6f);
-  // run-over check for AI cars (pedestrians and the player)
-  if (std::fabs(v.speed) > 2.0f) {
+  // AI cars push and hurt pedestrians and the player like any other car (central damage system)
+  if (std::fabs(v.speed) > 1.0f) {
     phys::OBB o = vehicleObb(v);
-    if (player_.vehicle < 0 && !player_.dead) {
-      phys::Hit h = phys::circleVsObb(player_.pos, 0.32f, o);
-      if (h.hit) player_.pos += h.normal * h.depth;
+    auto hitActor = [&](ActorRef who, Vec2& pos) {
+      phys::Hit h = phys::circleVsObb(pos, 0.32f, o);
+      if (!h.hit) return;
+      pos += h.normal * h.depth;
+      if (std::fabs(v.speed) > 3.5f) {
+        DamageInfo d;
+        d.type = DamageType::RunOver;
+        d.amount = std::fabs(v.speed) * 4.0f;
+        d.attacker = {ActorKind::Vehicle, v.id};
+        d.dir = h.normal;
+        d.knockback = std::min(8.0f, std::fabs(v.speed) * 0.6f);
+        applyDamage(who, d);
+        audio_.play("body", {pos.x, 0.9f, pos.y}, 0.8f);
+      }
+    };
+    if (player_.vehicle < 0 && !player_.dead && player_.hurtTimer <= 0) { hitActor({ActorKind::Player, 0}, player_.pos); }
+    for (Npc& n : npcs_) {
+      if (n.interior || n.despawn || n.state == NpcState::Dead || n.hitStun > 0) continue;
+      if ((n.pos - v.pos).length() > 4.0f) continue;
+      hitActor({ActorKind::Npc, n.id}, n.pos);
     }
   }
 }
@@ -109,7 +126,16 @@ bool Game::copCanSee(const Npc& c, Vec2 target) const {
 // ------------------------------------------------------------------------------------------------ wanted level
 void Game::reportCrime(Vec2 where, float severity, bool witnessedByCop) {
   if (player_.dead) return;
-  wantedHeat_ += severity;
+  // several witnesses calling about the same incident count once: within a short window only the worst report adds
+  if (time_ - lastReportT_ < 8.0f && (where - lastReportPos_).length() < 25.0f) {
+    wantedHeat_ += std::max(0.0f, severity - lastReportSev_);
+    lastReportSev_ = std::max(lastReportSev_, severity);
+  } else {
+    wantedHeat_ += severity;
+    lastReportSev_ = severity;
+  }
+  lastReportT_ = time_;
+  lastReportPos_ = where;
   int lvl = 0;
   for (int i = 0; i < 3; ++i) if (wantedHeat_ >= kHeat[i]) lvl = i + 1;
   if (lvl > wanted_) {

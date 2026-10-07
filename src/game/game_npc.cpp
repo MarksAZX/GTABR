@@ -318,6 +318,20 @@ void Game::npcThink(Npc& n, float dt) {
       }
     }
   }
+  // a police chase passing by: people stop, look and step aside
+  if (wanted_ > 0 && n.lod == 0 && (n.state == NpcState::Idle || n.state == NpcState::Walk || n.state == NpcState::Chat) &&
+      n.greetCooldown <= 0) {
+    for (const Npc& c : npcs_) {
+      if (!c.police || c.despawn || (c.state != NpcState::CopChase && c.state != NpcState::Fight)) continue;
+      if ((c.pos - n.pos).length() > 9.0f) continue;
+      n.greetCooldown = 12.0f;
+      npcSay(n, npcLine(n, 6), 2.0f);
+      n.state = NpcState::Alert;
+      n.alertT = 2.5f;
+      n.threatPos = c.pos;
+      break;
+    }
+  }
   // the player walks around with a gun out / is wanted: people keep their distance
   if ((n.state == NpcState::Idle || n.state == NpcState::Walk) && pd < 6.0f && !n.stationary) {
     if (player_.aimHold > 0 && isFirearm(player_.weapon) && lineOfSight(n.pos, player_.pos)) {

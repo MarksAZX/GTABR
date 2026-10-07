@@ -103,6 +103,8 @@ struct Bot {
       // stuck: barely moved over the last second while pushing forward -> three-point turn
       if (i % 45 == 0) { if (i > 0 && (v.pos - lastPos).length() < 0.4f && thr > 0.2f) reverse = 35; lastPos = v.pos; }
     }
+    const Vehicle& v = g.vehicles()[g.player().vehicle];
+    LOGW("driveTo (%.1f, %.1f) timed out: car at (%.2f, %.2f) yaw %.2f speed %.2f fuel %.1f", target.x, target.y, v.pos.x, v.pos.y, v.yaw, v.speed, v.fuel);
     return false;
   }
   bool stopCar(int maxFrames = 120) {
@@ -246,6 +248,63 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     p.owned[kWpnSmg] = false; p.mag[kWpnSmg] = 0;
     CHECK(g.loadGame() && p.owned[kWpnSmg] && p.mag[kWpnSmg] == magBefore && p.reserve[kWpnSmg] == resBefore, "weapons and ammo persist in the save");
     return g_failures;
+  }
+  if (name == "wanted3") {
+    // escalation: repeated killings raise the wanted level; the armed response really shoots; dying respawns the player
+    b.render = false;
+    Player& p = g.player();
+    b.idle(20);
+    for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 120);
+    g.equipWeapon(kWpnSmg);
+    int kills = 0;
+    for (int round = 0; round < 6 && g.wantedLevel() < 3; ++round) {
+      int t = -1; float best = 1e9f;
+      for (auto& n : g.npcs()) {
+        if (n.interior || n.state == NpcState::Dead || n.despawn) continue;
+        float d = (n.pos - p.pos).length();
+        if (d < best) { best = d; t = n.id; }
+      }
+      if (t < 0) break;
+      Npc& n = g.npcs()[t];
+      if (best > 12.0f) { g.teleportPlayer(n.pos + Vec2{0.0f, 5.0f}, 0); b.idle(2); }
+      b.attackToward(n.pos, 40, true);
+      if (n.state == NpcState::Dead) ++kills;
+      b.idle(90);
+    }
+    LOGI("kills %d, wanted %d", kills, g.wantedLevel());
+    CHECK(g.wantedLevel() >= 2, "repeated violent crimes raise the wanted level");
+    float h0 = p.health;
+    int frames = 0;
+    while (!p.dead && frames < 30 * 120) { b.idle(1); ++frames; }
+    LOGI("player health %.0f -> %.0f (dead %d) after %.1f s of police response, cops %d", h0, p.health, (int)p.dead, frames / 30.0f, g.aliveCops());
+    CHECK(g.audio().playedCount("pistol") > 0, "police fired their weapons");
+    CHECK(p.dead || p.health < h0, "police fire actually hits the player");
+    if (p.dead) {
+      for (int i = 0; i < 30 * 8 && p.dead; ++i) b.idle(1);
+      CHECK(!p.dead && p.health >= 99.0f && g.wantedLevel() == 0, "after dying the player respawns with the heat cleared");
+    }
+    b.render = true; b.shot("50_after_wanted3");
+    return g_failures;
+  }
+  if (name == "weapons") {
+    Player& p = g.player();
+    g.teleportPlayer({-20.0f, -12.0f}, 0);
+    g.toggleCamera();
+    b.idle(50);
+    for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 60);
+    const int order[5] = {kWpnBat, kWpnKnife, kWpnPistol, kWpnSmg, kWpnShotgun};
+    for (int k = 0; k < 5; ++k) {
+      g.equipWeapon(order[k]);
+      b.idle(10);
+      InputFrame in; in.attackPressed = true; in.attackHeld = true;
+      b.step(in, 1);
+      in.attackPressed = false;
+      b.step(in, isFirearm(order[k]) ? 3 : (getenv("GTABR_SWING_FRAMES") ? atoi(getenv("GTABR_SWING_FRAMES")) : 9));
+      b.shot(std::string("wpn_") + weaponDef(order[k]).key);
+      b.idle(40);
+    }
+    (void)p;
+    return 0;
   }
   if (name == "char") {
     g.toggleCamera();
@@ -412,6 +471,8 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(30);
     CHECK(g.player().vehicle == 0, "re-entered the car");
     g.vehicles()[0].health = 64;   // some wear to repair
+    // U-turn toward the open north half of the avenue (the south kerb has trees)
+    b.driveTo({21.0f, -3.5f}, 2.5f, 400, 6.0f);
     CHECK(b.driveTo({-3.0f, 3.0f}, 3.5f, 900, 10.0f), "drove west to the junction");
     CHECK(b.driveTo({-26.0f, 3.0f}, 4.0f, 1200, 11.0f), "drove to the workshop street");
     CHECK(b.driveTo({-26.0f, 12.0f}, 3.0f, 900, 8.0f), "entered the workshop forecourt");
