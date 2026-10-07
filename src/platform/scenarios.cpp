@@ -107,6 +107,24 @@ struct Bot {
     LOGW("driveTo (%.1f, %.1f) timed out: car at (%.2f, %.2f) yaw %.2f speed %.2f fuel %.1f", target.x, target.y, v.pos.x, v.pos.y, v.yaw, v.speed, v.fuel);
     return false;
   }
+  // drives along the street grid (right-hand lane) to a point on or next to a street
+  bool driveRoad(Vec2 target, float tol, int maxFrames, float maxSpeed = 11.0f) {
+    const World& w = g.world();
+    std::vector<Vec2> route = w.roadRoute(g.vehicles()[g.player().vehicle].pos, target);
+    Vec2 prev = g.vehicles()[g.player().vehicle].pos;
+    for (size_t i = 0; i < route.size(); ++i) {
+      Vec2 p = route[i];
+      bool last = i + 1 == route.size();
+      if (!last) {
+        Vec2 d = p - prev;
+        if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 2.4f; }
+        if ((p - g.vehicles()[g.player().vehicle].pos).length() < 5.0f) { prev = route[i]; continue; }
+        if (!driveTo(p, 4.5f, maxFrames, maxSpeed)) return false;
+      } else if (!driveTo(p, tol, maxFrames, std::min(maxSpeed, 8.0f))) return false;
+      prev = route[i];
+    }
+    return true;
+  }
   bool stopCar(int maxFrames = 120) {
     for (int i = 0; i < maxFrames; ++i) {
       Vehicle& v = g.vehicles()[g.player().vehicle];
@@ -128,32 +146,6 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.toggleCamera();
     b.idle(45);
     b.shot("02_third");
-    return 0;
-  }
-  if (name == "clerk") {
-    g.teleportPlayer({300.0f, 3.5f}, 0);
-    b.idle(20);
-    CHECK(b.walkTo({304.2f, -1.6f}, 0.8f, 500), "walked to the counter");
-    b.idle(10);
-    for (auto& n : g.npcs()) if (n.role == 4) LOGI("clerk at %.2f %.2f interior %d state %d", n.pos.x, n.pos.y, (int)n.interior, (int)n.state);
-    LOGI("player %.2f %.2f indoors %d, focus count %zu", g.player().pos.x, g.player().pos.y, (int)g.player().indoors, g.focusList().size());
-    for (auto& it : g.focusList()) LOGI(" focus kind %d dist %.2f", (int)it.kind, it.dist);
-    b.shot("clerk");
-    return g_failures;
-  }
-  if (name == "workshop") {
-    Vehicle& car = g.vehicles()[0];
-    car.pos = {22.0f, 2.5f}; car.yaw = kPi * 0.5f; car.vel = {}; car.speed = 0;
-    g.teleportPlayer({22.0f, 4.6f}, 0);
-    b.idle(5);
-    InputFrame in; in.enterExitPressed = true; b.step(in, 1); b.idle(30);
-    LOGI("in car %d", g.player().vehicle);
-    Vec2 pts[4] = {{-3.0f, 3.0f}, {-26.0f, 3.0f}, {-26.0f, 12.0f}, {-26.0f, 24.0f}};
-    for (Vec2 p : pts) {
-      bool ok = b.driveTo(p, 3.0f, 900, 8.0f);
-      LOGI("target %.1f %.1f ok %d car %.2f %.2f yaw %.2f", p.x, p.y, (int)ok, car.pos.x, car.pos.y, car.yaw);
-    }
-    b.shot("workshop");
     return 0;
   }
   if (name == "gameplay") {
@@ -182,9 +174,11 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
           "the victim reacts (fights back, flees or is knocked down)");
     b.render = true; b.shot("40_brawl"); b.render = false;
     // ---- weapon pickups: walk into the pistol
-    g.teleportPlayer({-40.5f, -17.0f}, 0);
+    Vec3 pp;
+    CHECK(g.pickupPos(kWpnPistol, pp), "pistol pickup exists in the generated city");
+    g.teleportPlayer({pp.x + 2.0f, pp.z}, 0);
     b.idle(3);
-    b.walkTo({-40.5f, -20.5f}, 0.5f, 200);
+    b.walkTo({pp.x, pp.z}, 0.4f, 200);
     b.idle(5);
     CHECK(p.owned[kWpnPistol] && p.mag[kWpnPistol] > 0, "picked up the pistol with ammo");
     CHECK(p.weapon == kWpnPistol, "pistol equipped");
@@ -230,7 +224,16 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(g.copsChasing() > 0, "officers see and chase the player");
     b.render = true; b.shot("42_police"); g.toggleCamera(); b.idle(40); b.shot("43_police_third"); g.toggleCamera(); b.render = false;
     // ---- escape: break line of sight far away; police must not know where the player went
-    g.teleportPlayer({70.0f, 70.0f}, 0);
+    {
+      // hide in the land corner farthest from the crime
+      const RectF& L = g.world().land;
+      Vec2 best = p.pos; float bd = 0;
+      for (Vec2 c : {Vec2{L.x0 + 14, L.z0 + 14}, Vec2{L.x1 - 14, L.z0 + 14}, Vec2{L.x0 + 14, L.z1 - 14}, Vec2{L.x1 - 14, L.z1 - 14}}) {
+        Vec2 q = g.world().nearestRoadPoint(c);
+        if ((q - crimeSpot).length() > bd) { bd = (q - crimeSpot).length(); best = q; }
+      }
+      g.teleportPlayer(best, 0);
+    }
     float minDist = 1e9f;
     int frames = 0;
     while (g.wantedLevel() > 0 && frames < 30 * 140) {
@@ -288,7 +291,6 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
   }
   if (name == "weapons") {
     Player& p = g.player();
-    g.teleportPlayer({-20.0f, -12.0f}, 0);
     g.toggleCamera();
     b.idle(50);
     for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 60);
@@ -359,21 +361,22 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(30);
     CHECK(g.player().vehicle == 0, "entered the car");
     b.shot("13_in_car_topdown");
-    // ---- drive to the gas station
+    // ---- drive to the gas station (route generated from the city's street grid)
+    const World& W = g.world();
+    auto v2 = [](const Vec3& p) { return Vec2{p.x, p.z}; };
     Vehicle& car = g.vehicles()[0];
     float fuel0 = car.fuel;
-    CHECK(b.driveTo({-4.0f, -2.5f}, 3.5f, 900, 11.0f), "drove east along the main street");
-    CHECK(b.driveTo({11.0f, -4.5f}, 3.0f, 900, 10.0f), "reached the station entrance");
+    LOGI("city '%s' seed %u, coast %d, %zu shops", W.cityName.c_str(), W.seed, W.coastSide, W.shops.size());
+    CHECK(b.driveRoad(v2(W.gasApproach), 3.0f, 1500), "drove through the city to the gas station");
     b.shot("14_driving");
-    // the islands span x 14..30 at z -15 and -23: enter the middle lane (z -19) from its west end
-    CHECK(b.driveTo({10.6f, -13.5f}, 2.0f, 900, 6.0f), "entered the forecourt");
-    CHECK(b.driveTo({10.8f, -18.6f}, 1.8f, 900, 4.0f), "lined up with the pump lane");
-    CHECK(b.driveTo({18.5f, -19.0f}, 1.6f, 900, 5.0f), "reached the pump lane");
+    CHECK(b.driveTo(v2(W.gasLaneEntry), 2.0f, 900, 5.0f), "entered the forecourt");
+    CHECK(b.driveTo(v2(W.gasLaneTurn), 1.8f, 900, 4.0f), "lined up with the pump lane");
+    CHECK(b.driveTo(v2(W.gasLanePump), 1.6f, 900, 5.0f), "reached the pump lane");
     b.stopCar();
     b.idle(10);
     b.shot("15_at_pump");
     CHECK(g.focusValid() && g.focus()->kind == IKind::FuelPump, "pump interaction available near the pump");
-    // ---- refuel R$20
+    // ---- refuel
     int money0 = g.money();
     in = InputFrame();
     in.interactPressed = true;
@@ -388,19 +391,19 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(car.fuel > fuel0 + 2.5f, "fuel was added to the tank");
     LOGI("fuel %.1f -> %.1f L, money %d -> %d", fuel0, car.fuel, money0, g.money());
     // ---- go to the market
-    CHECK(b.driveTo({34.8f, -19.0f}, 2.0f, 900, 6.0f), "drove out of the pump lane");
-    CHECK(b.driveTo({36.0f, -11.0f}, 2.5f, 900, 6.0f), "left the forecourt");
-    CHECK(b.driveTo({20.0f, -2.0f}, 3.0f, 900, 9.0f), "back on the main street");
-    CHECK(b.driveTo({22.0f, 2.5f}, 2.0f, 900, 8.0f), "parked near the market");
+    CHECK(b.driveTo(v2(W.gasLaneExit), 2.0f, 900, 5.0f), "drove out of the pump lane");
+    CHECK(b.driveTo(v2(W.gasExitStreet), 2.5f, 900, 5.0f), "left the forecourt");
+    CHECK(b.driveRoad(v2(W.marketParking), 2.5f, 1500), "drove to the market");
     b.stopCar();
-    // exit car
     in = InputFrame();
     in.enterExitPressed = true;
     b.step(in, 1);
     b.idle(30);
     CHECK(g.player().vehicle < 0, "left the car");
-    // walk to the door
-    CHECK(b.walkTo({22.0f, 7.4f}, 0.7f, 400), "walked to the market door");
+    const ShopDef* market = nullptr;
+    for (const ShopDef& sh : W.shops) if (sh.kind == ShopKind::Mercado) market = &sh;
+    CHECK(market != nullptr, "the city has a market");
+    CHECK(b.walkTo(v2(market->door), 0.7f, 500), "walked to the market door");
     b.idle(5);
     CHECK(g.focusValid() && g.focus()->kind == IKind::Door, "door interaction available");
     b.shot("20_market_door");
@@ -413,19 +416,17 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.toggleCamera();
     b.idle(60);
     b.shot("22_market_interior_third");
-    // talk to the clerk
-    CHECK(b.walkTo({304.2f, -1.6f}, 0.8f, 500), "walked to the counter");
+    // talk to the clerk across the counter
+    Vec2 counter = v2(market->clerk) + Vec2{0.0f, 2.1f};
+    CHECK(b.walkTo(counter, 0.6f, 600), "walked to the counter");
     b.idle(10);
     bool talk = false;
     for (auto& it : g.focusList()) if (it.kind == IKind::Npc) talk = true;
     CHECK(talk, "clerk can be talked to");
-    LOGI("player at %.2f,%.2f nearby=%zu", g.player().pos.x, g.player().pos.y, g.focusList().size());
-    // interact with whichever is the nearest focus; if not the clerk, step closer
     in = InputFrame();
     in.interactPressed = true;
     b.step(in, 1);
     b.idle(15);
-    if (!g.panel().open) { b.walkTo({304.6f, -2.4f}, 0.4f, 100); in.interactPressed = true; b.step(in, 1); b.idle(15); }
     CHECK(g.panel().open, "dialogue panel opened");
     b.shot("23_attendant_dialog");
     g.selectPanelOptionPublic(0);   // see products
@@ -455,28 +456,28 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     in.wheelHeld = false; in.wheelBtnHeld = false; in.wheelReleased = true;
     b.step(in, 2);
     b.idle(30);
-    // leave
-    b.walkTo({305.8f, 2.8f}, 0.6f, 300);
-    CHECK(b.walkTo({300.0f, 4.6f}, 0.8f, 600), "walked to the exit door");
+    // leave through the door
+    const DoorDef* exitDoor = nullptr;
+    for (const DoorDef& d : W.doors) if (d.shop == market->id && !d.toInterior) exitDoor = &d;
+    CHECK(exitDoor && b.walkTo(v2(exitDoor->pos), 0.8f, 600), "walked to the exit door");
     in = InputFrame();
     in.interactPressed = true;
     b.step(in, 1);
     b.idle(70);
     CHECK(!g.player().indoors, "left the market");
     // ---- back to the car and to the workshop
-    b.walkTo(g.vehicles()[0].pos + Vec2{-1.6f, 0}, 1.0f, 400);
+    bool nearCar = b.walkTo(g.vehicles()[0].pos, 2.2f, 600);
+    LOGI("player %.1f,%.1f car %.1f,%.1f near %d", g.player().pos.x, g.player().pos.y, g.vehicles()[0].pos.x, g.vehicles()[0].pos.y, (int)nearCar);
     in = InputFrame();
     in.enterExitPressed = true;
     b.step(in, 1);
     b.idle(30);
     CHECK(g.player().vehicle == 0, "re-entered the car");
+    if (g.player().vehicle != 0) { LOGI("MVP scenario aborted: %d failures", g_failures); return 10; }
     g.vehicles()[0].health = 64;   // some wear to repair
-    // U-turn toward the open north half of the avenue (the south kerb has trees)
-    b.driveTo({21.0f, -3.5f}, 2.5f, 400, 6.0f);
-    CHECK(b.driveTo({-3.0f, 3.0f}, 3.5f, 900, 10.0f), "drove west to the junction");
-    CHECK(b.driveTo({-26.0f, 3.0f}, 4.0f, 1200, 11.0f), "drove to the workshop street");
-    CHECK(b.driveTo({-26.0f, 12.0f}, 3.0f, 900, 8.0f), "entered the workshop forecourt");
-    CHECK(b.driveTo({-26.0f, 24.0f}, 1.8f, 900, 6.0f), "parked in the service bay");
+    CHECK(b.driveRoad(v2(W.workshopApproach), 3.0f, 1500), "drove to the workshop");
+    CHECK(b.driveTo(v2(W.workshopBayEntry), 2.5f, 900, 6.0f), "entered the workshop forecourt");
+    CHECK(b.driveTo(v2(W.poiWorkshop), 1.8f, 900, 5.0f), "parked in the service bay");
     b.stopCar();
     b.idle(10);
     b.shot("30_workshop_bay");

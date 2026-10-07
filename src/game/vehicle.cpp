@@ -98,10 +98,15 @@ float stepVehicle(Vehicle& v, const VehicleInput& inIn, float dt, const World& w
   }
   v.speed = v.vel.dot(fwd2(v.yaw));
   // world bounds
-  float lim = World::kHalf - 2.5f;
-  if (std::fabs(v.pos.x) < 200.0f) {
-    v.pos.x = clamp(v.pos.x, -lim, lim);
-    v.pos.y = clamp(v.pos.y, -lim, lim);
+  // cars stay on land (the beach sand is drivable, the sea is not)
+  if (v.pos.x < World::kInteriorX - 60.0f) {
+    RectF lim = w.land;
+    if (w.coastSide >= 0) {
+      const RectF& b = w.beach;
+      lim = {std::min(lim.x0, b.x0), std::min(lim.z0, b.z0), std::max(lim.x1, b.x1), std::max(lim.z1, b.z1)};
+    }
+    v.pos.x = clamp(v.pos.x, lim.x0 + 2.5f, lim.x1 - 2.5f);
+    v.pos.y = clamp(v.pos.y, lim.z0 + 2.5f, lim.z1 - 2.5f);
   }
 
   // ---- damage

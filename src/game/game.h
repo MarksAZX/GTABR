@@ -111,6 +111,7 @@ class Game {
     JobSystem* jobs = nullptr;
     std::string saveDir;
     bool newGame = false;
+    uint32_t seed = 0;   // city seed for a new game (0 = pick one)
   };
   bool init(const Init& i);
   void shutdown();
@@ -133,6 +134,11 @@ class Game {
   int& money() { return moneyCents_; }
   int itemCount(int id) const { return inventory_[id]; }
   CameraRig& camera() { return cam_; }
+  // position of the (active) pickup of a weapon, or false
+  bool pickupPos(int weapon, Vec3& out) const {
+    for (const auto& k : pickups_) if (k.weapon == weapon && k.active) { out = k.pos; return true; }
+    return false;
+  }
   const World& world() const { return world_; }
   Panel& panel() { return panel_; }
   std::vector<Interactable>& focusList() { return nearby_; }
@@ -243,6 +249,8 @@ class Game {
   NavMesh navOutdoor_, navIndoor_;
   gfx::TexHandle mapTex_;
   float mapExtent_ = 96.0f;
+  uint32_t worldSeed_ = 1;      // seed of the current city (saved per slot)
+  float lodDistance_ = 110.0f;  // chunks farther than this draw their HLOD mesh
   CameraRig cam_;
   InputSystem input_;
   InputFrame scripted_;

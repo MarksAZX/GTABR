@@ -10,8 +10,6 @@
 namespace gtabr {
 
 namespace {
-const float kRoad[3] = {-48.0f, 0.0f, 48.0f};
-const float kEdge = 78.0f;
 // thresholds of accumulated crime weight for 1, 2 and 3 stars
 const float kHeat[3] = {0.5f, 3.0f, 6.0f};
 float searchTimeFor(int level) { return 22.0f + 9.0f * level; }
@@ -20,17 +18,8 @@ int unitsFor(int level) { return level <= 0 ? 0 : (level == 1 ? 1 : (level == 2 
 
 // ------------------------------------------------------------------------------------------------ roads
 Vec2 Game::roadPointNear(Vec2 p) const {
-  // closest point on the street grid (centre lines)
-  Vec2 best = p;
-  float bd = 1e9f;
-  for (float r : kRoad) {
-    Vec2 a{clamp(p.x, -kEdge, kEdge), r};
-    Vec2 b{r, clamp(p.y, -kEdge, kEdge)};
-    float da = (a - p).length(), db = (b - p).length();
-    if (da < bd) { bd = da; best = a; }
-    if (db < bd) { bd = db; best = b; }
-  }
-  return best;
+  // closest point on the street grid (centre lines of the generated city)
+  return world_.nearestRoadPoint(p);
 }
 
 // Steers an AI car along the street grid toward a target (Manhattan route through intersections), with a
@@ -40,24 +29,11 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
   Vec2 goal = target;
   float distGoal = (goal - here).length();
   if (distGoal > 14.0f) {
-    // route: leave the current street at the intersection that lines up with the target's street
-    Vec2 a = roadPointNear(here), b = roadPointNear(goal);
-    bool aHoriz = std::fabs(a.y - std::round(a.y / 48.0f) * 48.0f) < 0.5f && std::fabs(a.y) <= 48.5f &&
-                  (std::fabs(a.y + 48) < 0.5f || std::fabs(a.y) < 0.5f || std::fabs(a.y - 48) < 0.5f);
-    Vec2 next = b;
-    if (std::fabs(a.x - b.x) > 1.0f && std::fabs(a.y - b.y) > 1.0f) {
-      // pick the corner: travel along our street to the cross street nearest the target
-      if (aHoriz) {
-        float cx = kRoad[0];
-        for (float r : kRoad) if (std::fabs(r - b.x) < std::fabs(cx - b.x)) cx = r;
-        next = {cx, a.y};
-      } else {
-        float cz = kRoad[0];
-        for (float r : kRoad) if (std::fabs(r - b.y) < std::fabs(cz - b.y)) cz = r;
-        next = {a.x, cz};
-      }
-      if ((next - here).length() < 6.0f) next = b;
-    }
+    // route along the generated street grid: next waypoint that is not already reached
+    std::vector<Vec2> route = world_.roadRoute(here, goal);
+    Vec2 next = goal;
+    for (const Vec2& w : route)
+      if ((w - here).length() > 6.0f) { next = w; break; }
     goal = next;
   }
   Vec2 d = goal - here;

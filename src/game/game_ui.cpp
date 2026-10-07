@@ -181,7 +181,8 @@ void Game::drawMinimap() {
   };
   if (!player_.indoors) {
     marker({world_.poiGas.x, world_.poiGas.z}, "fuel", kMint, 30 * S, true);
-    marker({world_.poiMarketDoor.x, world_.poiMarketDoor.z}, "cart", kAccent, 30 * S, true);
+    for (const ShopDef& sh : world_.shops)
+      if (sh.kind != ShopKind::Conveniencia) marker({sh.door.x, sh.door.z}, "cart", kAccent, 26 * S, sh.kind == ShopKind::Mercado);
     marker({world_.poiWorkshop.x, world_.poiWorkshop.z}, "wrench", kSky, 30 * S, true);
     for (const Vehicle& v : vehicles_)
       if (player_.vehicle != v.id && !v.despawn) marker(v.pos, "car", v.police && v.siren ? (std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky) : C(1, 1, 1, 0.95f), 22 * S, false);

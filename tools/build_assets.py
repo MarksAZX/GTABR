@@ -109,6 +109,19 @@ def proc_layer(kind, seed):
     elif kind == "wall_dark":
         base = 0.32 + (n - 0.5) * 0.18
         rgb = np.stack([base, base * 0.98, base * 0.95], -1)
+    elif kind == "sand":
+        # fine beach sand: warm, speckled, with faint wind ripples
+        yy = np.arange(MAT_SIZE)[:, None]
+        rip = 0.5 + 0.5 * np.sin(yy * 0.22 + n * 9.0)
+        speck = np.random.default_rng(seed).random((MAT_SIZE, MAT_SIZE))
+        base = 0.74 + (n - 0.5) * 0.12 + rip * 0.03 - (speck > 0.985) * 0.18
+        rgb = np.stack([base * 1.0, base * 0.9, base * 0.72], -1)
+    elif kind == "water":
+        base = 0.5 + (n - 0.5) * 0.05
+        rgb = np.stack([base * 0.3, base * 0.55, base * 0.62], -1)
+    elif kind == "foliage":
+        base = 0.32 + (n - 0.5) * 0.25
+        rgb = np.stack([base * 0.55, base * 0.95, base * 0.4], -1)
     elif kind == "white":
         rgb = np.ones((MAT_SIZE, MAT_SIZE, 3), np.float32)
     else:
@@ -121,7 +134,9 @@ MATERIALS = [
     "asphalt", "asphalt_cracked", "sidewalk", "pedra_port", "grass", "dirt", "tile_floor", "garage_floor",
     "house_yellow", "house_blue", "house_brick", "house_modern", "apt_beige", "apt_green", "sobrado_pink", "apt_bands",
     "shop_posto", "shop_mercado", "shop_oficina", "roof_tile", "roof_fiber", "roof_laje", "roof_metal", "wall_paint",
-    "concrete", "wall_dark", "white", "shelf", "wood", "metal", "reserved0", "reserved1",
+    "concrete", "wall_dark", "white", "shelf", "wood", "metal", "sand", "water",
+    "shop_padaria", "shop_ferragens", "shop_conveniencia", "foliage",
+    "house_periferia_a", "house_periferia_b", "brick_raw", "apt_tower",
 ]
 
 
@@ -147,16 +162,22 @@ def material_layers():
     if fb:
         for i, n in enumerate(["apt_beige", "apt_green", "sobrado_pink", "apt_bands"]):
             layers[n] = to_arr(cell(fb, 2, 2, i % 2, i // 2, 10))
-    for n, f in [("shop_posto", "shop_posto.png"), ("shop_mercado", "shop_mercado.png"), ("shop_oficina", "shop_oficina.png")]:
+    for n, f in [("shop_posto", "shop_posto.png"), ("shop_mercado", "shop_mercado.png"), ("shop_oficina", "shop_oficina.png"),
+                 ("house_periferia_a", "house_periferia_a.png"), ("house_periferia_b", "house_periferia_b.png"), ("apt_tower", "apt_tower.png"),
+                 ("shop_padaria", "shop_padaria.png"), ("shop_ferragens", "shop_ferragens.png"), ("shop_conveniencia", "shop_conveniencia.png")]:
         im = load(f)
         if im:
             layers[n] = to_arr(im)
+    for n, f, mode in [("sand", "tex_sand.png", 0), ("water", "tex_water.png", 0), ("brick_raw", "tex_brick_raw.png", 1)]:
+        im = load(f)
+        if im:
+            layers[n] = to_arr(seamless_blend(im) if mode == 0 else seamless_mirror(im))
     if roofs:
         for i, n in enumerate(["roof_tile", "roof_fiber", "roof_laje", "roof_metal"]):
             layers[n] = to_arr(seamless_blend(cell(roofs, 2, 2, i % 2, i // 2, 12)))
     if shelf:
         layers["shelf"] = to_arr(shelf)
-    seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "reserved0": 8, "reserved1": 9}
+    seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "sand": 8, "water": 9, "foliage": 11}
     arrs = []
     for i, n in enumerate(MATERIALS):
         if n in layers:
@@ -164,7 +185,7 @@ def material_layers():
         else:
             if n not in seeds:
                 print("  WARNING: missing source for", n)
-            arrs.append(proc_layer(n if n in ("wall_paint", "concrete", "wall_dark", "white", "wood", "metal") else "concrete", seeds.get(n, 10 + i)))
+            arrs.append(proc_layer(n if n in ("wall_paint", "concrete", "wall_dark", "white", "wood", "metal", "sand", "water", "foliage") else "concrete", seeds.get(n, 10 + i)))
     return arrs
 
 
@@ -173,6 +194,7 @@ SURFACE = {
     "asphalt": (2.2, 0.82, 0.12), "asphalt_cracked": (2.8, 0.84, 0.12), "sidewalk": (2.4, 0.78, 0.12), "pedra_port": (3.2, 0.72, 0.16),
     "grass": (2.6, 0.95, 0.04), "dirt": (2.6, 0.92, 0.06), "tile_floor": (1.2, 0.32, 0.10), "garage_floor": (1.6, 0.62, 0.20),
     "roof_tile": (3.0, 0.70, 0.12), "roof_fiber": (2.4, 0.66, 0.10), "roof_laje": (2.0, 0.86, 0.08), "roof_metal": (2.0, 0.42, 0.18),
+    "sand": (1.4, 0.92, 0.05), "water": (0.2, 0.08, 0.02), "foliage": (1.5, 0.75, 0.1),
     "wall_paint": (1.6, 0.86, 0.08), "concrete": (2.0, 0.88, 0.08), "wall_dark": (1.6, 0.84, 0.08), "white": (1.0, 0.62, 0.06),
     "shelf": (1.0, 0.55, 0.10), "wood": (1.8, 0.66, 0.12), "metal": (1.4, 0.38, 0.14),
 }

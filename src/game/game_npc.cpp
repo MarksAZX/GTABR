@@ -431,12 +431,11 @@ void Game::npcThink(Npc& n, float dt) {
       }
       if (n.stateTimer <= 0) {
         // choose a destination: a point of interest of the neighbourhood or a random reachable spot
-        Vec2 pois[5] = {{world_.poiMarketDoor.x, world_.poiMarketDoor.z + 2.0f}, {world_.poiGas.x, world_.poiGas.z + 9.0f},
-                        {world_.poiWorkshop.x + 9.0f, world_.poiWorkshop.z - 12.0f}, {-24.0f, -24.0f}, {24.0f, 24.0f}};
         for (int tries = 0; tries < 6; ++tries) {
           Vec2 dest;
-          if (!n.interior && rng_.chance(0.35f)) {
-            dest = pois[rng_.irange(0, 4)] + Vec2{rng_.range(-3.0f, 3.0f), rng_.range(-3.0f, 3.0f)};
+          if (!n.interior && !world_.poiList.empty() && rng_.chance(0.35f)) {
+            const Vec3& poi = world_.poiList[rng_.irange(0, (int)world_.poiList.size() - 1)];
+            dest = Vec2{poi.x, poi.z} + Vec2{rng_.range(-3.0f, 3.0f), rng_.range(-3.0f, 3.0f)};
           } else if (!nav.randomPoint(rng_, dest)) break;
           if ((dest - n.pos).length() > 80.0f || (dest - n.pos).length() < 6.0f) continue;
           std::vector<Vec2> path;

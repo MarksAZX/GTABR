@@ -32,8 +32,16 @@ constexpr int white = 26;
 constexpr int shelf = 27;
 constexpr int wood = 28;
 constexpr int metal = 29;
-constexpr int reserved0 = 30;
-constexpr int reserved1 = 31;
-constexpr int kCount = 32;
+constexpr int sand = 30;
+constexpr int water = 31;
+constexpr int shop_padaria = 32;
+constexpr int shop_ferragens = 33;
+constexpr int shop_conveniencia = 34;
+constexpr int foliage = 35;
+constexpr int house_periferia_a = 36;
+constexpr int house_periferia_b = 37;
+constexpr int brick_raw = 38;
+constexpr int apt_tower = 39;
+constexpr int kCount = 40;
 }  // namespace mat
 }  // namespace gtabr

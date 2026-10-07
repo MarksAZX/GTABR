@@ -425,10 +425,13 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       }
     }
   }
-  // interior lamps of the market
+  // ceiling lights of the shop interiors (only the room the player is in)
   if (indoors) {
-    for (float x = 293.0f; x <= 307.0f; x += 4.5f)
-      pendingLights_.push_back({{x, 3.1f, 0.0f}, {0, -1, 0}, {3.0f, 2.9f, 2.7f}, 7.5f, -2.0f, 0});
+    int room = world_.interiorAt(player_.pos.x, player_.pos.y);
+    for (const Vec3& l : world_.interiorLights) {
+      if (room < 0 || !world_.interiors[room].bounds.inflated(0.5f).contains(l.x, l.z)) continue;
+      pendingLights_.push_back({l, {0, -1, 0}, {3.0f, 2.9f, 2.7f}, 7.5f, -2.0f, (l - Vec3{player_.pos.x, 1.5f, player_.pos.y}).length()});
+    }
   }
 
   // keep the most relevant lights within the preset budget

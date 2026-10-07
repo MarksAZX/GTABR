@@ -10,6 +10,7 @@ namespace gtabr {
 // ------------------------------------------------------------------------------------------------ lifecycle
 bool Game::init(const Init& i) {
   cfg_ = i;
+  if (i.seed) worldSeed_ = i.seed;
   r_ = i.renderer;
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
@@ -29,7 +30,7 @@ void Game::shutdown() {
 
 void Game::startWorldJob() {
   jobs_->submit([this]() {
-    buildWorld(world_);
+    buildWorld(world_, worldSeed_);
     worldReady_ = true;
   });
 }
@@ -41,18 +42,26 @@ void Game::finishLoading() {
     c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
     c.bounds = c.mesh.bounds;
     c.mesh.v.clear(); c.mesh.v.shrink_to_fit(); c.mesh.idx.clear(); c.mesh.idx.shrink_to_fit();
+    if (!c.lod.empty()) {
+      c.lodHandle = r_->createMesh(c.lod.v.data(), c.lod.v.size(), c.lod.idx.data(), c.lod.idx.size());
+      c.lod.v.clear(); c.lod.v.shrink_to_fit(); c.lod.idx.clear(); c.lod.idx.shrink_to_fit();
+    }
   }
-  if (!world_.marketCeiling.empty()) {
-    world_.marketCeilingHandle = r_->createMesh(world_.marketCeiling.v.data(), world_.marketCeiling.v.size(), world_.marketCeiling.idx.data(),
-                                                world_.marketCeiling.idx.size());
+  if (!world_.interiorCeiling.empty()) {
+    world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
+                                                  world_.interiorCeiling.idx.size());
   }
   materials_ = assets_.materials;
   finishModels();
   buildWeaponMeshes(*r_, weaponMeshes_);
   // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
-  pickups_ = {{kWpnBat, 0, {-20.0f, 0, -8.0f}}, {kWpnKnife, 0, {10.0f, 0, 8.0f}}, {kWpnCrowbar, 0, {-30.0f, 0, 8.0f}},
-              {kWpnBaton, 0, {30.0f, 0, -8.0f}}, {kWpnPistol, 45, {-40.5f, 0, -20.0f}}, {kWpnRevolver, 24, {40.5f, 0, 20.0f}},
-              {kWpnSmg, 90, {-7.5f, 0, 30.0f}}, {kWpnShotgun, 24, {7.5f, 0, -30.0f}}};
+  {
+    // weapon pickups on spots chosen by the city generator (melee first, firearms later in the list)
+    const int kinds[8] = {kWpnBat, kWpnKnife, kWpnCrowbar, kWpnBaton, kWpnPistol, kWpnRevolver, kWpnSmg, kWpnShotgun};
+    const int ammo[8] = {0, 0, 0, 0, 45, 24, 90, 24};
+    pickups_.clear();
+    for (size_t i = 0; i < world_.pickupSpots.size() && i < 8; ++i) pickups_.push_back({kinds[i], ammo[i], world_.pickupSpots[i]});
+  }
   for (Pickup& k : pickups_) {
     Vec2 p{k.pos.x, k.pos.z};
     phys::depenetrateCircle(world_, p, 0.5f);
@@ -64,17 +73,23 @@ void Game::finishLoading() {
   {
     std::vector<RectF> blockers;
     for (const Collider& c : world_.colliders) {
-      if (c.box.mn.x > 250) continue;  // interior geometry
+      if (c.box.mn.x > World::kInteriorX - 60.0f) continue;  // interior geometry
       if (c.box.mn.y > 2.0f) continue;
       blockers.push_back({c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z});
     }
-    navOutdoor_.build({-86, -86, 86, 86}, 0.5f, world_.walkable, blockers, 0.38f);
-    navIndoor_.build({World::kHalf * 0 + 288, -8, 312, 8}, 0.4f, world_.interiorWalkable, world_.interiorBlockers, 0.35f);
+    navOutdoor_.build(world_.playArea, 0.5f, world_.walkable, blockers, 0.38f);
+    RectF ib{1e9f, 1e9f, -1e9f, -1e9f};
+    for (const InteriorDef& in : world_.interiors) {
+      ib.x0 = std::min(ib.x0, in.bounds.x0 - 1); ib.z0 = std::min(ib.z0, in.bounds.z0 - 1);
+      ib.x1 = std::max(ib.x1, in.bounds.x1 + 1); ib.z1 = std::max(ib.z1, in.bounds.z1 + 1);
+    }
+    navIndoor_.build(ib, 0.4f, world_.interiorWalkable, world_.interiorBlockers, 0.35f);
     LOGI("Navmesh: outdoor %zu polys, indoor %zu polys", navOutdoor_.polyCount(), navIndoor_.polyCount());
   }
   // minimap texture
   {
     std::vector<uint8_t> px;
+    mapExtent_ = world_.half;
     renderMinimap(world_, px, 512, mapExtent_);
     mapTex_ = r_->createTextureRGBA(512, 512, px.data(), true, true, gfx::SamplerKind::ClampLinear);
   }
@@ -524,8 +539,8 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     if (l < 0.55f && l > 1e-4f) p.pos += d / l * (0.55f - l) * 0.5f;
   }
   if (!p.indoors) {
-    p.pos.x = clamp(p.pos.x, -World::kHalf + 0.7f, World::kHalf - 0.7f);
-    p.pos.y = clamp(p.pos.y, -World::kHalf + 0.7f, World::kHalf - 0.7f);
+    p.pos.x = clamp(p.pos.x, world_.playArea.x0 + 0.7f, world_.playArea.x1 - 0.7f);
+    p.pos.y = clamp(p.pos.y, world_.playArea.z0 + 0.7f, world_.playArea.z1 - 0.7f);
   }
   Vec2 actual = (p.pos - before) / std::max(dt, 1e-4f);
   p.speed = actual.length();
