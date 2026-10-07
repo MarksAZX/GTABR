@@ -33,8 +33,12 @@ void main() {
   float ndl = max(dot(N, g.sunDir.xyz), 0.0);
   float sh = shadowTerm(vShadow);
   float hemi = N.y * 0.5 + 0.5;
+  float indoor = g.params.w;
   vec3 amb = mix(g.ambGround.rgb, g.ambSky.rgb, hemi) * vColor.a;
-  vec3 lit = albedo * (amb + g.sunColor.rgb * ndl * mix(1.0, sh, g.sunDir.w));
+  // indoors: warm neutral lamp light, no sun
+  vec3 lamp = vec3(1.05, 0.98, 0.88) * (0.55 + 0.25 * clamp(N.y, 0.0, 1.0)) * vColor.a;
+  amb = mix(amb, lamp, indoor);
+  vec3 lit = albedo * (amb + g.sunColor.rgb * ndl * mix(1.0, sh, g.sunDir.w) * (1.0 - indoor));
   float dist = length(vWorld - g.camPos.xyz);
   float f = 1.0 - exp(-dist * g.fog.w);
   lit = mix(lit, g.fog.rgb, clamp(f, 0.0, 0.9));

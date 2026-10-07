@@ -11,7 +11,8 @@ void main() {
   float a = t.a * vTint.a;
   if (a < 0.02) discard;
   // Sprites are baked with neutral studio lighting; match the scene's overall light level.
-  vec3 light = g.ambSky.rgb * 0.55 + g.sunColor.rgb * 0.42 + vec3(0.18);
+  vec3 outdoorLight = g.ambSky.rgb * 0.55 + g.sunColor.rgb * 0.42 + vec3(0.18);
+  vec3 light = mix(outdoorLight, vec3(1.0, 0.96, 0.88) * 1.35, g.params.w);
   vec3 lit = t.rgb * vTint.rgb * light;
   float f = 1.0 - exp(-vDist * g.fog.w);
   lit = mix(lit, g.fog.rgb, clamp(f, 0.0, 0.9));
