@@ -49,7 +49,7 @@ void Assets::queueTexture(const std::string& key, const std::string& file, gfx::
     std::string secondary = (astc ? "generated_rgba/data/" : "data/") + file;
     if (fileio::readAsset(primary, bytes) || fileio::readAsset(secondary, bytes)) p.ok = parseGtex(bytes, p.data);
     // a compressed texture the device cannot sample is unusable
-    if (p.ok && (p.data.format == gfx::TexFormat::ASTC6x6_SRGB || p.data.format == gfx::TexFormat::ASTC6x6_UNORM) && !astc) p.ok = false;
+    if (p.ok && (p.data.format == gfx::TexFormat::ASTC6x6_SRGB || p.data.format == gfx::TexFormat::ASTC6x6_UNORM || p.data.format == gfx::TexFormat::ASTC8x8_SRGB) && !astc) p.ok = false;
     if (!p.ok) LOGE("Failed to load texture %s", file.c_str());
     std::lock_guard<std::mutex> l(m_);
     done_.push_back(std::move(p));
@@ -89,7 +89,7 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
 }
 
 void Assets::onTexture(const Pending& p) {
-  if (!p.ok) { if (p.key.rfind("model:", 0) != 0) failed_ = true; return; }  // models fall back to neutral maps
+  if (!p.ok) { if (p.key.rfind("model:", 0) != 0 && p.key.rfind("page:", 0) != 0) failed_ = true; return; }  // models fall back to neutral maps
   gfx::TexHandle h = r_->createTexture(p.data, p.sampler);
   if (!h.valid()) { LOGE("GPU upload failed for %s", p.key.c_str()); failed_ = true; return; }
   if (p.key == "materials") materials = h;

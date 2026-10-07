@@ -6,25 +6,25 @@ then data for each mip (largest first), each layer in order.
 import struct
 import numpy as np
 
-FMT_RGBA8_SRGB, FMT_ASTC6, FMT_RGBA8_UNORM, FMT_R8, FMT_ASTC6_UNORM = 0, 1, 2, 3, 4
+FMT_RGBA8_SRGB, FMT_ASTC6, FMT_RGBA8_UNORM, FMT_R8, FMT_ASTC6_UNORM, FMT_ASTC8 = 0, 1, 2, 3, 4, 5
 _ctx_cache = {}
 
 
-def _astc_ctx(quality, srgb=True):
+def _astc_ctx(quality, srgb=True, block=6):
     import astc_encoder as a
-    key = (quality, srgb)
+    key = (quality, srgb, block)
     if key not in _ctx_cache:
         q = {"fast": a.ASTCQualityPreset.FAST, "medium": a.ASTCQualityPreset.MEDIUM, "thorough": a.ASTCQualityPreset.THOROUGH}[quality]
-        cfg = a.ASTCConfig(a.ASTCProfile.LDR_SRGB if srgb else a.ASTCProfile.LDR, 6, 6, 1, q)
+        cfg = a.ASTCConfig(a.ASTCProfile.LDR_SRGB if srgb else a.ASTCProfile.LDR, block, block, 1, q)
         _ctx_cache[key] = a.ASTCContext(cfg, threads=4)
     return _ctx_cache[key]
 
 
-def astc_compress(rgba_u8, quality="medium", srgb=True):
+def astc_compress(rgba_u8, quality="medium", srgb=True, block=6):
     import astc_encoder as a
     h, w = rgba_u8.shape[:2]
     img = a.ASTCImage(a.ASTCType.U8, w, h, 1, np.ascontiguousarray(rgba_u8).tobytes())
-    return _astc_ctx(quality, srgb).compress(img, a.ASTCSwizzle.from_str("rgba"))
+    return _astc_ctx(quality, srgb, block).compress(img, a.ASTCSwizzle.from_str("rgba"))
 
 
 def srgb_to_lin(x):
@@ -107,7 +107,7 @@ def write_gtex(path, fmt, w, h, layers, mip_layers, mip_bytes_fn):
                 f.write(mip_bytes_fn(mip_layers[m][l]))
 
 
-def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium", astc=True, rgba_dir=True, srgb=True):
+def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium", astc=True, rgba_dir=True, srgb=True, block=6):
     """layers_rgba: list of HxWx4 uint8 arrays (same size). Writes the ASTC and raw RGBA variants."""
     h, w = layers_rgba[0].shape[:2]
     chains = [mip_chain(l, kind) for l in layers_rgba]
@@ -117,7 +117,8 @@ def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium"
     if rgba_dir:
         write_gtex(out_rgba, FMT_RGBA8_SRGB if srgb else FMT_RGBA8_UNORM, w, h, L, mips, lambda a: np.ascontiguousarray(a).tobytes())
     if astc:
-        write_gtex(out_astc, FMT_ASTC6 if srgb else FMT_ASTC6_UNORM, w, h, L, mips, lambda a: astc_compress(a, quality, srgb))
+        fmt = (FMT_ASTC6 if srgb else FMT_ASTC6_UNORM) if block == 6 else FMT_ASTC8
+        write_gtex(out_astc, fmt, w, h, L, mips, lambda a: astc_compress(a, quality, srgb, block))
     return nmips
 
 

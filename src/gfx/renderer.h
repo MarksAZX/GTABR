@@ -68,7 +68,7 @@ struct GlobalsUBO {
   LightUBO lights[kMaxLights];
 };
 
-enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4 };
+enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4, ASTC8x8_SRGB = 5 };
 enum class SamplerKind { Repeat, ClampLinear, ClampNearest };
 
 struct TextureData {

@@ -5,7 +5,10 @@ plugins {
 // Game data (ASTC textures, sprite index, fonts) lives in ../../assets/data and is packaged as APK assets under data/.
 val apkAssetsDir = layout.buildDirectory.dir("apkassets")
 val copyGameAssets by tasks.registering(Copy::class) {
-    from("../../assets/data")
+    from("../../assets/data") {
+        // character/vehicle billboard atlases are only a fallback now that both are real 3D models
+        exclude("chr_*.gtex", "veh_*.gtex")
+    }
     into(apkAssetsDir.map { it.dir("data") })
 }
 
@@ -57,7 +60,7 @@ android {
 
     androidResources {
         // ASTC/GTEX files are already compressed; storing them avoids inflating on load
-        noCompress += listOf("gtex")
+        // gtex is zip-compressed: fonts/masks shrink a lot and ASTC still gains ~20%
     }
 }
 

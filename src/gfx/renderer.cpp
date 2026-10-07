@@ -25,6 +25,7 @@ size_t texelBytes(TexFormat f, uint32_t w, uint32_t h) {
   switch (f) {
     case TexFormat::ASTC6x6_SRGB:
     case TexFormat::ASTC6x6_UNORM: return (size_t)((w + 5) / 6) * ((h + 5) / 6) * 16;
+    case TexFormat::ASTC8x8_SRGB: return (size_t)((w + 7) / 8) * ((h + 7) / 8) * 16;
     case TexFormat::R8_UNORM: return (size_t)w * h;
     default: return (size_t)w * h * 4;
   }
@@ -520,6 +521,10 @@ TexHandle Renderer::createTexture(const TextureData& td, SamplerKind sk) {
     case TexFormat::ASTC6x6_UNORM:
       if (!ctx_.caps.astcLdr) return {};
       fmt = VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+      break;
+    case TexFormat::ASTC8x8_SRGB:
+      if (!ctx_.caps.astcLdr) return {};
+      fmt = VK_FORMAT_ASTC_8x8_SRGB_BLOCK;
       break;
     default: return {};
   }

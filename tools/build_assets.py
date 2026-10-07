@@ -212,7 +212,7 @@ def build_materials(quality):
     print("materials ->", len(MATERIALS), "layers")
     arrs = material_layers()
     build_normals(quality, arrs)
-    nm = gtex.save_texture(os.path.join(OUT, "materials.gtex"), os.path.join(OUT_RGBA, "materials.gtex"), arrs, "color", quality)
+    nm = gtex.save_texture(os.path.join(OUT, "materials.gtex"), os.path.join(OUT_RGBA, "materials.gtex"), arrs, "color", quality, block=8)  # 8x8: ~2 bpp keeps the APK small
     print("  materials.gtex mips:", nm)
     # C++ ids header
     with open(os.path.join(ROOT, "src/game/material_ids.h"), "w") as f:
