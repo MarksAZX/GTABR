@@ -1,0 +1,47 @@
+# Compiles GLSL -> SPIR-V at build time and embeds the binaries in a generated C++ source.
+# Usage: gtabr_embed_shaders(<out_var_sources> <shader_dir>)
+function(gtabr_embed_shaders out_var shader_dir)
+  set(_glslc "")
+  if(ANDROID)
+    # Android Studio / NDK ships glslc under shader-tools; fall back to a host tool if missing.
+    file(GLOB _ndk_glslc "${ANDROID_NDK}/shader-tools/*/glslc")
+    if(_ndk_glslc)
+      list(GET _ndk_glslc 0 _glslc)
+    endif()
+  endif()
+  if(NOT _glslc)
+    find_program(_glslc NAMES glslc)
+  endif()
+  set(_use_glslang OFF)
+  if(NOT _glslc)
+    find_program(_glslang glslangValidator)
+    set(_use_glslang ON)
+    if(NOT _glslang)
+      message(FATAL_ERROR "No GLSL compiler found (need glslc or glslangValidator)")
+    endif()
+  endif()
+
+  file(GLOB _shaders "${shader_dir}/*.vert" "${shader_dir}/*.frag")
+  set(_spvs "")
+  set(_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders_spv")
+  file(MAKE_DIRECTORY "${_gen_dir}")
+  file(GLOB _includes "${shader_dir}/*.glsl")
+  foreach(_s ${_shaders})
+    get_filename_component(_name "${_s}" NAME)
+    set(_out "${_gen_dir}/${_name}.spv")
+    if(_use_glslang)
+      add_custom_command(OUTPUT "${_out}" COMMAND "${_glslang}" -V -I"${shader_dir}" "${_s}" -o "${_out}"
+                         DEPENDS "${_s}" ${_includes} COMMENT "glslang ${_name}")
+    else()
+      add_custom_command(OUTPUT "${_out}" COMMAND "${_glslc}" -O -I "${shader_dir}" "${_s}" -o "${_out}"
+                         DEPENDS "${_s}" ${_includes} COMMENT "glslc ${_name}")
+    endif()
+    list(APPEND _spvs "${_out}")
+  endforeach()
+
+  set(_cpp "${CMAKE_CURRENT_BINARY_DIR}/shaders_gen.cpp")
+  add_custom_command(OUTPUT "${_cpp}"
+    COMMAND ${CMAKE_COMMAND} -DOUT=${_cpp} -DSPV_DIR=${_gen_dir} -P "${CMAKE_SOURCE_DIR}/cmake/embed_spv.cmake"
+    DEPENDS ${_spvs} "${CMAKE_SOURCE_DIR}/cmake/embed_spv.cmake" COMMENT "Embedding SPIR-V")
+  set(${out_var} "${_cpp}" PARENT_SCOPE)
+endfunction()

@@ -1,0 +1,15 @@
+build/
+build-*/
+out/
+*.o
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+.idea/
+__pycache__/
+*.pyc
+# generated, large, reproducible with tools/build_assets.sh
+assets/generated_rgba/
+tools/work/
