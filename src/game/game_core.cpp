@@ -44,6 +44,7 @@ void Game::finishLoading() {
                                                 world_.marketCeiling.idx.size());
   }
   materials_ = assets_.materials;
+  worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
   {
@@ -122,7 +123,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   realTime_ += dtReal;
   fd_ = &fd;
   fd.clear();
-  fd.materialArray = materials_;
+  timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
   fd.blur = 0; fd.fade = 0; fd.dim = 0;
 
   // smoothed frame time for adaptive quality + FPS counter
@@ -310,21 +311,20 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
 
 void Game::updateAdaptiveQuality(float dt) {
   adaptTimer_ += dt;
-  if (adaptTimer_ < 3.0f || settings_.quality != 0) return;
+  if (adaptTimer_ < 3.0f || !settings_.dynamicRes) return;
   adaptTimer_ = 0;
+  // dynamic resolution: never above the preset's base scale, never below 60% of it
+  float base = preset().renderScale;
   float s = r_->renderScale();
-  if (frameMsAvg_ > 36.0f && s > 0.61f) r_->setRenderScale(s - 0.1f);
-  else if (frameMsAvg_ < 20.0f && s < 0.99f) r_->setRenderScale(std::min(1.0f, s + 0.1f));
+  if (frameMsAvg_ > 36.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.08f));
+  else if (frameMsAvg_ < 24.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.08f));
 }
 
 void Game::applySettings() {
-  switch (settings_.quality) {
-    case 1: r_->setRenderScale(0.65f); break;
-    case 2: r_->setRenderScale(0.85f); break;
-    case 3: r_->setRenderScale(1.0f); break;
-    default: break;
-  }
-  r_->setShadowsEnabled(settings_.shadows && settings_.quality != 1);
+  const QualityPreset& qp = preset();
+  r_->setRenderScale(qp.renderScale);
+  r_->setShadowMapSize(qp.shadowMapSize);
+  r_->setShadowsEnabled(settings_.shadows && qp.shadowCascades > 0);
   cam_.sensitivity = settings_.sensitivity;
   cam_.invertY = settings_.invertY;
 }

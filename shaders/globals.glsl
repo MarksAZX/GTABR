@@ -1,24 +1,109 @@
-// Shared per-frame uniform block (set 0, binding 0) and tone mapping helpers.
+// Shared per-frame uniform block (set 0) + lighting helpers. Scene shaders output LINEAR HDR radiance;
+// exposure, bloom, tone mapping and grading happen in composite.frag.
+struct Light {
+  vec4 posRadius;   // xyz position, w radius
+  vec4 colorInt;    // rgb colour * intensity
+  vec4 dirCone;     // xyz spot direction, w = cos(cone) (spot) or -2 (point)
+};
 layout(set = 0, binding = 0, std140) uniform Globals {
   mat4 viewProj;
   mat4 view;
   mat4 invViewProj;
-  mat4 lightViewProj;
-  vec4 camPos;     // xyz, w = time (s)
-  vec4 camRight;   // xyz
-  vec4 camUp;      // xyz
-  vec4 camFwd;     // xyz
-  vec4 sunDir;     // xyz = direction TOWARDS the sun, w = shadow strength (0..1)
-  vec4 sunColor;   // rgb
-  vec4 ambSky;     // rgb
-  vec4 ambGround;  // rgb
-  vec4 fog;        // rgb color, w = density
-  vec4 params;     // x = exposure, y = shadow texel size, z = night factor, w = unused
+  mat4 lightViewProj[2];
+  vec4 camPos;      // xyz, w = time (s)
+  vec4 camRight;
+  vec4 camUp;
+  vec4 camFwd;
+  vec4 sunDir;      // xyz towards the sun (or moon at night), w = shadow strength
+  vec4 sunColor;    // rgb irradiance, w = sun disk intensity
+  vec4 ambSky;      // rgb sky irradiance
+  vec4 ambGround;   // rgb ground bounce
+  vec4 fog;         // rgb inscatter colour, w = density
+  vec4 params;      // x = exposure (unused here), y = shadow texel, z = night factor, w = indoor factor
+  vec4 sky0;        // rgb zenith, w = cloud coverage
+  vec4 sky1;        // rgb horizon, w = cloud brightness
+  vec4 cascade;     // x = split distance, y = cascade count, z = fog height falloff, w = wetness
+  vec4 lightInfo;   // x = light count
+  Light lights[16];
 } g;
 
-vec3 tonemapACES(vec3 x) {
-  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+const float PI = 3.14159265;
+
+float D_GGX(float NoH, float a) {
+  float a2 = a * a;
+  float d = NoH * NoH * (a2 - 1.0) + 1.0;
+  return a2 / (PI * d * d + 1e-6);
 }
-// Scene shaders output display-referred (gamma) colour.
-vec3 encodeDisplay(vec3 lin) { return pow(tonemapACES(lin * g.params.x), vec3(1.0 / 2.2)); }
+float V_SmithJointApprox(float NoV, float NoL, float a) {
+  float gv = NoL * (NoV * (1.0 - a) + a);
+  float gl = NoV * (NoL * (1.0 - a) + a);
+  return 0.5 / max(gv + gl, 1e-5);
+}
+vec3 F_Schlick(vec3 f0, float VoH) { return f0 + (1.0 - f0) * pow(1.0 - VoH, 5.0); }
+// Karis' analytic approximation of the split-sum environment BRDF (mobile friendly)
+vec3 envBRDF(vec3 f0, float rough, float NoV) {
+  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+  const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 r = rough * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+  vec2 ab = vec2(-1.04, 1.04) * a004 + r.zw;
+  return f0 * ab.x + ab.y;
+}
+
+// Analytic sky radiance used for the background and as a reflection / ambient source.
+vec3 skyRadiance(vec3 dir, float sunDisk) {
+  float h = dir.y;
+  vec3 zen = g.sky0.rgb, hor = g.sky1.rgb;
+  vec3 col = mix(hor, zen, pow(clamp(h, 0.0, 1.0), 0.42));
+  // warm band near the horizon toward the sun
+  float sd = max(dot(dir, g.sunDir.xyz), 0.0);
+  float towardSun = pow(max(dot(normalize(vec3(dir.x, 0.0, dir.z) + 1e-4), normalize(vec3(g.sunDir.x, 0.0, g.sunDir.z) + 1e-4)), 0.0), 3.0);
+  col += g.sunColor.rgb * 0.05 * towardSun * exp(-max(h, 0.0) * 6.0);
+  col += g.sunColor.rgb * (0.025 * pow(sd, 6.0) + 0.18 * pow(sd, 120.0));
+  col += g.sunColor.rgb * sunDisk * g.sunColor.w * smoothstep(0.99955, 0.9998, sd);
+  // below the horizon: dark ground haze
+  vec3 ground = g.ambGround.rgb * 0.55 + hor * 0.25;
+  col = mix(col, ground, smoothstep(0.0, -0.18, h));
+  return col;
+}
+
+vec3 applyFog(vec3 col, vec3 worldPos) {
+  vec3 d = worldPos - g.camPos.xyz;
+  float dist = length(d);
+  // exponential distance fog thinned with height
+  float hf = exp(-max(worldPos.y, 0.0) * g.cascade.z);
+  float f = 1.0 - exp(-dist * g.fog.w * hf);
+  vec3 fogCol = g.fog.rgb;
+  vec3 dir = d / max(dist, 1e-3);
+  fogCol += g.sunColor.rgb * 0.08 * pow(max(dot(dir, g.sunDir.xyz), 0.0), 8.0);
+  return mix(col, fogCol, clamp(f, 0.0, 0.92));
+}
+
+// Point / spot light contribution (Lambert + GGX) with smooth windowed falloff.
+vec3 evalLights(vec3 P, vec3 N, vec3 V, vec3 albedo, vec3 f0, float rough) {
+  vec3 acc = vec3(0.0);
+  int n = int(g.lightInfo.x);
+  for (int i = 0; i < 16; ++i) {
+    if (i >= n) break;
+    vec3 L = g.lights[i].posRadius.xyz - P;
+    float d2 = dot(L, L);
+    float r = g.lights[i].posRadius.w;
+    if (d2 > r * r) continue;
+    float d = sqrt(d2);
+    L /= d;
+    float win = clamp(1.0 - pow(d / r, 4.0), 0.0, 1.0);
+    float att = win * win / (d2 + 1.0);
+    if (g.lights[i].dirCone.w > -1.5) {
+      float c = dot(-L, g.lights[i].dirCone.xyz);
+      att *= smoothstep(g.lights[i].dirCone.w, g.lights[i].dirCone.w + 0.12, c);
+    }
+    float NoL = max(dot(N, L), 0.0);
+    if (NoL <= 0.0 || att <= 0.0) continue;
+    vec3 H = normalize(L + V);
+    float NoV = max(dot(N, V), 1e-3), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
+    float a = rough * rough;
+    vec3 spec = D_GGX(NoH, a) * V_SmithJointApprox(NoV, NoL, a) * F_Schlick(f0, VoH);
+    acc += (albedo / PI + spec) * g.lights[i].colorInt.rgb * NoL * att;
+  }
+  return acc;
+}

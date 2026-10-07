@@ -1,46 +1,66 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "globals.glsl"
-layout(set = 0, binding = 1) uniform sampler2DShadow uShadow;
-layout(set = 1, binding = 0) uniform sampler2DArray uMat;
+layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
+layout(set = 1, binding = 0) uniform sampler2DArray uMat;    // albedo
+layout(set = 1, binding = 1) uniform sampler2DArray uMatN;   // rg = normal xy, b = roughness, a = cavity / AO
+#include "shadowing.glsl"
 layout(location = 0) in vec3 vWorld;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec3 vUVL;
 layout(location = 3) in vec4 vColor;
-layout(location = 4) in vec4 vShadow;
+layout(location = 4) in float vEmissive;
 layout(location = 0) out vec4 outColor;
 
-float shadowTerm(vec4 sc) {
-  vec3 p = sc.xyz / sc.w;
-  vec2 uv = p.xy * 0.5 + 0.5;
-  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || p.z > 1.0) return 1.0;
-  float t = g.params.y;
-  float s = texture(uShadow, vec3(uv, p.z)) * 0.28;
-  s += texture(uShadow, vec3(uv + vec2(t, 0.0), p.z)) * 0.18;
-  s += texture(uShadow, vec3(uv - vec2(t, 0.0), p.z)) * 0.18;
-  s += texture(uShadow, vec3(uv + vec2(0.0, t), p.z)) * 0.18;
-  s += texture(uShadow, vec3(uv - vec2(0.0, t), p.z)) * 0.18;
-  // fade the shadow out toward the edge of the shadow volume
-  vec2 e = abs(uv - 0.5) * 2.0;
-  float edge = smoothstep(0.85, 1.0, max(e.x, e.y));
-  return mix(s, 1.0, edge);
+vec3 perturb(vec3 N, vec3 P, vec2 uv, vec3 tn) {
+  // cotangent frame from screen-space derivatives (no stored tangents on the world mesh)
+  vec3 dp1 = dFdx(P), dp2 = dFdy(P);
+  vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+  vec3 dp2perp = cross(dp2, N), dp1perp = cross(N, dp1);
+  vec3 T = dp2perp * du1.x + dp1perp * du2.x;
+  vec3 B = dp2perp * du1.y + dp1perp * du2.y;
+  float invmax = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-12);
+  mat3 TBN = mat3(T * invmax, B * invmax, N);
+  return normalize(TBN * tn);
 }
 
 void main() {
-  vec3 N = normalize(vNormal);
+  vec3 Ng = normalize(vNormal);
   vec4 tex = texture(uMat, vUVL);
+  vec4 nr = texture(uMatN, vUVL);
   vec3 albedo = tex.rgb * vColor.rgb;
-  float ndl = max(dot(N, g.sunDir.xyz), 0.0);
-  float sh = shadowTerm(vShadow);
-  float hemi = N.y * 0.5 + 0.5;
+  vec3 tn = vec3(nr.rg * 2.0 - 1.0, 0.0);
+  tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
+  vec3 N = perturb(Ng, vWorld, vUVL.xy, tn);
+  float rough = clamp(nr.b, 0.04, 1.0);
+  float ao = vColor.a * mix(1.0, nr.a, 0.85);
+  // rain-darkened / wet ground: darker albedo, glossier on horizontal surfaces
+  float wet = g.cascade.w * smoothstep(0.7, 0.95, Ng.y);
+  albedo *= 1.0 - 0.35 * wet;
+  rough = mix(rough, 0.12, wet * 0.85);
+
+  vec3 V = normalize(g.camPos.xyz - vWorld);
+  vec3 L = g.sunDir.xyz;
+  vec3 H = normalize(L + V);
+  float NoL = max(dot(N, L), 0.0), NoV = max(dot(N, V), 1e-3), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
+  vec3 f0 = vec3(0.04);
+  float a = rough * rough;
   float indoor = g.params.w;
-  vec3 amb = mix(g.ambGround.rgb, g.ambSky.rgb, hemi) * vColor.a;
-  // indoors: warm neutral lamp light, no sun
-  vec3 lamp = vec3(1.05, 0.98, 0.88) * (0.55 + 0.25 * clamp(N.y, 0.0, 1.0)) * vColor.a;
-  amb = mix(amb, lamp, indoor);
-  vec3 lit = albedo * (amb + g.sunColor.rgb * ndl * mix(1.0, sh, g.sunDir.w) * (1.0 - indoor));
-  float dist = length(vWorld - g.camPos.xyz);
-  float f = 1.0 - exp(-dist * g.fog.w);
-  lit = mix(lit, g.fog.rgb, clamp(f, 0.0, 0.9));
-  outColor = vec4(encodeDisplay(lit), 1.0);
+  float sh = shadowTerm(vWorld) * (1.0 - indoor);
+  vec3 direct = (albedo / PI + D_GGX(NoH, a) * V_SmithJointApprox(NoV, NoL, a) * F_Schlick(f0, VoH)) * g.sunColor.rgb * NoL * sh;
+
+  // ambient: hemisphere irradiance + analytic sky reflection
+  float hemi = N.y * 0.5 + 0.5;
+  vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
+  vec3 R = reflect(-V, N);
+  vec3 env = skyRadiance(R, 0.0) * (1.0 - 0.6 * a);
+  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
+  irr = mix(irr, lamp, indoor);
+  env = mix(env, lamp * 0.6, indoor);
+  vec3 ambient = (albedo * irr + env * envBRDF(f0, rough, NoV)) * ao;
+
+  vec3 col = direct + ambient + evalLights(vWorld, N, V, albedo, f0, rough);
+  col += albedo * vEmissive * g.params.z * 6.0;   // shop signs / lamps glow at night
+  col = applyFog(col, vWorld);
+  outColor = vec4(col, 1.0);
 }

@@ -25,6 +25,9 @@ struct Args {
   bool newGame = true;
   bool validation = false;
   float scale = 1.0f;
+  float time = 10.0f;     // hour of day (frozen unless --day-rate is given)
+  float dayRate = 0.0f;
+  int quality = 2;
 };
 
 void screenshot(gfx::Renderer& r, const std::string& path) {
@@ -51,6 +54,9 @@ int main(int argc, char** argv) {
     else if (s == "--continue") a.newGame = false;
     else if (s == "--validation") a.validation = true;
     else if (s == "--scale") a.scale = (float)std::atof(next().c_str());
+    else if (s == "--time") a.time = (float)std::atof(next().c_str());
+    else if (s == "--day-rate") a.dayRate = (float)std::atof(next().c_str());
+    else if (s == "--quality") a.quality = std::atoi(next().c_str());
   }
   std::string mk = "mkdir -p '" + a.out + "' '" + a.save + "'";
   if (std::system(mk.c_str()) != 0) return 2;
@@ -86,6 +92,9 @@ int main(int argc, char** argv) {
   }
   if (!game.loaded()) { LOGE("game failed to load"); return 3; }
   LOGI("loaded after %d frames", frame);
+  game.setQuality(a.quality);
+  if (a.scale < 0.999f) r.setRenderScale(a.scale);
+  game.setTimeOfDay(a.time, a.dayRate);
 
 
   int rc2 = runScenario(a.scenario, game, r, fd, a.out, dt);

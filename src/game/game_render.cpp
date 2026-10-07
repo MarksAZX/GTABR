@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "game.h"
+#include "timeofday.h"
 
 namespace gtabr {
 
@@ -125,31 +126,61 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   g.camUp = {cam_.up().x, cam_.up().y, cam_.up().z, 0};
   g.camFwd = {cam_.forward().x, cam_.forward().y, cam_.forward().z, 0};
 
-  // sun + shadow matrix (orthographic, texel snapped, centred on the focus)
-  Vec3 L = sunDir_.normalized();
-  const float R = 62.0f;
-  Vec3 focus = cam_.focus();
-  Vec3 lightRight = Vec3{0, 1, 0}.cross(L).normalized();   // direction vectors of the light's view plane
-  Vec3 lightUp = L.cross(lightRight).normalized();
-  float texel = 2.0f * R / 2048.0f;
-  float a = focus.dot(lightRight), b = focus.dot(lightUp);
-  Vec3 snapped = focus + lightRight * (std::floor(a / texel) * texel - a) + lightUp * (std::floor(b / texel) * texel - b);
-  Mat4 lview = Mat4::lookAt(snapped + L * 150.0f, snapped, {0, 1, 0});
-  Mat4 lproj = Mat4::ortho(-R, R, -R, R, 20.0f, 320.0f);
-  g.lightViewProj = lproj * lview;
+  // ---- time of day
+  day_ = computeDayLighting(timeOfDay_, cloudCover_);
+  sunDir_ = day_.sunDir;
+  const QualityPreset& qp = preset();
   float ind = indoorBlend_;
-  g.sunDir = {L.x, L.y, L.z, (settings_.shadows && settings_.quality != 1) ? 0.92f : 0.0f};
-  g.sunColor = {3.05f, 2.55f, 1.95f, 0};
-  g.ambSky = {0.46f, 0.58f, 0.82f, 0};
-  g.ambGround = {0.27f, 0.25f, 0.23f, 0};
-  g.fog = {0.70f, 0.80f, 0.92f, lerp(0.0042f, 0.0f, ind)};
-  g.params = {0.60f, 1.35f / 2048.0f, 0.0f, ind};
-  fd.drawShadows = (settings_.shadows && settings_.quality != 1) && ind < 0.5f;
-  fd.vignette = 0.30f;
-  fd.grade = 1.0f;
+
+  // ---- cascaded sun shadows: a tight cascade around the focus, a wide one pushed ahead of the camera.
+  // Both are orthographic and texel snapped so they do not shimmer while moving.
+  Vec3 L = sunDir_.normalized();
+  Vec3 lightRight = Vec3{0, 1, 0}.cross(L).normalized();
+  Vec3 lightUp = L.cross(lightRight).normalized();
+  Vec3 focus = cam_.focus();
+  Vec3 fwdFlat = Vec3{cam_.forward().x, 0, cam_.forward().z};
+  if (fwdFlat.lengthSq() < 1e-4f) fwdFlat = Vec3{std::sin(cam_.yaw()), 0, -std::cos(cam_.yaw())};
+  fwdFlat = fwdFlat.normalized();
+  const float smSize = (float)qp.shadowMapSize;
+  auto cascadeMatrix = [&](Vec3 centre, float R) {
+    float texel = 2.0f * R / smSize;
+    float a = centre.dot(lightRight), b = centre.dot(lightUp);
+    Vec3 snapped = centre + lightRight * (std::floor(a / texel) * texel - a) + lightUp * (std::floor(b / texel) * texel - b);
+    Mat4 lview = Mat4::lookAt(snapped + L * 150.0f, snapped, {0, 1, 0});
+    Mat4 lproj = Mat4::ortho(-R, R, -R, R, 20.0f, 320.0f);
+    return lproj * lview;
+  };
+  const float r0 = lerp(26.0f, 16.0f, cam_.blend());
+  const float r1 = 72.0f;
+  g.lightViewProj[0] = cascadeMatrix(focus + fwdFlat * (r0 * 0.25f), r0);
+  g.lightViewProj[1] = cascadeMatrix(focus + fwdFlat * (r1 * 0.55f), r1);
+  shadowFocus_ = focus + fwdFlat * (r1 * 0.55f);
+  shadowRadius_ = r1;
+
+  const bool shadowsOn = settings_.shadows && qp.shadowCascades > 0;
+  g.sunDir = {L.x, L.y, L.z, shadowsOn ? day_.shadowStrength * (1.0f - ind) : 0.0f};
+  g.sunColor = {day_.sunColor.x, day_.sunColor.y, day_.sunColor.z, day_.sunDisk};
+  g.ambSky = {day_.ambSky.x, day_.ambSky.y, day_.ambSky.z, 0};
+  g.ambGround = {day_.ambGround.x, day_.ambGround.y, day_.ambGround.z, 0};
+  g.fog = {day_.fog.x, day_.fog.y, day_.fog.z, lerp(day_.fogDensity, 0.0f, ind)};
+  g.params = {day_.exposure, 1.25f / smSize, day_.night, ind};
+  g.sky0 = {day_.zenith.x, day_.zenith.y, day_.zenith.z, day_.cloudCover};
+  g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};
+  g.cascade = {0.0f, (float)std::max(1, qp.shadowCascades), 0.045f, wetness_};
+  g.lightInfo = {0, 0, 0, 0};
+  fd.drawShadows = shadowsOn && ind < 0.5f && day_.shadowStrength > 0.01f;
+  fd.shadowCascades = std::max(1, qp.shadowCascades);
+  fd.vignette = 0.26f;
   fd.fade = fadeAlpha_;
   fd.blur = blur_;
   fd.dim = blur_ * 0.5f;
+  // indoors: neutral lamp exposure
+  fd.exposure = lerp(day_.exposure, 1.05f, ind);
+  fd.bloom = qp.bloom ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
+  fd.bloomThreshold = lerp(1.1f, 0.55f, day_.night);
+  fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
+  fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};
+  fd.worldMaterial = worldMaterial_;
   (void)aspect;
 }
 
@@ -164,9 +195,9 @@ void Game::emitWorld(gfx::FrameData& fd) {
     if (interior != indoors) continue;
     if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(c.handle.id); stats_.drawnChunks++; }
     Vec3 ctr = c.bounds.center();
-    float dx = ctr.x - focus.x, dz = ctr.z - focus.z;
+    float dx = ctr.x - shadowFocus_.x, dz = ctr.z - shadowFocus_.z;
     float ext = (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
-    if (std::sqrt(dx * dx + dz * dz) < 62.0f + ext + 6.0f) fd.shadowMeshes.push_back(c.handle.id);
+    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(c.handle.id);
   }
   if (indoors && world_.marketCeilingHandle.valid() && cam_.blend() > 0.45f && cam_.eye().y < world_.market.height - 0.1f)
     fd.worldMeshes.push_back(world_.marketCeilingHandle.id);

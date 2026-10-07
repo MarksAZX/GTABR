@@ -2,30 +2,44 @@
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
 layout(push_constant) uniform PC {
-  float blur;      // 0..1
-  float fade;      // 0 = clear, 1 = black
-  float vignette;
-  float srgbTarget;
-  float time;
-  float grade;     // cinematic grade strength
-  float dim;       // extra darkening when the radial wheel is open
-  float pad;
+  vec4 a;      // x = wheel/menu blur, y = fade to black, z = vignette, w = sRGB target
+  vec4 b;      // x = exposure, y = bloom strength, z = bloom threshold, w = time
+  vec4 lift;   // rgb lift (shadows), w = saturation
+  vec4 gain;   // rgb gain (highlights), w = contrast
 } pc;
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
+
+// ACES fitted (Stephen Hill)
+vec3 aces(vec3 v) {
+  const mat3 i = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+  const mat3 o = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+  v = i * v;
+  vec3 a = v * (v + 0.0245786) - 0.000090537;
+  vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081;
+  return clamp(o * (a / b), 0.0, 1.0);
+}
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
 void main() {
-  vec3 s = texture(uScene, vUV).rgb;
-  if (pc.blur > 0.001) s = mix(s, texture(uBlur, vUV).rgb, pc.blur);
-  // gentle cinematic grade: lift teal in shadows, warm highlights
-  float l = dot(s, vec3(0.299, 0.587, 0.114));
-  vec3 graded = s + pc.grade * ((vec3(-0.012, 0.004, 0.018) * (1.0 - l)) + (vec3(0.02, 0.008, -0.012) * l));
-  graded = mix(vec3(dot(graded, vec3(0.299, 0.587, 0.114))), graded, 1.0 + 0.06 * pc.grade);
-  // vignette
+  vec3 hdr = texture(uScene, vUV).rgb;
+  vec3 blurred = texture(uBlur, vUV).rgb;
+  vec3 bloom = max(blurred - vec3(pc.b.z), 0.0) * pc.b.y;
+  hdr = mix(hdr, blurred, pc.a.x) + bloom;
+  vec3 c = aces(hdr * pc.b.x);
+  // grading: lift / gain, contrast, saturation (display referred)
+  c = c * pc.gain.rgb + pc.lift.rgb * (1.0 - c);
+  c = clamp((c - 0.5) * pc.gain.w + 0.5, 0.0, 1.0);
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(l), c, pc.lift.w);
+  // vignette + subtle grain
   vec2 q = vUV - 0.5;
-  float v = 1.0 - pc.vignette * smoothstep(0.35, 0.95, length(q * vec2(1.0, 1.15)));
-  graded *= v;
-  graded *= 1.0 - pc.dim * 0.45;
-  graded = mix(graded, vec3(0.0), pc.fade);
-  if (pc.srgbTarget > 0.5) graded = pow(graded, vec3(2.2));
-  outColor = vec4(graded, 1.0);
+  c *= 1.0 - pc.a.z * smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.2)));
+  c += (hash(vUV * 1000.0 + pc.b.w) - 0.5) * 0.012;
+  c = mix(c, vec3(0.0), pc.a.y);
+  c = clamp(c, 0.0, 1.0);
+  // display encoding
+  vec3 outc = pow(c, vec3(1.0 / 2.2));
+  if (pc.a.w > 0.5) outc = c;   // sRGB swapchain encodes in hardware (c is linear-ish display value)
+  outColor = vec4(outc, 1.0);
 }

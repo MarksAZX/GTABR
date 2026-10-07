@@ -52,13 +52,23 @@ struct UiInst {
 };
 static_assert(sizeof(UiInst) == 64, "UiInst layout");
 
+struct LightUBO {
+  Vec4 posRadius;  // xyz position, w radius
+  Vec4 colorInt;   // rgb colour * intensity
+  Vec4 dirCone;    // xyz spot direction, w = cos(cone) or -2 for point lights
+};
+constexpr int kMaxLights = 16;
+constexpr int kMaxBones = 64;
+// Mirrors shaders/globals.glsl (std140).
 struct GlobalsUBO {
-  Mat4 viewProj, view, invViewProj, lightViewProj;
+  Mat4 viewProj, view, invViewProj, lightViewProj[2];
   Vec4 camPos, camRight, camUp, camFwd;
   Vec4 sunDir, sunColor, ambSky, ambGround, fog, params;
+  Vec4 sky0, sky1, cascade, lightInfo;
+  LightUBO lights[kMaxLights];
 };
 
-enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3 };
+enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4 };
 enum class SamplerKind { Repeat, ClampLinear, ClampNearest };
 
 struct TextureData {
@@ -69,6 +79,35 @@ struct TextureData {
 
 struct TexHandle { int id = -1; bool valid() const { return id >= 0; } };
 struct MeshHandle { int id = -1; bool valid() const { return id >= 0; } };
+struct ModelHandle { int id = -1; bool valid() const { return id >= 0; } };
+struct MaterialHandle { int id = -1; bool valid() const { return id >= 0; } };
+
+// Vertex of an imported 3D model (matches gmesh::Vertex, 36 bytes).
+#pragma pack(push, 1)
+struct ModelVertex {
+  float p[3];
+  int8_t n[4];
+  int8_t t[4];
+  float uv[2];
+  uint8_t j[4];
+  uint8_t w[4];
+};
+#pragma pack(pop)
+static_assert(sizeof(ModelVertex) == 36, "ModelVertex layout");
+
+struct ModelLod { uint32_t firstIndex = 0, indexCount = 0; };
+
+// One draw of an imported model (car body, wheel, character...).
+struct ModelDraw {
+  ModelHandle model;
+  MaterialHandle material;
+  int lod = 0;
+  Mat4 transform;
+  Vec4 tint{1, 1, 1, 0};      // rgb paint colour, a = recolour amount
+  Vec4 params{0, 0, 1, 1};    // x emissive, y clear coat, z roughness scale, w unused
+  int boneOffset = -1;        // first matrix in FrameData::bones (skinned models)
+  bool castShadow = true;
+};
 
 struct Batch { TexHandle tex; uint32_t first = 0, count = 0; };
 
@@ -84,11 +123,18 @@ struct FrameData {
   std::vector<DecalInst> decals;
   std::vector<UiInst> ui;
   std::vector<Batch> uiBatches;
-  TexHandle materialArray;
-  float blur = 0, fade = 0, vignette = 0.28f, grade = 1.0f, dim = 0;
+  std::vector<ModelDraw> models;
+  std::vector<Mat4> bones;        // skinning palettes, kMaxBones matrices per skinned draw
+  MaterialHandle worldMaterial;   // albedo array + normal/roughness array
+  float blur = 0, fade = 0, vignette = 0.28f, dim = 0;
+  // HDR post: exposure, bloom, grading
+  float exposure = 1.0f, bloom = 0.06f, bloomThreshold = 1.0f;
+  Vec4 lift{0, 0, 0, 1};          // rgb lift, w = saturation
+  Vec4 gain{1, 1, 1, 1};          // rgb gain, w = contrast
+  int shadowCascades = 2;
   void clear() {
     worldMeshes.clear(); shadowMeshes.clear(); sprites.clear(); spriteBatches.clear(); silhouettes.clear();
-    silhouetteBatches.clear(); decals.clear(); ui.clear(); uiBatches.clear();
+    silhouetteBatches.clear(); decals.clear(); ui.clear(); uiBatches.clear(); models.clear(); bones.clear();
   }
 };
 
@@ -116,6 +162,13 @@ class Renderer {
   TexHandle createTextureRGBA(uint32_t w, uint32_t h, const uint8_t* rgba, bool srgb, bool mips, SamplerKind sampler);
   MeshHandle createMesh(const WorldVertex* v, size_t nv, const uint32_t* idx, size_t ni);
   void destroyMesh(MeshHandle h);
+  ModelHandle createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
+                          bool skinned);
+  // World material: two texture arrays. Model material: albedo, normal, ORM 2D textures (invalid -> neutral defaults).
+  MaterialHandle createWorldMaterial(TexHandle albedoArray, TexHandle normalArray);
+  MaterialHandle createModelMaterial(TexHandle albedo, TexHandle normal, TexHandle orm);
+  void setShadowMapSize(int size);
+  bool hdr() const { return hdrFormat_ != VK_FORMAT_R8G8B8A8_UNORM; }
 
   void setRenderScale(float s);
   float renderScale() const { return cfg_.renderScale; }
@@ -135,13 +188,14 @@ class Renderer {
 
  private:
   struct MeshRes { Buffer vb, ib; uint32_t indexCount = 0; bool alive = false; };
+  struct ModelRes { Buffer vb, ib; ModelLod lods[3]; int lodCount = 0; bool skinned = false; };
   struct TexRes { Image img; VkSampler sampler = VK_NULL_HANDLE; VkDescriptorSet set = VK_NULL_HANDLE; bool alive = false; };
   struct FrameRes {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     Buffer arena;
-    VkDescriptorSet globalsA = VK_NULL_HANDLE, globalsB = VK_NULL_HANDLE;
+    VkDescriptorSet globalsA = VK_NULL_HANDLE, globalsB = VK_NULL_HANDLE, bones = VK_NULL_HANDLE;
     VkDeviceSize arenaOffset = 0;
   };
   struct BlurLevel { Image img; VkFramebuffer fb = VK_NULL_HANDLE; VkDescriptorSet set = VK_NULL_HANDLE; uint32_t w = 0, h = 0; };
@@ -159,6 +213,7 @@ class Renderer {
   void* arenaAlloc(FrameRes& fr, size_t size, VkDeviceSize* outOffset);
   VkDescriptorSet allocTexSet(VkImageView view, VkSampler samp);
   VkSampler getSampler(SamplerKind k);
+  void drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade);
   void drawBatches(VkCommandBuffer cb, FrameRes& fr, const std::vector<Batch>& batches, const void* data, size_t stride,
                    VkPipeline pipe, VkPipelineLayout layout, uint32_t vertsPerInst, int setIndex);
 
@@ -187,7 +242,10 @@ class Renderer {
 
   // targets
   Image shadowMap_, sceneColor_, sceneDepth_;
-  VkFramebuffer shadowFb_ = VK_NULL_HANDLE, sceneFb_ = VK_NULL_HANDLE;
+  VkImageView shadowLayerViews_[2] = {};
+  VkFramebuffer shadowFbs_[2] = {};
+  VkFramebuffer sceneFb_ = VK_NULL_HANDLE;
+  VkFormat hdrFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
   uint32_t sceneW_ = 0, sceneH_ = 0;
   std::vector<BlurLevel> blurDown_, blurUp_;
   VkSampler shadowSampler_ = VK_NULL_HANDLE;
@@ -198,13 +256,15 @@ class Renderer {
   // descriptors / pipelines
   VkDescriptorPool pool_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout layoutGlobalsA_ = VK_NULL_HANDLE, layoutGlobalsB_ = VK_NULL_HANDLE, layoutEmpty_ = VK_NULL_HANDLE,
-                        layoutTex_ = VK_NULL_HANDLE, layoutTex2_ = VK_NULL_HANDLE;
-  VkPipelineLayout plWorld_ = VK_NULL_HANDLE, plShadow_ = VK_NULL_HANDLE, plUi_ = VK_NULL_HANDLE, plBlur_ = VK_NULL_HANDLE,
-                   plComposite_ = VK_NULL_HANDLE;
+                        layoutTex_ = VK_NULL_HANDLE, layoutTex2_ = VK_NULL_HANDLE, layoutTex3_ = VK_NULL_HANDLE,
+                        layoutBones_ = VK_NULL_HANDLE;
+  VkPipelineLayout plWorld_ = VK_NULL_HANDLE, plSprite_ = VK_NULL_HANDLE, plShadow_ = VK_NULL_HANDLE, plMesh_ = VK_NULL_HANDLE,
+                   plUi_ = VK_NULL_HANDLE, plBlur_ = VK_NULL_HANDLE, plComposite_ = VK_NULL_HANDLE;
   VkPipeline pipeWorld_ = VK_NULL_HANDLE, pipeShadow_ = VK_NULL_HANDLE, pipeSprite_ = VK_NULL_HANDLE,
              pipeSilhouette_ = VK_NULL_HANDLE, pipeDecal_ = VK_NULL_HANDLE, pipeSky_ = VK_NULL_HANDLE,
              pipeUi_ = VK_NULL_HANDLE, pipeBlurDown_ = VK_NULL_HANDLE, pipeBlurUp_ = VK_NULL_HANDLE,
-             pipeComposite_ = VK_NULL_HANDLE;
+             pipeComposite_ = VK_NULL_HANDLE, pipeMesh_ = VK_NULL_HANDLE, pipeMeshSkinned_ = VK_NULL_HANDLE,
+             pipeShadowMesh_ = VK_NULL_HANDLE, pipeShadowSkinned_ = VK_NULL_HANDLE;
   VkSampler samplers_[3] = {};
   std::vector<VkShaderModule> shaderModules_;
 
@@ -214,7 +274,9 @@ class Renderer {
 
   std::vector<MeshRes> meshes_;
   std::vector<TexRes> textures_;
-  TexHandle dummyTex_;
+  std::vector<ModelRes> models_;
+  std::vector<VkDescriptorSet> materials_;
+  TexHandle dummyTex_, flatNormalTex_, defaultOrmTex_, dummyArray_, flatNormalArray_;
 
  public:
   // Used by the game to bind mesh draws; exposed for the scene code.

@@ -17,6 +17,7 @@
 #include "items.h"
 #include "navmesh.h"
 #include "ui.h"
+#include "timeofday.h"
 #include "world.h"
 
 namespace gtabr {
@@ -25,10 +26,34 @@ struct Settings {
   float sensitivity = 1.0f;
   bool invertY = false;
   bool shadows = true;
-  int quality = 0;          // 0 auto, 1 low, 2 medium, 3 high
+  int quality = 2;          // 0 BAIXO, 1 MÉDIO, 2 ALTO, 3 ULTRA (see kQualityPresets)
+  bool dynamicRes = true;   // lower the render scale when the frame time is over budget
   float hudScale = 1.0f;
   bool showFps = false;
 };
+
+// Graphics presets: every field changes real work done per frame.
+struct QualityPreset {
+  const char* name;
+  float renderScale;     // base resolution scale (dynamic resolution moves below it)
+  int shadowMapSize;     // per cascade
+  int shadowCascades;    // 0 = no sun shadows
+  bool bloom;
+  float drawDistance;    // metres, props/NPC/vehicle cull distance
+  float lodBias;         // >1 picks coarser model LODs sooner
+  int maxLights;         // dynamic point/spot lights
+  float decorDensity;    // fraction of clutter props drawn
+  int animFullRateNpcs;  // NPCs animated every frame; others at reduced rate
+};
+inline const QualityPreset& qualityPreset(int q) {
+  static const QualityPreset k[4] = {
+      {"Baixo", 0.62f, 1024, 1, false, 70.0f, 1.8f, 4, 0.45f, 3},
+      {"Médio", 0.80f, 1536, 1, true, 95.0f, 1.3f, 8, 0.7f, 6},
+      {"Alto", 0.92f, 2048, 2, true, 125.0f, 1.0f, 12, 1.0f, 10},
+      {"Ultra", 1.0f, 2048, 2, true, 160.0f, 0.7f, 16, 1.0f, 20},
+  };
+  return k[q < 0 ? 0 : (q > 3 ? 3 : q)];
+}
 
 struct Toast { std::string text; float t = 0; float dur = 2.6f; uint32_t color = 0xFFFFFFFFu; const char* icon = nullptr; };
 
@@ -173,6 +198,11 @@ class Game {
   void emitSpriteSet(const std::string& lowName, const std::string& highName, Vec3 pos, float scale, uint32_t tint, float alphaMul, bool mirror, bool silhouette, bool shadowDecal);
   void flushSprites(gfx::FrameData& fd);
   void setupGlobals(gfx::FrameData& fd);
+ public:
+  void setTimeOfDay(float h, float rate) { timeOfDay_ = h; dayRate_ = rate; }
+  float timeOfDay() const { return timeOfDay_; }
+  void setQuality(int q) { settings_.quality = q; applySettings(); }
+ private:
   int dirIndex(float objYaw, int n) const;
 
   // ---- UI (game_ui.cpp)
@@ -288,7 +318,17 @@ class Game {
   float spriteWeightHigh_ = 0;
   float indoorBlend_ = 0;
   gfx::TexHandle materials_;
+  gfx::MaterialHandle worldMaterial_;
   Vec3 sunDir_{-0.50f, 0.74f, 0.44f};
+  // time of day / weather
+  float timeOfDay_ = 10.0f;      // hours
+  float dayRate_ = 1.0f / 60.0f; // game hours per real second (a full day in 24 minutes)
+  float cloudCover_ = 0.42f;
+  float wetness_ = 0.0f;
+  DayLighting day_;
+  Vec3 shadowFocus_;
+  float shadowRadius_ = 70.0f;
+  const QualityPreset& preset() const { return qualityPreset(settings_.quality); }
   const SpriteDef* charSprite(const std::string& arch, int frame, const char* anim, int dir, bool high) const;
   // pre-resolved sprite tables (built once after loading)
   static constexpr int kArch = 10;

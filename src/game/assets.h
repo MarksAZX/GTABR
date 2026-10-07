@@ -42,7 +42,7 @@ class Assets {
   UvRect icon(const std::string& name) const;
   UvRect art(const std::string& name) const;
 
-  gfx::TexHandle materials, iconsTex, artTex, mapTex;
+  gfx::TexHandle materials, materialsNormal, iconsTex, artTex, mapTex;
   FontData fontRegular, fontBold;
 
   // Measures / helpers for text

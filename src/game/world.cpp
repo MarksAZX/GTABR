@@ -427,20 +427,20 @@ class Gen {
     Facade f{mat::shop_posto, {0.92f, 0.92f, 0.9f}, 4.6f, true, 4.6f};
     houseBuilding(store, S, f);
     w_.poiGasDoor = {24.0f, 0, -31.2f};
-    // canopy
+    // canopy: two roof strips over the pump islands (the lanes in between stay visible from above)
     float cy = 5.2f;
-    {
-      MeshBuilder b = mb(22, -20, {0.9f, 0.9f, 0.9f});
-      b.box(AABB({10.0f, cy, -28.5f}, {34.0f, cy + 0.5f, -10.5f}), mat::white, mat::roof_metal, 4.0f);
-      MeshBuilder s1 = mb(22, -20, {0.07f, 0.22f, 0.62f});
-      s1.box(AABB({9.9f, cy + 0.02f, -28.6f}, {34.1f, cy + 0.5f, -28.5f + 0.0f}), mat::white, mat::white, 1.0f);
-      MeshBuilder s2 = mb(22, -20, {0.98f, 0.78f, 0.1f});
-      s2.box(AABB({9.9f, cy - 0.12f, -28.6f}, {34.1f, cy + 0.0f, -10.4f}), mat::white, mat::white, 1.0f);
+    for (float iz : {-23.0f, -15.0f}) {
+      MeshBuilder b = mb(22, iz, {0.9f, 0.9f, 0.9f});
+      b.box(AABB({11.0f, cy, iz - 2.4f}, {33.0f, cy + 0.45f, iz + 2.4f}), mat::white, mat::roof_metal, 4.0f);
+      MeshBuilder s1 = mb(22, iz, {0.07f, 0.22f, 0.62f});
+      s1.box(AABB({10.9f, cy + 0.02f, iz - 2.5f}, {33.1f, cy + 0.45f, iz - 2.4f}), mat::white, mat::white, 1.0f);
+      s1.box(AABB({10.9f, cy + 0.02f, iz + 2.4f}, {33.1f, cy + 0.45f, iz + 2.5f}), mat::white, mat::white, 1.0f);
+      MeshBuilder s2 = mb(22, iz, {0.98f, 0.78f, 0.1f});
+      s2.box(AABB({10.9f, cy - 0.14f, iz - 2.5f}, {33.1f, cy, iz + 2.5f}), mat::white, mat::white, 1.0f);
     }
-    // columns
-    for (float cx : {13.5f, 30.5f})
-      for (float cz : {-27.0f, -23.0f, -15.0f, -11.5f}) {
-        if (cz == -27.0f || cz == -11.5f) continue;
+    // columns at the island ends (outside the driving lanes)
+    for (float cx : {12.5f, 31.5f})
+      for (float cz : {-23.0f, -15.0f}) {
         MeshBuilder c = mb(cx, cz, {0.88f, 0.88f, 0.9f});
         c.box(AABB({cx - 0.3f, 0, cz - 0.3f}, {cx + 0.3f, cy, cz + 0.3f}), mat::white, mat::white, 1.0f);
         collider(AABB({cx - 0.3f, 0, cz - 0.3f}, {cx + 0.3f, cy, cz + 0.3f}), ColKind::Pole);
@@ -449,8 +449,8 @@ class Gen {
     int pid = 0;
     for (float iz : {-23.0f, -15.0f}) {
       MeshBuilder b = mb(22, iz, {0.8f, 0.8f, 0.8f});
-      b.box(AABB({15.0f, 0, iz - 0.9f}, {29.0f, 0.2f, iz + 0.9f}), mat::concrete, mat::sidewalk, 3.0f);
-      collider(AABB({15.0f, 0, iz - 0.9f}, {29.0f, 0.3f, iz + 0.9f}), ColKind::Prop);
+      b.box(AABB({14.0f, 0, iz - 0.9f}, {30.0f, 0.2f, iz + 0.9f}), mat::concrete, mat::sidewalk, 3.0f);
+      collider(AABB({14.0f, 0, iz - 0.9f}, {30.0f, 0.3f, iz + 0.9f}), ColKind::Prop);
       for (float px : {19.0f, 25.0f}) {
         prop("bomba", px, iz, 0, false);
         collider(AABB({px - 0.4f, 0.2f, iz - 0.3f}, {px + 0.4f, 1.8f, iz + 0.3f}), ColKind::Prop);

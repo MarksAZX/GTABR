@@ -125,8 +125,7 @@ MATERIALS = [
 ]
 
 
-def build_materials(quality):
-    print("materials ->", len(MATERIALS), "layers")
+def material_layers():
     ga, gb = load("ground_a.png"), load("ground_b.png")
     fh, fb = load("facades_houses.png"), load("facades_buildings.png")
     roofs = load("roofs.png")
@@ -166,6 +165,53 @@ def build_materials(quality):
             if n not in seeds:
                 print("  WARNING: missing source for", n)
             arrs.append(proc_layer(n if n in ("wall_paint", "concrete", "wall_dark", "white", "wood", "metal") else "concrete", seeds.get(n, 10 + i)))
+    return arrs
+
+
+# Per-layer surface response for the derived PBR maps: (normal strength, base roughness, roughness variation)
+SURFACE = {
+    "asphalt": (2.2, 0.82, 0.12), "asphalt_cracked": (2.8, 0.84, 0.12), "sidewalk": (2.4, 0.78, 0.12), "pedra_port": (3.2, 0.72, 0.16),
+    "grass": (2.6, 0.95, 0.04), "dirt": (2.6, 0.92, 0.06), "tile_floor": (1.2, 0.32, 0.10), "garage_floor": (1.6, 0.62, 0.20),
+    "roof_tile": (3.0, 0.70, 0.12), "roof_fiber": (2.4, 0.66, 0.10), "roof_laje": (2.0, 0.86, 0.08), "roof_metal": (2.0, 0.42, 0.18),
+    "wall_paint": (1.6, 0.86, 0.08), "concrete": (2.0, 0.88, 0.08), "wall_dark": (1.6, 0.84, 0.08), "white": (1.0, 0.62, 0.06),
+    "shelf": (1.0, 0.55, 0.10), "wood": (1.8, 0.66, 0.12), "metal": (1.4, 0.38, 0.14),
+}
+
+
+def derive_normal_rough(arr, name, size=512):
+    """Height from luminance (high-passed so baked lighting does not become slopes) -> tangent-space normal,
+    roughness from base + local detail, cavity from the height high-pass. Declared as derived, not scanned."""
+    from scipy import ndimage
+    strength, rbase, rvar = SURFACE.get(name, (1.4, 0.80, 0.10))   # facades / shop fronts default
+    im = Image.fromarray(arr).convert("RGB").resize((size, size), Image.LANCZOS)
+    f = np.asarray(im).astype(np.float32) / 255.0
+    lum = f[..., 0] * 0.299 + f[..., 1] * 0.587 + f[..., 2] * 0.114
+    low = ndimage.gaussian_filter(lum, 18, mode="wrap")
+    h = ndimage.gaussian_filter(lum - low, 0.8, mode="wrap")
+    dx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * strength * (size / 64.0)
+    dy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * strength * (size / 64.0)
+    nz = 1.0 / np.sqrt(dx * dx + dy * dy + 1.0)
+    nx, ny = -dx * nz, dy * nz
+    detail = ndimage.gaussian_filter(np.abs(lum - ndimage.gaussian_filter(lum, 3, mode="wrap")), 2, mode="wrap")
+    detail = detail / max(1e-4, float(np.percentile(detail, 98)))
+    rough = np.clip(rbase + rvar * (np.clip(detail, 0, 1) - 0.5) * 2.0 - 0.10 * (lum - lum.mean()), 0.08, 1.0)
+    cav = np.clip(1.0 + (h / max(1e-4, float(np.percentile(np.abs(h), 97)))) * 0.35, 0.45, 1.0)
+    out = np.stack([nx * 0.5 + 0.5, ny * 0.5 + 0.5, rough, cav], axis=-1)
+    return (np.clip(out, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+
+
+def build_normals(quality, arrs=None):
+    arrs = arrs if arrs is not None else material_layers()
+    print("materials_n ->", len(arrs), "layers (derived normal/roughness/cavity)")
+    nr = [derive_normal_rough(a, MATERIALS[i]) for i, a in enumerate(arrs)]
+    nm = gtex.save_texture(os.path.join(OUT, "materials_n.gtex"), os.path.join(OUT_RGBA, "materials_n.gtex"), nr, "linear", quality, srgb=False)
+    print("  materials_n.gtex mips:", nm)
+
+
+def build_materials(quality):
+    print("materials ->", len(MATERIALS), "layers")
+    arrs = material_layers()
+    build_normals(quality, arrs)
     nm = gtex.save_texture(os.path.join(OUT, "materials.gtex"), os.path.join(OUT_RGBA, "materials.gtex"), arrs, "color", quality)
     print("  materials.gtex mips:", nm)
     # C++ ids header
@@ -384,7 +430,7 @@ if __name__ == "__main__":
     ap.add_argument("--only", default="")
     ap.add_argument("--quality", default="medium")
     args = ap.parse_args()
-    steps = {"materials": lambda: build_materials(args.quality), "sprites": lambda: build_sprites("fast" if args.quality == "medium" else args.quality),
+    steps = {"materials": lambda: build_materials(args.quality), "normals": lambda: build_normals(args.quality), "sprites": lambda: build_sprites("fast" if args.quality == "medium" else args.quality),
              "fonts": build_fonts, "icons": lambda: build_icons(args.quality), "art": lambda: build_ui_art(args.quality)}
     for k, fn in steps.items():
         if not args.only or args.only == k:

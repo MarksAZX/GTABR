@@ -23,7 +23,8 @@ VkShaderModule loadShader(VkCtx& ctx, const char* name, std::vector<VkShaderModu
 
 size_t texelBytes(TexFormat f, uint32_t w, uint32_t h) {
   switch (f) {
-    case TexFormat::ASTC6x6_SRGB: return (size_t)((w + 5) / 6) * ((h + 5) / 6) * 16;
+    case TexFormat::ASTC6x6_SRGB:
+    case TexFormat::ASTC6x6_UNORM: return (size_t)((w + 5) / 6) * ((h + 5) / 6) * 16;
     case TexFormat::R8_UNORM: return (size_t)w * h;
     default: return (size_t)w * h * 4;
   }
@@ -48,13 +49,22 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
                                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
                       ? VK_FORMAT_D32_SFLOAT
                       : VK_FORMAT_D16_UNORM;
+  // HDR scene target: packed float if renderable + filterable, else half float, else LDR fallback
+  const VkFormatFeatureFlags hdrFeat = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  if (fmtOk(VK_FORMAT_B10G11R11_UFLOAT_PACK32, hdrFeat)) hdrFormat_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+  else if (fmtOk(VK_FORMAT_R16G16B16A16_SFLOAT, hdrFeat)) hdrFormat_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+  else hdrFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
+  LOGI("Scene colour format %d", (int)hdrFormat_);
 
   // descriptor pool
-  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 512}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16}};
+  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
+                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8}};
   VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  dpi.maxSets = 320;
-  dpi.poolSizeCount = 2;
+  dpi.maxSets = 480;
+  dpi.poolSizeCount = 3;
   dpi.pPoolSizes = ps;
   VK_CHECK(vkCreateDescriptorPool(dev, &dpi, nullptr, &pool_));
 
@@ -75,6 +85,10 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   layoutTex_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutTex2_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
                           {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutTex3_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutBones_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}});
 
   auto mkPl = [&](std::vector<VkDescriptorSetLayout> sets, uint32_t pcSize, VkShaderStageFlags pcStages) {
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -86,11 +100,13 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VK_CHECK(vkCreatePipelineLayout(dev, &pi, nullptr, &l));
     return l;
   };
-  plWorld_ = mkPl({layoutGlobalsB_, layoutTex_}, 0, 0);
-  plShadow_ = mkPl({layoutGlobalsA_}, 0, 0);
+  plWorld_ = mkPl({layoutGlobalsB_, layoutTex2_}, 0, 0);
+  plSprite_ = mkPl({layoutGlobalsB_, layoutTex_}, 0, 0);
+  plShadow_ = mkPl({layoutGlobalsA_, layoutBones_}, 80, VK_SHADER_STAGE_VERTEX_BIT);
+  plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutEmpty_, layoutTex2_}, 64, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
   VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -116,15 +132,25 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VK_CHECK(vkCreateSemaphore(dev, &sci, nullptr, &f.imageAvailable));
     f.arena = ctx_.createBuffer(kArenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
-    VkDescriptorSetLayout ls[2] = {layoutGlobalsA_, layoutGlobalsB_};
+    VkDescriptorSetLayout ls[3] = {layoutGlobalsA_, layoutGlobalsB_, layoutBones_};
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     ai.descriptorPool = pool_;
-    ai.descriptorSetCount = 2;
+    ai.descriptorSetCount = 3;
     ai.pSetLayouts = ls;
-    VkDescriptorSet sets[2];
+    VkDescriptorSet sets[3];
     VK_CHECK(vkAllocateDescriptorSets(dev, &ai, sets));
     f.globalsA = sets[0];
     f.globalsB = sets[1];
+    f.bones = sets[2];
+    {
+      VkDescriptorBufferInfo bb{f.arena.buf, 0, sizeof(Mat4) * kMaxBones};
+      VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      wb.dstSet = f.bones;
+      wb.descriptorCount = 1;
+      wb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+      wb.pBufferInfo = &bb;
+      vkUpdateDescriptorSets(dev, 1, &wb, 0, nullptr);
+    }
     VkDescriptorBufferInfo bi{f.arena.buf, 0, sizeof(GlobalsUBO)};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = f.globalsA;
@@ -139,6 +165,20 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   // 1x1 white dummy texture
   uint8_t white[4] = {255, 255, 255, 255};
   dummyTex_ = createTextureRGBA(1, 1, white, false, false, SamplerKind::ClampLinear);
+  uint8_t flatN[4] = {128, 128, 255, 255};
+  flatNormalTex_ = createTextureRGBA(1, 1, flatN, false, false, SamplerKind::Repeat);
+  uint8_t orm[4] = {255, 200, 0, 255};  // occlusion 1, roughness ~0.78, dielectric
+  defaultOrmTex_ = createTextureRGBA(1, 1, orm, false, false, SamplerKind::Repeat);
+  {
+    // 2-layer arrays so the views are VK_IMAGE_VIEW_TYPE_2D_ARRAY
+    TextureData td;
+    td.format = TexFormat::RGBA8_UNORM;
+    td.width = td.height = 1; td.layers = 2; td.mips = 1;
+    td.bytes = {255, 255, 255, 255, 255, 255, 255, 255};
+    dummyArray_ = createTexture(td, SamplerKind::Repeat);
+    td.bytes = {128, 128, 200, 255, 128, 128, 200, 255};  // flat normal, roughness 0.78, no cavity
+    flatNormalArray_ = createTexture(td, SamplerKind::Repeat);
+  }
 
   if (cfg_.headless) {
     outFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
@@ -160,6 +200,7 @@ void Renderer::shutdown() {
   destroyRenderTargets();
   for (auto& m : meshes_) if (m.alive) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
   for (auto& t : textures_) if (t.alive) { ctx_.destroyImage(t.img); }
+  for (auto& m : models_) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
   for (VkSampler s : samplers_) if (s) vkDestroySampler(dev, s, nullptr);
   if (shadowSampler_) vkDestroySampler(dev, shadowSampler_, nullptr);
   for (int i = 0; i < kFrames; ++i) {
@@ -168,11 +209,12 @@ void Renderer::shutdown() {
     vkDestroySemaphore(dev, frames_[i].imageAvailable, nullptr);
   }
   VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                        pipeBlurDown_, pipeBlurUp_, pipeComposite_};
+                        pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                        pipeShadowSkinned_};
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
-  VkPipelineLayout pls[] = {plWorld_, plShadow_, plUi_, plBlur_, plComposite_};
+  VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_};
   for (auto p : pls) if (p) vkDestroyPipelineLayout(dev, p, nullptr);
-  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_};
+  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_, layoutTex3_, layoutBones_};
   for (auto l : dls) if (l) vkDestroyDescriptorSetLayout(dev, l, nullptr);
   for (auto m : shaderModules_) vkDestroyShaderModule(dev, m, nullptr);
   VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
@@ -217,7 +259,7 @@ bool Renderer::createPasses() {
   // scene: color + depth
   {
     VkAttachmentDescription at[2]{};
-    at[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    at[0].format = hdrFormat_;
     at[0].samples = VK_SAMPLE_COUNT_1_BIT;
     at[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -272,7 +314,7 @@ bool Renderer::createPasses() {
     ri.attachmentCount = 1; ri.pAttachments = &a; ri.subpassCount = 1; ri.pSubpasses = &sp; ri.dependencyCount = 2; ri.pDependencies = deps;
     VK_CHECK(vkCreateRenderPass(dev, &ri, nullptr, out));
   };
-  makeColorPass(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+  makeColorPass(hdrFormat_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_SHADER_READ_BIT, &blurPass_);
   if (cfg_.headless)
     makeColorPass(outFormat_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -328,6 +370,19 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
     case 5:  // shadow (position only from world vertices)
       bind = {0, sizeof(WorldVertex), VK_VERTEX_INPUT_RATE_VERTEX};
       A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
+      break;
+    case 6:  // model, static
+    case 7:  // model, skinned
+      bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+      A(0, VK_FORMAT_R32G32B32_SFLOAT, 0); A(1, VK_FORMAT_R8G8B8A8_SNORM, 12); A(2, VK_FORMAT_R8G8B8A8_SNORM, 16);
+      A(3, VK_FORMAT_R32G32_SFLOAT, 20);
+      if (vertexKind == 7) { A(4, VK_FORMAT_R8G8B8A8_UINT, 28); A(5, VK_FORMAT_R8G8B8A8_UNORM, 32); }
+      break;
+    case 8:  // model shadow, static
+    case 9:  // model shadow, skinned
+      bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+      A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
+      if (vertexKind == 9) { A(4, VK_FORMAT_R8G8B8A8_UINT, 28); A(5, VK_FORMAT_R8G8B8A8_UNORM, 32); }
       break;
     default: break;
   }
@@ -393,20 +448,27 @@ bool Renderer::createLayoutsAndPipelines() {
   const VkCompareOp LESS = VK_COMPARE_OP_LESS, LEQ = VK_COMPARE_OP_LESS_OR_EQUAL, GRT = VK_COMPARE_OP_GREATER;
   pipeWorld_ = buildPipeline("world.vert.spv", "world.frag.spv", scenePass_, plWorld_, 1, true, true, LESS, false, VK_CULL_MODE_BACK_BIT);
   pipeShadow_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 5, true, true, LESS, false, VK_CULL_MODE_NONE, true);
-  pipeSprite_ = buildPipeline("sprite.vert.spv", "sprite.frag.spv", scenePass_, plWorld_, 2, true, true, LEQ, true, VK_CULL_MODE_NONE,
+  pipeShadowMesh_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 8, true, true, LESS, false, VK_CULL_MODE_NONE, true);
+  pipeShadowSkinned_ = buildPipeline("mesh_shadow_skinned.vert.spv", nullptr, shadowPass_, plShadow_, 9, true, true, LESS, false,
+                                     VK_CULL_MODE_NONE, true);
+  pipeMesh_ = buildPipeline("mesh.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 6, true, true, LESS, false, VK_CULL_MODE_NONE);
+  pipeMeshSkinned_ = buildPipeline("mesh_skinned.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 7, true, true, LESS, false,
+                                   VK_CULL_MODE_BACK_BIT);
+  pipeSprite_ = buildPipeline("sprite.vert.spv", "sprite.frag.spv", scenePass_, plSprite_, 2, true, true, LEQ, true, VK_CULL_MODE_NONE,
                               false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeSilhouette_ = buildPipeline("sprite.vert.spv", "silhouette.frag.spv", scenePass_, plWorld_, 2, true, false, GRT, true,
+  pipeSilhouette_ = buildPipeline("sprite.vert.spv", "silhouette.frag.spv", scenePass_, plSprite_, 2, true, false, GRT, true,
                                   VK_CULL_MODE_NONE, false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeDecal_ = buildPipeline("decal.vert.spv", "decal.frag.spv", scenePass_, plWorld_, 3, true, false, LEQ, true, VK_CULL_MODE_NONE,
+  pipeDecal_ = buildPipeline("decal.vert.spv", "decal.frag.spv", scenePass_, plSprite_, 3, true, false, LEQ, true, VK_CULL_MODE_NONE,
                              false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeSky_ = buildPipeline("fullscreen.vert.spv", "sky.frag.spv", scenePass_, plWorld_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeSky_ = buildPipeline("fullscreen.vert.spv", "sky.frag.spv", scenePass_, plSprite_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeUi_ = buildPipeline("ui.vert.spv", "ui.frag.spv", compositePass_, plUi_, 4, false, false, LEQ, true, VK_CULL_MODE_NONE, false,
                           VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
   pipeBlurDown_ = buildPipeline("fullscreen.vert.spv", "blur_down.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeBlurUp_ = buildPipeline("fullscreen.vert.spv", "blur_up.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeComposite_ = buildPipeline("fullscreen.vert.spv", "composite.frag.spv", compositePass_, plComposite_, 0, false, false, LEQ, false,
                                  VK_CULL_MODE_NONE);
-  return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_;
+  return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_ && pipeMesh_ &&
+         pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -454,6 +516,10 @@ TexHandle Renderer::createTexture(const TextureData& td, SamplerKind sk) {
     case TexFormat::ASTC6x6_SRGB:
       if (!ctx_.caps.astcLdr) return {};
       fmt = VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
+      break;
+    case TexFormat::ASTC6x6_UNORM:
+      if (!ctx_.caps.astcLdr) return {};
+      fmt = VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
       break;
     default: return {};
   }
@@ -544,14 +610,84 @@ void Renderer::destroyMesh(MeshHandle h) {
   meshes_[h.id] = MeshRes();
 }
 
+ModelHandle Renderer::createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
+                                  bool skinned) {
+  ModelRes m;
+  m.vb = ctx_.createBuffer(nv * sizeof(ModelVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+  m.ib = ctx_.createBuffer(ni * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true);
+  std::memcpy(m.vb.map, v, nv * sizeof(ModelVertex));
+  std::memcpy(m.ib.map, idx, ni * sizeof(uint32_t));
+  m.lodCount = std::max(1, std::min(lodCount, 3));
+  for (int i = 0; i < m.lodCount; ++i) m.lods[i] = lods ? lods[i] : ModelLod{0, (uint32_t)ni};
+  m.skinned = skinned;
+  models_.push_back(m);
+  return ModelHandle{(int)models_.size() - 1};
+}
+
+MaterialHandle Renderer::createWorldMaterial(TexHandle albedoArray, TexHandle normalArray) {
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = pool_;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &layoutTex2_;
+  VkDescriptorSet set;
+  VK_CHECK(vkAllocateDescriptorSets(ctx_.device, &ai, &set));
+  const TexRes& a = textures_[albedoArray.valid() ? albedoArray.id : dummyArray_.id];
+  const TexRes& n = textures_[normalArray.valid() ? normalArray.id : flatNormalArray_.id];
+  VkDescriptorImageInfo ii[2] = {{a.sampler, a.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                 {n.sampler, n.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+  VkWriteDescriptorSet w[2]{};
+  for (int i = 0; i < 2; ++i) {
+    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[i].dstSet = set; w[i].dstBinding = (uint32_t)i; w[i].descriptorCount = 1;
+    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[i].pImageInfo = &ii[i];
+  }
+  vkUpdateDescriptorSets(ctx_.device, 2, w, 0, nullptr);
+  materials_.push_back(set);
+  return MaterialHandle{(int)materials_.size() - 1};
+}
+
+MaterialHandle Renderer::createModelMaterial(TexHandle albedo, TexHandle normal, TexHandle orm) {
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = pool_;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &layoutTex3_;
+  VkDescriptorSet set;
+  VK_CHECK(vkAllocateDescriptorSets(ctx_.device, &ai, &set));
+  const TexRes* t[3] = {&textures_[albedo.valid() ? albedo.id : dummyTex_.id], &textures_[normal.valid() ? normal.id : flatNormalTex_.id],
+                        &textures_[orm.valid() ? orm.id : defaultOrmTex_.id]};
+  VkDescriptorImageInfo ii[3];
+  VkWriteDescriptorSet w[3]{};
+  for (int i = 0; i < 3; ++i) {
+    ii[i] = {t[i]->sampler, t[i]->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[i].dstSet = set; w[i].dstBinding = (uint32_t)i; w[i].descriptorCount = 1;
+    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[i].pImageInfo = &ii[i];
+  }
+  vkUpdateDescriptorSets(ctx_.device, 3, w, 0, nullptr);
+  materials_.push_back(set);
+  return MaterialHandle{(int)materials_.size() - 1};
+}
+
+void Renderer::setShadowMapSize(int size) {
+  size = clamp(size, 512, 4096);
+  if (size == cfg_.shadowMapSize) return;
+  cfg_.shadowMapSize = size;
+  if (compositePass_ && outW_) createRenderTargets();
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 void Renderer::destroyRenderTargets() {
   VkDevice dev = ctx_.device;
   if (!dev) return;
   vkDeviceWaitIdle(dev);
-  if (shadowFb_) vkDestroyFramebuffer(dev, shadowFb_, nullptr);
+  for (int i = 0; i < 2; ++i) {
+    if (shadowFbs_[i]) vkDestroyFramebuffer(dev, shadowFbs_[i], nullptr);
+    if (shadowLayerViews_[i]) vkDestroyImageView(dev, shadowLayerViews_[i], nullptr);
+    shadowFbs_[i] = VK_NULL_HANDLE;
+    shadowLayerViews_[i] = VK_NULL_HANDLE;
+  }
   if (sceneFb_) vkDestroyFramebuffer(dev, sceneFb_, nullptr);
-  shadowFb_ = sceneFb_ = VK_NULL_HANDLE;
+  sceneFb_ = VK_NULL_HANDLE;
   ctx_.destroyImage(shadowMap_);
   ctx_.destroyImage(sceneColor_);
   ctx_.destroyImage(sceneDepth_);
@@ -575,15 +711,24 @@ void Renderer::createRenderTargets() {
   sceneH_ = std::max(64u, (uint32_t)(outH_ * cfg_.renderScale + 0.5f));
 
   uint32_t sm = (uint32_t)cfg_.shadowMapSize;
-  shadowMap_ = ctx_.createImage(sm, sm, 1, 1, shadowFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+  // two cascades in one depth array; one framebuffer per layer
+  shadowMap_ = ctx_.createImage(sm, sm, 2, 1, shadowFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                 VK_IMAGE_ASPECT_DEPTH_BIT);
   VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-  fi.renderPass = shadowPass_;
-  fi.attachmentCount = 1;
-  fi.pAttachments = &shadowMap_.view;
-  fi.width = fi.height = sm;
-  fi.layers = 1;
-  VK_CHECK(vkCreateFramebuffer(dev, &fi, nullptr, &shadowFb_));
+  for (int c = 0; c < 2; ++c) {
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = shadowMap_.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = shadowFormat_;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, (uint32_t)c, 1};
+    VK_CHECK(vkCreateImageView(dev, &vi, nullptr, &shadowLayerViews_[c]));
+    fi.renderPass = shadowPass_;
+    fi.attachmentCount = 1;
+    fi.pAttachments = &shadowLayerViews_[c];
+    fi.width = fi.height = sm;
+    fi.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(dev, &fi, nullptr, &shadowFbs_[c]));
+  }
   // bind the shadow map to both frames' globalsB sets
   for (int i = 0; i < kFrames; ++i) {
     VkDescriptorImageInfo ii{shadowSampler_, shadowMap_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
@@ -596,7 +741,7 @@ void Renderer::createRenderTargets() {
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
   }
 
-  sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+  sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
   sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                                  depthFormat_ == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_ASPECT_DEPTH_BIT
@@ -616,7 +761,7 @@ void Renderer::createRenderTargets() {
   auto mkLevel = [&](uint32_t w, uint32_t h) {
     BlurLevel b;
     b.w = std::max(1u, w); b.h = std::max(1u, h);
-    b.img = ctx_.createImage(b.w, b.h, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+    b.img = ctx_.createImage(b.w, b.h, 1, 1, hdrFormat_,
                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     VkFramebufferCreateInfo bf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     bf.renderPass = blurPass_;
@@ -744,7 +889,8 @@ bool Renderer::createSwapchain(uint32_t w, uint32_t h) {
     // (Re)build passes and pipelines for the chosen output format.
     VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
     VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                          pipeBlurDown_, pipeBlurUp_, pipeComposite_};
+                          pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                          pipeShadowSkinned_};
     for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
     for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
     shadowPass_ = scenePass_ = blurPass_ = compositePass_ = VK_NULL_HANDLE;
@@ -820,6 +966,55 @@ void Renderer::drawBatches(VkCommandBuffer cb, FrameRes& fr, const std::vector<B
   }
 }
 
+void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade) {
+  if (fd.models.empty()) return;
+  VkPipelineLayout pl = shadow ? plShadow_ : plMesh_;
+  VkPipeline cur = VK_NULL_HANDLE;
+  int curMat = -1;
+  bool globalsBound = false;
+  for (const ModelDraw& d : fd.models) {
+    if (!d.model.valid() || d.model.id >= (int)models_.size()) continue;
+    if (shadow && !d.castShadow) continue;
+    const ModelRes& m = models_[d.model.id];
+    bool skinned = m.skinned && d.boneOffset >= 0 && boneBase != ~(VkDeviceSize)0;
+    if (m.skinned && !skinned) continue;
+    VkPipeline p = shadow ? (skinned ? pipeShadowSkinned_ : pipeShadowMesh_) : (skinned ? pipeMeshSkinned_ : pipeMesh_);
+    if (p != cur) {
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+      cur = p;
+      if (!globalsBound) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 1, shadow ? &fr.globalsA : &fr.globalsB, 0, nullptr);
+        globalsBound = true;
+      }
+    }
+    if (skinned) {
+      uint32_t dynOff = (uint32_t)(boneBase + (VkDeviceSize)d.boneOffset * sizeof(Mat4));
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, shadow ? 1 : 2, 1, &fr.bones, 1, &dynOff);
+    }
+    if (!shadow) {
+      int mat = d.material.valid() ? d.material.id : -1;
+      if (mat < 0) continue;
+      if (mat != curMat) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 1, 1, &materials_[mat], 0, nullptr);
+        curMat = mat;
+      }
+      struct { Mat4 model; Vec4 tint, params; } pc{d.transform, d.tint, d.params};
+      vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 96, &pc);
+    } else {
+      struct { Mat4 model; int32_t cascade; int32_t pad[3]; } pc;
+      pc.model = d.transform;
+      pc.cascade = cascade;
+      vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT, 0, 80, &pc);
+    }
+    int lod = clamp(d.lod, 0, m.lodCount - 1);
+    if (shadow) lod = std::min(m.lodCount - 1, lod + 1);  // shadows use a coarser LOD
+    VkDeviceSize o = 0;
+    vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
+    vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cb, m.lods[lod].indexCount, 1, m.lods[lod].firstIndex, 0, 0);
+  }
+}
+
 bool Renderer::renderFrame(const FrameData& fd) {
   if (!hasSwapchain()) return false;
   VkDevice dev = ctx_.device;
@@ -845,20 +1040,28 @@ bool Renderer::renderFrame(const FrameData& fd) {
   VkDeviceSize goff;
   void* gdst = arenaAlloc(fr, sizeof(GlobalsUBO), &goff);  // offset 0
   std::memcpy(gdst, &fd.globals, sizeof(GlobalsUBO));
+  // skinning palettes (kMaxBones matrices per skinned draw, each block 256-byte aligned by the arena)
+  VkDeviceSize boneBase = 0;
+  if (!fd.bones.empty()) {
+    void* bdst = arenaAlloc(fr, fd.bones.size() * sizeof(Mat4) + sizeof(Mat4) * kMaxBones, &boneBase);
+    if (bdst) std::memcpy(bdst, fd.bones.data(), fd.bones.size() * sizeof(Mat4));
+    else boneBase = ~(VkDeviceSize)0;
+  }
 
-  // ---- shadow pass
-  {
+  // ---- shadow pass (one render pass per cascade layer)
+  const int cascades = clamp(fd.shadowCascades, 1, 2);
+  for (int c = 0; c < 2; ++c) {
     uint32_t sm = (uint32_t)cfg_.shadowMapSize;
     VkClearValue cv{};
     cv.depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rb.renderPass = shadowPass_;
-    rb.framebuffer = shadowFb_;
+    rb.framebuffer = shadowFbs_[c];
     rb.renderArea = {{0, 0}, {sm, sm}};
     rb.clearValueCount = 1;
     rb.pClearValues = &cv;
     vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
-    if (fd.drawShadows && shadowsEnabled_) {
+    if (fd.drawShadows && shadowsEnabled_ && c < cascades) {
       VkViewport vp{0, 0, (float)sm, (float)sm, 0, 1};
       VkRect2D sc{{0, 0}, {sm, sm}};
       vkCmdSetViewport(cb, 0, 1, &vp);
@@ -866,6 +1069,9 @@ bool Renderer::renderFrame(const FrameData& fd) {
       vkCmdSetDepthBias(cb, 1.5f, 0.0f, 2.0f);
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeShadow_);
       vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plShadow_, 0, 1, &fr.globalsA, 0, nullptr);
+      struct { Mat4 model; int32_t cascade; int32_t pad[3]; } spc;
+      spc.cascade = c;
+      vkCmdPushConstants(cb, plShadow_, VK_SHADER_STAGE_VERTEX_BIT, 0, 80, &spc);
       for (int id : fd.shadowMeshes) {
         MeshRes& m = meshes_[id];
         if (!m.alive) continue;
@@ -874,6 +1080,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
         vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
       }
+      drawModels(cb, fr, fd, boneBase, true, c);
     }
     vkCmdEndRenderPass(cb);
   }
@@ -894,24 +1101,28 @@ bool Renderer::renderFrame(const FrameData& fd) {
     VkRect2D sc{{0, 0}, {sceneW_, sceneH_}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
-    int mat = fd.materialArray.valid() ? fd.materialArray.id : dummyTex_.id;
 
     // sky
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeSky_);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 0, 1, &fr.globalsB, 0, nullptr);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 1, 1, &textures_[mat].set, 0, nullptr);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
     vkCmdDraw(cb, 3, 1, 0, 0);
 
     // world
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeWorld_);
-    for (int id : fd.worldMeshes) {
-      MeshRes& m = meshes_[id];
-      if (!m.alive) continue;
-      VkDeviceSize o = 0;
-      vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
-      vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
-      vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
+    if (fd.worldMaterial.valid()) {
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeWorld_);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 0, 1, &fr.globalsB, 0, nullptr);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 1, 1, &materials_[fd.worldMaterial.id], 0, nullptr);
+      for (int id : fd.worldMeshes) {
+        MeshRes& m = meshes_[id];
+        if (!m.alive) continue;
+        VkDeviceSize o = 0;
+        vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
+        vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
+      }
     }
+    // 3D models (vehicles, characters, props)
+    drawModels(cb, fr, fd, boneBase, false, 0);
 
     // ground shadows / decals
     if (!fd.decals.empty()) {
@@ -920,20 +1131,23 @@ bool Renderer::renderFrame(const FrameData& fd) {
       if (dst) {
         std::memcpy(dst, fd.decals.data(), fd.decals.size() * sizeof(DecalInst));
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeDecal_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
         vkCmdBindVertexBuffers(cb, 0, 1, &fr.arena.buf, &off);
         vkCmdDraw(cb, 4, (uint32_t)fd.decals.size(), 0, 0);
       }
     }
     // billboards (sorted far -> near by the game)
-    drawBatches(cb, fr, fd.spriteBatches, fd.sprites.data(), sizeof(SpriteInst), pipeSprite_, plWorld_, 4, 1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
+    drawBatches(cb, fr, fd.spriteBatches, fd.sprites.data(), sizeof(SpriteInst), pipeSprite_, plSprite_, 4, 1);
     // occluded-silhouette pass
-    drawBatches(cb, fr, fd.silhouetteBatches, fd.silhouettes.data(), sizeof(SpriteInst), pipeSilhouette_, plWorld_, 4, 1);
+    drawBatches(cb, fr, fd.silhouetteBatches, fd.silhouettes.data(), sizeof(SpriteInst), pipeSilhouette_, plSprite_, 4, 1);
     vkCmdEndRenderPass(cb);
   }
 
   // ---- blur chain (Dual Kawase) only when needed
   bool doBlur = fd.blur > 0.01f;
-  if (doBlur) {
+  bool doBloom = fd.bloom > 0.001f;
+  if (doBlur || doBloom) {
     auto pass = [&](BlurLevel& dstL, VkDescriptorSet src, float srcW, float srcH, VkPipeline pipe, float offset) {
       VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
       rb.renderPass = blurPass_;
@@ -951,7 +1165,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
       vkCmdDraw(cb, 3, 1, 0, 0);
       vkCmdEndRenderPass(cb);
     };
-    float off = 1.6f;
+    float off = doBlur ? 1.6f : 1.0f;
     pass(blurDown_[0], sceneSampleSet_, (float)sceneW_, (float)sceneH_, pipeBlurDown_, off);
     for (int i = 1; i < 4; ++i)
       pass(blurDown_[i], blurDown_[i - 1].set, (float)blurDown_[i - 1].w, (float)blurDown_[i - 1].h, pipeBlurDown_, off);
@@ -973,8 +1187,11 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
-    float pcv[8] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f, fd.globals.camPos.w, fd.grade, fd.dim, 0};
-    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pcv);
+    float pcv[16] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
+                     fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,
+                     fd.globals.camPos.w,
+                     fd.lift.x, fd.lift.y, fd.lift.z, fd.lift.w, fd.gain.x, fd.gain.y, fd.gain.z, fd.gain.w};
+    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64, pcv);
     vkCmdDraw(cb, 3, 1, 0, 0);
     if (!fd.uiBatches.empty()) {
       float upc[4] = {(float)outW_, (float)outH_, outIsSrgb_ ? 1.0f : 0.0f, 0};
