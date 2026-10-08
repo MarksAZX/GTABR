@@ -871,6 +871,18 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("iso_on");
     return 0;
   }
+  if (name == "shafts") {
+    g.toggleCamera();
+    g.setTimeOfDay(17.2f, 0.0f);
+    b.idle(40);
+    for (int i = 0; i < 6; ++i) {
+      InputFrame in; in.look = {120.0f, 0};
+      b.step(in, 14);
+      b.idle(10);
+      b.shot("shafts_" + std::to_string(i));
+    }
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

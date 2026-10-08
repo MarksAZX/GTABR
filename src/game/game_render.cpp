@@ -184,7 +184,26 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
   fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};
   fd.worldMaterial = worldMaterial_;
-  (void)aspect;
+  // SSAO + volumetric light shafts (need the scene depth; both skipped on the low presets)
+  fd.nearZ = cam_.nearZ(); fd.farZ = cam_.farZ();
+  fd.tanHalfY = std::tan(cam_.fov() * 0.5f);
+  fd.tanHalfX = fd.tanHalfY * aspect;
+  fd.aoStrength = qp.ao * (1.0f - 0.5f * ind);
+  fd.aoRadius = 0.9f;
+  {
+    // the sun on screen: project a far point along the sun direction
+    Vec3 sp = cam_.eye() + L * 2000.0f;
+    const Mat4& vp = cam_.viewProj();
+    float cx = vp.at(0, 0) * sp.x + vp.at(0, 1) * sp.y + vp.at(0, 2) * sp.z + vp.at(0, 3);
+    float cy = vp.at(1, 0) * sp.x + vp.at(1, 1) * sp.y + vp.at(1, 2) * sp.z + vp.at(1, 3);
+    float cw = vp.at(3, 0) * sp.x + vp.at(3, 1) * sp.y + vp.at(3, 2) * sp.z + vp.at(3, 3);
+    float front = cw > 0.01f ? 1.0f : 0.0f;
+    fd.sunUV = cw > 0.01f ? Vec2{cx / cw * 0.5f + 0.5f, cy / cw * 0.5f + 0.5f} : Vec2{0.5f, -2.0f};
+    float up = clamp(L.y * 3.0f, 0.0f, 1.0f);                    // sun above the horizon
+    float clear = (1.0f - day_.cloudCover * 0.8f) * (1.0f - clamp(rain_ * 1.5f, 0.0f, 1.0f));
+    fd.shaftIntensity = qp.shafts * 0.55f * front * up * clear * (1.0f - day_.night) * (1.0f - ind);
+    fd.shaftColor = day_.sunColor * 0.16f;
+  }
 }
 
 void Game::emitWorld(gfx::FrameData& fd) {

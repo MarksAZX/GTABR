@@ -43,6 +43,8 @@ class CameraRig {
   Vec3 forward() const { return fwd_; }
   Vec3 focus() const { return focus_; }
   float fov() const { return fov_; }
+  float nearZ() const { return nearZ_; }
+  float farZ() const { return farZ_; }
   float topDownZoom() const { return tdDist_; }
   float isoAmount() const { return isoBlend_ * (1.0f - blendEased_); }
   void setTopDownZoom(float z) { tdDist_ = clamp(z, 14.0f, 52.0f); }
@@ -70,6 +72,7 @@ class CameraRig {
   Vec3 smoothFocus_;
   Vec2 lookAhead_;
   float tpHitDist_ = 99.0f;
+  float nearZ_ = 1.0f, farZ_ = 520.0f;
   bool first_ = true;
   void compute(const CameraInput& in, const World& w, float aspect, float dt);
 };

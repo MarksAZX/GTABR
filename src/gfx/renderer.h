@@ -132,6 +132,12 @@ struct FrameData {
   Vec4 lift{0, 0, 0, 1};          // rgb lift, w = saturation
   Vec4 gain{1, 1, 1, 1};          // rgb gain, w = contrast
   int shadowCascades = 2;
+  // screen-space AO + volumetric light shafts (both need the scene depth)
+  float nearZ = 1.0f, farZ = 520.0f, tanHalfX = 1.0f, tanHalfY = 0.5f;
+  float aoStrength = 0.0f, aoRadius = 0.9f;        // 0 = pass skipped
+  float shaftIntensity = 0.0f;                     // 0 = no light shafts
+  Vec2 sunUV{0.5f, 0.0f};
+  Vec3 shaftColor{1.0f, 0.85f, 0.6f};
   void clear() {
     worldMeshes.clear(); shadowMeshes.clear(); sprites.clear(); spriteBatches.clear(); silhouettes.clear();
     silhouetteBatches.clear(); decals.clear(); ui.clear(); uiBatches.clear(); models.clear(); bones.clear();
@@ -240,7 +246,7 @@ class Renderer {
 
   // passes
   VkRenderPass shadowPass_ = VK_NULL_HANDLE, scenePass_ = VK_NULL_HANDLE, blurPass_ = VK_NULL_HANDLE,
-               compositePass_ = VK_NULL_HANDLE;
+               compositePass_ = VK_NULL_HANDLE, aoPass_ = VK_NULL_HANDLE;
   VkFormat depthFormat_ = VK_FORMAT_D32_SFLOAT, shadowFormat_ = VK_FORMAT_D32_SFLOAT;
 
   // targets
@@ -251,6 +257,12 @@ class Renderer {
   VkFormat hdrFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
   uint32_t sceneW_ = 0, sceneH_ = 0;
   std::vector<BlurLevel> blurDown_, blurUp_;
+  // half-resolution AO / sky-mask targets (A = raw, B = blurred, sampled by the composite)
+  Image aoA_, aoB_;
+  VkFramebuffer aoFbA_ = VK_NULL_HANDLE, aoFbB_ = VK_NULL_HANDLE;
+  VkDescriptorSet aoDepthSet_ = VK_NULL_HANDLE, aoBlurSet_ = VK_NULL_HANDLE;
+  uint32_t aoW_ = 0, aoH_ = 0;
+  bool aoSupported_ = false;
   VkSampler shadowSampler_ = VK_NULL_HANDLE;
   VkDescriptorSet sceneSet_ = VK_NULL_HANDLE;  // composite set (scene + blurred)
   VkDescriptorSet sceneSampleSet_ = VK_NULL_HANDLE;  // scene only (blur chain input)
@@ -262,11 +274,11 @@ class Renderer {
                         layoutTex_ = VK_NULL_HANDLE, layoutTex2_ = VK_NULL_HANDLE, layoutTex3_ = VK_NULL_HANDLE,
                         layoutBones_ = VK_NULL_HANDLE;
   VkPipelineLayout plWorld_ = VK_NULL_HANDLE, plSprite_ = VK_NULL_HANDLE, plShadow_ = VK_NULL_HANDLE, plMesh_ = VK_NULL_HANDLE,
-                   plUi_ = VK_NULL_HANDLE, plBlur_ = VK_NULL_HANDLE, plComposite_ = VK_NULL_HANDLE;
+                   plUi_ = VK_NULL_HANDLE, plBlur_ = VK_NULL_HANDLE, plComposite_ = VK_NULL_HANDLE, plAo_ = VK_NULL_HANDLE;
   VkPipeline pipeWorld_ = VK_NULL_HANDLE, pipeShadow_ = VK_NULL_HANDLE, pipeSprite_ = VK_NULL_HANDLE,
              pipeSilhouette_ = VK_NULL_HANDLE, pipeDecal_ = VK_NULL_HANDLE, pipeSky_ = VK_NULL_HANDLE,
              pipeUi_ = VK_NULL_HANDLE, pipeBlurDown_ = VK_NULL_HANDLE, pipeBlurUp_ = VK_NULL_HANDLE,
-             pipeComposite_ = VK_NULL_HANDLE, pipeMesh_ = VK_NULL_HANDLE, pipeMeshSkinned_ = VK_NULL_HANDLE,
+             pipeComposite_ = VK_NULL_HANDLE, pipeAo_ = VK_NULL_HANDLE, pipeAoBlur_ = VK_NULL_HANDLE, pipeMesh_ = VK_NULL_HANDLE, pipeMeshSkinned_ = VK_NULL_HANDLE,
              pipeShadowMesh_ = VK_NULL_HANDLE, pipeShadowSkinned_ = VK_NULL_HANDLE;
   VkSampler samplers_[3] = {};
   std::vector<VkShaderModule> shaderModules_;

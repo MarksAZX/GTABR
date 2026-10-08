@@ -165,6 +165,7 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
 
   view_ = Mat4::lookAt(eye_, focus_, {0, 1, 0});
   float zn = lerp(1.0f, 0.2f, t), zf = 520.0f;
+  nearZ_ = zn; farZ_ = zf;
   proj_ = Mat4::perspective(fov_, aspect, zn, zf);
   viewProj_ = proj_ * view_;
   frustum_.fromViewProj(viewProj_);

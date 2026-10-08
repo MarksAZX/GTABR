@@ -107,7 +107,8 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex2_}, 64, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutEmpty_, layoutTex3_}, 96, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plAo_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
   VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -213,14 +214,14 @@ void Renderer::shutdown() {
   }
   VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
                         pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
-                        pipeShadowSkinned_};
+                        pipeShadowSkinned_, pipeAo_, pipeAoBlur_};
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
-  VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_};
+  VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_, plAo_};
   for (auto p : pls) if (p) vkDestroyPipelineLayout(dev, p, nullptr);
   VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_, layoutTex3_, layoutBones_};
   for (auto l : dls) if (l) vkDestroyDescriptorSetLayout(dev, l, nullptr);
   for (auto m : shaderModules_) vkDestroyShaderModule(dev, m, nullptr);
-  VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
+  VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_, aoPass_};
   for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
   if (pool_) vkDestroyDescriptorPool(dev, pool_, nullptr);
   ctx_.shutdown();
@@ -271,8 +272,8 @@ bool Renderer::createPasses() {
     at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     at[1] = at[0];
     at[1].format = depthFormat_;
-    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;   // sampled by the AO pass
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     VkAttachmentReference cref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference dref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sp{};
@@ -286,19 +287,20 @@ bool Renderer::createPasses() {
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT),
-        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)};
+        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT)};
     VkRenderPassCreateInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     ri.attachmentCount = 2; ri.pAttachments = at; ri.subpassCount = 1; ri.pSubpasses = &sp; ri.dependencyCount = 2; ri.pDependencies = deps;
     VK_CHECK(vkCreateRenderPass(dev, &ri, nullptr, &scenePass_));
   }
   // blur / composite share structure (single colour attachment)
   auto makeColorPass = [&](VkFormat fmt, VkImageLayout finalLayout, VkPipelineStageFlags dstStage, VkAccessFlags dstAccess,
-                           VkRenderPass* out) {
+                           VkRenderPass* out, bool clear = false) {
     VkAttachmentDescription a{};
     a.format = fmt;
     a.samples = VK_SAMPLE_COUNT_1_BIT;
-    a.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     a.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -319,6 +321,8 @@ bool Renderer::createPasses() {
   };
   makeColorPass(hdrFormat_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_SHADER_READ_BIT, &blurPass_);
+  makeColorPass(VK_FORMAT_R8G8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT, &aoPass_, true);
   if (cfg_.headless)
     makeColorPass(outFormat_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                   &compositePass_);
@@ -437,7 +441,7 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
   gi.pViewportState = &vp;
   gi.pRasterizationState = &rs;
   gi.pMultisampleState = &ms;
-  gi.pDepthStencilState = (rp == compositePass_ || rp == blurPass_) ? nullptr : &ds;
+  gi.pDepthStencilState = (rp == compositePass_ || rp == blurPass_ || rp == aoPass_) ? nullptr : &ds;
   gi.pColorBlendState = (fs ? &cb : (const VkPipelineColorBlendStateCreateInfo*)&cb);
   gi.pDynamicState = &dsi;
   gi.layout = layout;
@@ -468,10 +472,12 @@ bool Renderer::createLayoutsAndPipelines() {
                           VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
   pipeBlurDown_ = buildPipeline("fullscreen.vert.spv", "blur_down.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeBlurUp_ = buildPipeline("fullscreen.vert.spv", "blur_up.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeAo_ = buildPipeline("fullscreen.vert.spv", "ssao.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeAoBlur_ = buildPipeline("fullscreen.vert.spv", "ssao_blur.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeComposite_ = buildPipeline("fullscreen.vert.spv", "composite.frag.spv", compositePass_, plComposite_, 0, false, false, LEQ, false,
                                  VK_CULL_MODE_NONE);
   return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_ && pipeMesh_ &&
-         pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_;
+         pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_ && pipeAo_ && pipeAoBlur_;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -713,6 +719,14 @@ void Renderer::destroyRenderTargets() {
   ctx_.destroyImage(shadowMap_);
   ctx_.destroyImage(sceneColor_);
   ctx_.destroyImage(sceneDepth_);
+  if (aoFbA_) vkDestroyFramebuffer(dev, aoFbA_, nullptr);
+  if (aoFbB_) vkDestroyFramebuffer(dev, aoFbB_, nullptr);
+  aoFbA_ = aoFbB_ = VK_NULL_HANDLE;
+  if (aoDepthSet_) vkFreeDescriptorSets(dev, pool_, 1, &aoDepthSet_);
+  if (aoBlurSet_) vkFreeDescriptorSets(dev, pool_, 1, &aoBlurSet_);
+  aoDepthSet_ = aoBlurSet_ = VK_NULL_HANDLE;
+  ctx_.destroyImage(aoA_);
+  ctx_.destroyImage(aoB_);
   for (auto* v : {&blurDown_, &blurUp_}) {
     for (auto& b : *v) {
       if (b.fb) vkDestroyFramebuffer(dev, b.fb, nullptr);
@@ -765,7 +779,9 @@ void Renderer::createRenderTargets() {
 
   sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+  aoSupported_ = depthFormat_ == VK_FORMAT_D32_SFLOAT;
+  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_,
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (aoSupported_ ? VK_IMAGE_USAGE_SAMPLED_BIT : 0),
                                  depthFormat_ == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_ASPECT_DEPTH_BIT
                                                                        : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
   VkImageView atts[2] = {sceneColor_.view, sceneDepth_.view};
@@ -797,24 +813,50 @@ void Renderer::createRenderTargets() {
   for (int i = 1; i <= 4; ++i) blurDown_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));
   for (int i = 3; i >= 1; --i) blurUp_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));  // sizes of down[2], down[1], down[0]
 
-  // composite set: scene + final blurred level
-  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  ai.descriptorPool = pool_;
-  ai.descriptorSetCount = 1;
-  ai.pSetLayouts = &layoutTex2_;
-  VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &compositeSet_));
-  VkDescriptorImageInfo ii[2] = {{lin, sceneColor_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                 {lin, blurUp_.back().img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-  VkWriteDescriptorSet w[2]{};
-  for (int i = 0; i < 2; ++i) {
-    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[i].dstSet = compositeSet_;
-    w[i].dstBinding = (uint32_t)i;
-    w[i].descriptorCount = 1;
-    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w[i].pImageInfo = &ii[i];
+  // half-resolution AO targets (depth -> raw AO -> depth-aware blur); the composite samples the blurred one
+  aoW_ = std::max(1u, sceneW_ / 2); aoH_ = std::max(1u, sceneH_ / 2);
+  auto mkAo = [&](Image& img, VkFramebuffer& fb) {
+    img = ctx_.createImage(aoW_, aoH_, 1, 1, VK_FORMAT_R8G8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT);
+    VkFramebufferCreateInfo bf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    bf.renderPass = aoPass_;
+    bf.attachmentCount = 1;
+    bf.pAttachments = &img.view;
+    bf.width = aoW_; bf.height = aoH_; bf.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(dev, &bf, nullptr, &fb));
+  };
+  mkAo(aoA_, aoFbA_);
+  mkAo(aoB_, aoFbB_);
+  VkSampler nearS = getSampler(SamplerKind::ClampNearest);
+  auto allocSet = [&](VkDescriptorSetLayout l, std::initializer_list<VkDescriptorImageInfo> infos) {
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &l;
+    VkDescriptorSet set;
+    VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &set));
+    std::vector<VkDescriptorImageInfo> ii(infos);
+    std::vector<VkWriteDescriptorSet> w(ii.size());
+    for (size_t i = 0; i < ii.size(); ++i) {
+      w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      w[i].dstSet = set;
+      w[i].dstBinding = (uint32_t)i;
+      w[i].descriptorCount = 1;
+      w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      w[i].pImageInfo = &ii[i];
+    }
+    vkUpdateDescriptorSets(dev, (uint32_t)w.size(), w.data(), 0, nullptr);
+    return set;
+  };
+  const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  if (aoSupported_) {
+    VkDescriptorImageInfo depthInfo{nearS, sceneDepth_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    aoDepthSet_ = allocSet(layoutTex2_, {depthInfo, depthInfo});
+    aoBlurSet_ = allocSet(layoutTex2_, {depthInfo, VkDescriptorImageInfo{lin, aoA_.view, RO}});
   }
-  vkUpdateDescriptorSets(dev, 2, w, 0, nullptr);
+  // composite set: scene + final blurred level + AO / sky mask
+  compositeSet_ = allocSet(layoutTex3_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
+                                         VkDescriptorImageInfo{lin, aoB_.view, RO}});
 }
 
 void Renderer::setRenderScale(float s) {
@@ -909,13 +951,13 @@ bool Renderer::createSwapchain(uint32_t w, uint32_t h) {
 
   if (formatChanged) {
     // (Re)build passes and pipelines for the chosen output format.
-    VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
+    VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_, aoPass_};
     VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
                           pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
-                          pipeShadowSkinned_};
+                          pipeShadowSkinned_, pipeAo_, pipeAoBlur_};
     for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
     for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
-    shadowPass_ = scenePass_ = blurPass_ = compositePass_ = VK_NULL_HANDLE;
+    shadowPass_ = scenePass_ = blurPass_ = compositePass_ = aoPass_ = VK_NULL_HANDLE;
     if (!createPasses() || !createLayoutsAndPipelines()) return false;
   }
   for (uint32_t i = 0; i < n; ++i) {
@@ -1176,6 +1218,40 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdEndRenderPass(cb);
   }
 
+  // ---- ambient occlusion + sky mask (half resolution). When off the target is only cleared to "fully visible".
+  const bool doAo = aoSupported_ && (fd.aoStrength > 0.001f || fd.shaftIntensity > 0.001f);
+  {
+    auto aoPass = [&](VkFramebuffer fb, VkPipeline pipe, VkDescriptorSet set, bool draw) {
+      VkClearValue cv{};
+      cv.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+      VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+      rb.renderPass = aoPass_;
+      rb.framebuffer = fb;
+      rb.renderArea = {{0, 0}, {aoW_, aoH_}};
+      rb.clearValueCount = 1;
+      rb.pClearValues = &cv;
+      vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+      if (draw) {
+        VkViewport vp{0, 0, (float)aoW_, (float)aoH_, 0, 1};
+        VkRect2D sc{{0, 0}, {aoW_, aoH_}};
+        vkCmdSetViewport(cb, 0, 1, &vp);
+        vkCmdSetScissor(cb, 0, 1, &sc);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plAo_, 1, 1, &set, 0, nullptr);
+        float pc[8] = {fd.nearZ, fd.farZ, fd.tanHalfX, fd.tanHalfY, fd.aoRadius, std::max(fd.aoStrength, 0.0f) * 1.6f + 0.4f, 1.0f / aoW_, 1.0f / aoH_};
+        vkCmdPushConstants(cb, plAo_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
+        vkCmdDraw(cb, 3, 1, 0, 0);
+      }
+      vkCmdEndRenderPass(cb);
+    };
+    if (doAo) {
+      aoPass(aoFbA_, pipeAo_, aoDepthSet_, true);
+      aoPass(aoFbB_, pipeAoBlur_, aoBlurSet_, true);
+    } else {
+      aoPass(aoFbB_, VK_NULL_HANDLE, VK_NULL_HANDLE, false);
+    }
+  }
+
   // ---- blur chain (Dual Kawase) only when needed
   bool doBlur = fd.blur > 0.01f;
   bool doBloom = fd.bloom > 0.001f;
@@ -1219,11 +1295,13 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
-    float pcv[16] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
+    float pcv[24] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
                      fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,
                      fd.globals.camPos.w,
-                     fd.lift.x, fd.lift.y, fd.lift.z, fd.lift.w, fd.gain.x, fd.gain.y, fd.gain.z, fd.gain.w};
-    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 64, pcv);
+                     fd.lift.x, fd.lift.y, fd.lift.z, fd.lift.w, fd.gain.x, fd.gain.y, fd.gain.z, fd.gain.w,
+                     doAo ? fd.aoStrength : 0.0f, doAo ? fd.shaftIntensity : 0.0f, fd.sunUV.x, fd.sunUV.y,
+                     fd.shaftColor.x, fd.shaftColor.y, fd.shaftColor.z, 0.0f};
+    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 96, pcv);
     vkCmdDraw(cb, 3, 1, 0, 0);
     if (!fd.uiBatches.empty()) {
       float upc[4] = {(float)outW_, (float)outH_, outIsSrgb_ ? 1.0f : 0.0f, 0};
