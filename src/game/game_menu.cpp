@@ -316,8 +316,8 @@ void Game::drawPauseMenu(float dt) {
   ui_.rect(0, 0, W, H, rgba(0.0f, 0.0f, 0.0f, (settings_.highContrast ? 0.78f : 0.58f) * fade));
 
   float px = W * 0.04f, py = H * 0.06f, pw = W * 0.92f, ph = H * 0.88f;
-  ui_.glow(px, py + 10, pw, ph, 26 * S, 36 * S, rgba(0, 0, 0, 0.5f * fade));
-  ui_.rect(px, py, pw, ph, withAlpha(c.hc ? kPanelHc : kPanel, fade), 26 * S, 1.2f * S, kLine);
+  // full-bleed: a dark veil that fades toward the right, no framed card
+  ui_.hgradient(0, 0, W, H, rgba(0, 0, 0, 0.55f * fade), rgba(0.02f, 0.01f, 0.05f, (c.hc ? 0.85f : 0.35f) * fade), 0);
 
   if (settingsOnly_) {
     // opened from the main menu: just the settings
@@ -337,10 +337,11 @@ void Game::drawPauseMenu(float dt) {
   float ty = py + 126 * S, th = 66 * S;
   for (int i = 0; i < 7; ++i) {
     bool sel = pauseTab_ == i, pr = pressedUi_ == 2300 + i;
-    if (sel || pr) ui_.rect(px + 24 * S, ty, lw - 12 * S, th - 8 * S, sel ? rgba(1, 1, 1, 0.09f) : rgba(1, 1, 1, 0.05f), 12 * S);
-    if (sel) ui_.rect(px + 24 * S, ty + 10 * S, 3 * S, th - 28 * S, kAcc, 1.5f * S);
-    ui_.icon(icons[i], px + 62 * S, ty + (th - 8 * S) * 0.5f, 26 * S, sel ? kAcc : dimCol(c));
-    ui_.text(true, tabs[i], px + 92 * S, ty + (th - 8 * S) * 0.5f - 12 * S, 21 * S, sel ? kInk : dimCol(c), Align::Left);
+    float tw = ui_.textWidth(true, tabs[i], 24 * S) + 34 * S;
+    if (sel) ui_.hgradient(px + 24 * S, ty + 6 * S, tw, th - 20 * S, rgba(0.97f, 0.55f, 0.72f), rgba(1.0f, 0.70f, 0.42f), 4 * S);
+    else if (pr) ui_.rect(px + 24 * S, ty + 6 * S, tw, th - 20 * S, rgba(1, 1, 1, 0.12f), 4 * S);
+    ui_.text(true, tabs[i], px + 24 * S + 17 * S, ty + (th - 8 * S) * 0.5f - 15 * S, 24 * S, sel ? rgba(0.08f, 0.04f, 0.10f) : (c.hc ? kInk : rgba(1, 1, 1, 0.92f)), Align::Left);
+    (void)icons;
     uiRects_.push_back({Vec4(px + 24 * S, ty, lw - 12 * S, th - 8 * S), 2300 + i});
     ty += th;
   }

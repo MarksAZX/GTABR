@@ -426,6 +426,7 @@ class Game {
   int talkNpc_ = -1;
   Job job_;
   int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
+  float statusBottom_ = 200;
   int runMode_ = 0;
   float runIdleT_ = 0;
   float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit

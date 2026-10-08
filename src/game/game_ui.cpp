@@ -177,7 +177,12 @@ void Game::drawMinimap() {
   } else {
     ui_.map(mapTex_, cu, cv, span / (2.0f * mapExtent_), yaw, x, y, size, size, 18 * S, C(1, 1, 1, 0.96f * a));
   }
-  ui_.rect(x, y, size, size, 0, 18 * S, 2.5f * S, C(1, 1, 1, 0.55f * a));
+  // the map follows the hour: pale and soft by day, deep blue-violet at night
+  float hr = timeOfDay_;
+  float nf = clamp((std::fabs(hr - 12.5f) - 5.0f) / 2.0f, 0.0f, 1.0f);
+  ui_.rect(x, y, size, size, C(0.04f, 0.04f, 0.16f, 0.58f * nf * a), 18 * S);
+  ui_.rect(x, y, size, size, C(0.96f, 0.94f, 0.97f, 0.20f * (1.0f - nf) * a), 18 * S);
+  ui_.rect(x, y, size, size, 0, 18 * S, 2.5f * S, C(0.97f, 0.69f, 0.78f, 0.85f * a));
   Vec2 c{x + size * 0.5f, y + size * 0.5f};
   Vec2 right{std::cos(yaw), std::sin(yaw)}, fwd{std::sin(yaw), -std::cos(yaw)};
   auto marker = [&](Vec2 world, const char* icon, Color col, float sz, bool clampEdge) {
@@ -206,7 +211,21 @@ void Game::drawMinimap() {
         if (c.police && !c.despawn && c.state != NpcState::Dead) marker(c.pos, "dot", std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky, 16 * S, false);
     for (const Pickup& k : pickups_)
       if (k.active) marker({k.pos.x, k.pos.z}, weaponDef(k.weapon).icon, C(1.0f, 0.85f, 0.4f, 0.95f), 20 * S, false);
-    if (waypoint_.active) marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", kRed, 34 * S, true);
+    if (waypoint_.active) {
+      // route hint: a pink trail of dots toward the destination (straight line; follows the map rotation)
+      Vec2 rel = Vec2{waypoint_.pos.x, waypoint_.pos.z} - pos;
+      Vec2 m{rel.dot(right) * k, -rel.dot(fwd) * k};
+      float len = m.length(), half = size * 0.5f - 10 * S;
+      if (len > 1.0f) {
+        Vec2 dir = m * (1.0f / len);
+        for (float t = 22 * S; t < std::min(len, half * 1.4f); t += 13 * S) {
+          Vec2 q = dir * t;
+          if (std::fabs(q.x) > half || std::fabs(q.y) > half) break;
+          ui_.circle(c.x + q.x, c.y + q.y, 3.6f * S, C(0.97f, 0.69f, 0.78f, 0.95f * a));
+        }
+      }
+      marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", C(0.97f, 0.69f, 0.78f, 1), 34 * S, true);
+    }
     if (cityEvent_.active) marker({cityEvent_.pos.x, cityEvent_.pos.z}, "car", theme::kWarn, 26 * S, true);
   }
   // player heading wedge + dot
@@ -230,40 +249,47 @@ void Game::drawMinimap() {
 void Game::drawBars() {
   float S = uiScale();
   float a = (1.0f - 0.85f * wheel_.anim) * (0.55f + 0.45f * settings_.hudOpacity);
-  float x = 36 * S, y = 34 * S, w = 300 * S;
-  bool showSta = staminaShow_ > 0.0f;
-  float h = (showSta ? 124 : 104) * S;
-  ui_.glow(x, y + 5 * S, w, h, 22 * S, 16 * S, C(0, 0, 0, 0.30f * a));
-  ui_.rect(x, y, w, h, withAlpha(kGlass, a), 22 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
-  // row 1: clock + weather word on the left, wallet on the right
+  float x = 34 * S, y = 30 * S;
+  // soft dark scrim so the flat bars stay readable on bright ground; no card edges
+  ui_.glow(x - 8 * S, y - 4 * S, 300 * S, 170 * S, 40 * S, 50 * S, C(0, 0, 0, 0.34f * a));
+  // clock and wallet as plain text over the scene (soft shadow), no card
   int minutes = (int)(timeOfDay_ * 60.0f) % (24 * 60);
   char clk[16];
   std::snprintf(clk, sizeof(clk), "%02d:%02d", minutes / 60, minutes % 60);
-  ui_.text(true, clk, x + 22 * S, y + 12 * S, 30 * S, C(1, 1, 1, a), Align::Left);
+  const Color sh = C(0, 0, 0, 0.7f * a);
+  ui_.text(true, clk, x, y, 30 * S, C(1, 1, 1, a), Align::Left, sh, 0.12f);
   std::string money = fmtMoney((int)std::lround(moneyDisplay_));
-  ui_.text(true, money, x + w - 20 * S, y + 12 * S, 30 * S, withAlpha(moneyDeltaT_ > 0 ? (moneyDelta_ >= 0 ? kMint : kRed) : kWhite, a), Align::Right);
-  // row 2: health
+  float cw = ui_.textWidth(true, clk, 30 * S);
+  ui_.text(true, money, x + cw + 22 * S, y, 30 * S, withAlpha(moneyDeltaT_ > 0 ? (moneyDelta_ >= 0 ? kMint : kRed) : kWhite, a), Align::Left, sh, 0.12f);
+  // three flat bars, each with a round dark badge: health (pink), stamina (teal), experience (violet)
+  const Color kPink = C(0.97f, 0.69f, 0.78f, 1), kTeal = C(0.45f, 0.92f, 0.83f, 1), kViolet = C(0.65f, 0.55f, 0.98f, 1);
   float hv = clamp(player_.health / 100.0f, 0.0f, 1.0f);
   bool critical = hv < 0.30f;
-  float pulse = critical ? 0.65f + 0.35f * std::sin(realTime_ * 6.0f) : 1.0f;
-  Color hc = hv > 0.55f ? kMint : (hv > 0.30f ? theme::kWarn : kRed);
-  float by = y + 58 * S;
-  ui_.icon("heart", x + 32 * S, by + 5 * S, 22 * S, withAlpha(critical ? kRed : kMuted, a * pulse));
-  ui_.rect(x + 54 * S, by, w - 78 * S, 10 * S, C(1, 1, 1, 0.12f * a), 5 * S);
-  ui_.rect(x + 54 * S, by, (w - 78 * S) * hv, 10 * S, withAlpha(hc, a * pulse), 5 * S);
-  if (showSta) {
-    float sa = std::min(1.0f, staminaShow_) * a;
-    float sv = clamp(player_.stamina / 100.0f, 0.0f, 1.0f);
-    float sy = by + 28 * S;
-    ui_.icon("bolt", x + 32 * S, sy + 4 * S, 20 * S, withAlpha(kSky, sa));
-    ui_.rect(x + 54 * S, sy, w - 78 * S, 8 * S, C(1, 1, 1, 0.12f * sa), 4 * S);
-    ui_.rect(x + 54 * S, sy, (w - 78 * S) * sv, 8 * S, withAlpha(player_.runBoost > 0 ? kAccent : kSky, sa), 4 * S);
-  }
+  float pulse = critical ? 0.7f + 0.3f * std::sin(realTime_ * 6.0f) : 1.0f;
+  float sv = clamp(player_.stamina / 100.0f, 0.0f, 1.0f);
+  float xv = clamp(xp_ / (float)xpForNext(level_), 0.0f, 1.0f);
+  float barW = 250 * S, barH = 20 * S, rowGap = 14 * S, badge = 44 * S;
+  float by = y + 50 * S;
+  auto row = [&](int i, const char* icon, Color col, float frac, float al, const std::string& tag) {
+    float cy = by + i * (badge + rowGap) + badge * 0.5f;
+    ui_.circle(x + badge * 0.5f, cy, badge * 0.5f, C(0.13f, 0.13f, 0.16f, 0.88f * a * al), 0, 0);
+    ui_.icon(icon, x + badge * 0.5f, cy, 24 * S, withAlpha(col, a * al));
+    float bx = x + badge + 12 * S;
+    ui_.rect(bx, cy - barH / 2, barW, barH, C(0.05f, 0.05f, 0.07f, 0.55f * a * al), 3 * S);
+    ui_.rect(bx, cy - barH / 2, barW * frac, barH, withAlpha(col, a * al), 3 * S);
+    if (!tag.empty()) ui_.text(true, tag, bx + barW + 10 * S, cy - 11 * S, 20 * S, C(1, 1, 1, 0.85f * a * al), Align::Left, C(0, 0, 0, 0.7f * a * al), 0.12f);
+  };
+  row(0, "heart", critical ? kRed : kPink, hv, pulse, "");
+  float sa = staminaShow_ > 0 ? std::min(1.0f, staminaShow_) : 0.0f;
+  int rows = 1;
+  if (sa > 0.01f) { row(1, "bolt", player_.runBoost > 0 ? kAccent : kTeal, sv, sa, ""); rows = 2; }
+  row(rows, "star", kViolet, xv, 0.9f, "Nv " + std::to_string(level_));
+  statusBottom_ = by + (rows + 1) * (badge + rowGap);
   // floating wallet change
   if (moneyDeltaT_ > 0) {
     float k = clamp(moneyDeltaT_ / 2.2f, 0.0f, 1.0f);
     std::string d = (moneyDelta_ >= 0 ? "+" : "-") + fmtMoney(std::abs(moneyDelta_));
-    ui_.text(true, d, x + w - 20 * S, y + h + (6 + (1.0f - k) * 8) * S, 24 * S, withAlpha(moneyDelta_ >= 0 ? kMint : kRed, a * std::min(1.0f, k * 2.0f)), Align::Right);
+    ui_.text(true, d, x + cw + 22 * S + ui_.textWidth(true, money, 30 * S) + 14 * S, y + 4 * S - (1.0f - k) * 6 * S, 22 * S, withAlpha(moneyDelta_ >= 0 ? kMint : kRed, a * std::min(1.0f, k * 2.0f)), Align::Left, sh, 0.12f);
   }
 }
 
@@ -276,7 +302,7 @@ void Game::drawMoney() {
   // objective card under the status block
   if (waypoint_.active) {
     float d = (player_.pos - Vec2{waypoint_.pos.x, waypoint_.pos.z}).length();
-    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 32 * S + (moneyDeltaT_ > 0 ? 32 * S : 0);
+    float x = 34 * S, y = statusBottom_ + 6 * S;
     std::string dist = d >= 1000 ? fmtFloat(d / 1000.0f, 1) + " km" : std::to_string((int)d) + " m";
     if (job_.active) {
       int t = (int)std::max(0.0f, job_.timeLeft);
@@ -291,14 +317,6 @@ void Game::drawMoney() {
     ui_.text(false, job_.active ? (job_.timeLeft < 0 ? "ENTREGA ATRASADA" : "ENTREGA") : "OBJETIVO", x + 62 * S, y + 9 * S, 15 * S, withAlpha(kMuted, a), Align::Left);
     ui_.text(true, waypoint_.name, x + 62 * S, y + 27 * S, 24 * S, C(1, 1, 1, a), Align::Left);
     ui_.text(false, dist, x + w - 18 * S, y + 27 * S, 22 * S, withAlpha(job_.active && job_.timeLeft < 20 ? kRed : kAccent, a), Align::Right);
-  }
-  // level chip + thin XP bar, bottom of the status block
-  {
-    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 2 * S;
-    float frac = clamp(xp_ / (float)xpForNext(level_), 0.0f, 1.0f);
-    ui_.text(true, "Nv " + std::to_string(level_), x + 4 * S, y - 4 * S, 17 * S, withAlpha(kMuted, a), Align::Left);
-    ui_.rect(x + 62 * S, y + 6 * S, 110 * S, 4 * S, C(1, 1, 1, 0.12f * a), 2 * S);
-    ui_.rect(x + 62 * S, y + 6 * S, 110 * S * frac, 4 * S, withAlpha(kAccent, a), 2 * S);
   }
 }
 
