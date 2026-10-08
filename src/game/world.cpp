@@ -2021,7 +2021,26 @@ static void bakeProbes(World& w) {
         size_t base2 = ((size_t)(layer * 2 + 1) * pg.h + j) * pg.w * 4 + (size_t)i * 4;
         auto q = [](float a) { return (uint8_t)clamp(a * 255.0f + 0.5f, 0.0f, 255.0f); };
         pg.rgba[base + 0] = q(v[0]); pg.rgba[base + 1] = q(v[1]); pg.rgba[base + 2] = q(v[2]); pg.rgba[base + 3] = q(v[3]);
-        pg.rgba[base2 + 0] = q(v[4]); pg.rgba[base2 + 1] = q(v[5]); pg.rgba[base2 + 2] = 255; pg.rgba[base2 + 3] = 255;
+        // one-bounce colour: chromaticity of the surfaces around the probe (sand, lawn, dirt, paving, painted walls nearby),
+        // so light reflected from the ground and walls tints shadowed areas the way real bounce does
+        Vec3 acc{0, 0, 0};
+        float an = 0;
+        for (int sj = -1; sj <= 1; ++sj)
+          for (int si = -1; si <= 1; ++si) {
+            float sx = x + si * 3.0f, sz = z + sj * 3.0f;
+            Vec3 alb{0.42f, 0.42f, 0.42f};   // paving / concrete
+            bool found = false;
+            if (w.beach.contains(sx, sz)) { alb = {0.78f, 0.66f, 0.46f}; found = true; }
+            if (!found) for (const RectF& r : w.mapGreen) if (r.contains(sx, sz)) { alb = {0.30f, 0.46f, 0.22f}; found = true; break; }
+            if (!found) for (const auto& sc : w.social) if (sc.second == 1 && sc.first.contains(sx, sz)) { alb = {0.62f, 0.42f, 0.28f}; found = true; break; }
+            if (!found) for (const RectF& r : w.mapRoads) if (r.contains(sx, sz)) { alb = {0.24f, 0.24f, 0.25f}; found = true; break; }
+            if (!found) for (const RectF& r : w.mapBuildings) if (r.inflated(1.5f).contains(sx, sz)) { alb = {0.62f, 0.55f, 0.46f}; break; }
+            acc += alb;
+            an += 1;
+          }
+        acc = acc * (1.0f / std::max(1.0f, an));
+        float sumc = std::max(1e-3f, acc.x + acc.y + acc.z);
+        pg.rgba[base2 + 0] = q(v[4]); pg.rgba[base2 + 1] = q(v[5]); pg.rgba[base2 + 2] = q(acc.x / sumc); pg.rgba[base2 + 3] = q(acc.y / sumc);
       }
 }
 
@@ -2030,6 +2049,8 @@ void buildWorld(World& w, uint32_t seed) {
   w.seed = seed;
   static const char* kPropFiles[4] = {"data/models/mangueira.gmesh", "data/models/coqueiro.gmesh", "data/models/guardasol.gmesh", "data/models/chafariz.gmesh"};
   for (int i = 0; i < 4; ++i) w.propModelAvailable[i] = fileio::assetExists(kPropFiles[i]);
+  // the generated mango tree came out with a sparse, spiky crown (image-to-3D loses the leaf mass): keep the procedural canopy
+  w.propModelAvailable[0] = false;
   Gen g(w, seed);
   g.run();
   scatterDecals(w, seed);

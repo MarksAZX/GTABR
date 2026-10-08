@@ -1117,6 +1117,18 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       b.idle(6);
       b.shot("ultra_" + std::to_string((int)hour));
     }
+    {
+      // the beach at golden hour: sea reflections and refraction, coconut palms, parasols
+      const World& w = g.world();
+      if (w.coastSide >= 0) {
+        Vec2 dirs[4] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+        Vec2 d = dirs[w.coastSide];
+        g.teleportPlayer(Vec2{w.poiBeach.x, w.poiBeach.z} - d * 4.0f, yawFromDir(d));
+        g.setTimeOfDay(17.3f, 0.0f);
+        b.idle(80);
+        b.shot("ultra_beach");
+      }
+    }
     g.setTimeOfDay(12.0f, 0.0f);
     for (int i = 0; i < 6; ++i) { InputFrame in; in.look = {120, 0}; in.lookDragging = true; b.step(in, 1); }
     b.shot("ultra_turn_blur");

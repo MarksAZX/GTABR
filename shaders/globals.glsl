@@ -31,6 +31,7 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 post;        // x = motion blur, y = contact shadows, z = sharpening, w = volumetric clouds
   vec4 taa;         // x = history weight, yz = jitter (uv)
   vec4 look;        // x = film grain, y = chromatic aberration, z = vignette scale, w = golden-hour grade
+  vec4 water;       // x = sea level, y = coast side, z = shoreline, w = SSR on water
 } g;
 #ifdef GL_FRAGMENT_SHADER
 // Dynamic lights (up to 128) and per-tile light lists, written by the renderer every frame. std430: 128 x 3 vec4, then tiles of 33 uints.

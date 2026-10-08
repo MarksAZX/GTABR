@@ -150,6 +150,7 @@ void Game::setupGlobals(gfx::FrameData& fd) {
     }
     g.taa = {taaOn ? 0.9f : (st.taa ? 0.0001f : 0.0f), jit.x * 0.5f, jit.y * 0.5f, 0.0f};
     prevJitter_ = jit;
+    g.water = {world_.waterLevel, (float)world_.coastSide, world_.shoreline, (hi && settings_.reflections) ? 1.0f : 0.0f};
     g.look = {st.filmGrain ? 1.0f : 0.0f, st.chromAb ? 1.0f : 0.0f, st.vignette ? 1.0f : 0.0f, (float)st.colorStyle};
   }
   g.camPos = {cam_.eye().x, cam_.eye().y, cam_.eye().z, realTime_};

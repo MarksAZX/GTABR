@@ -7,6 +7,7 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 post;   // x = motion blur, y = contact shadows, z = sharpening
   vec4 taa;
   vec4 look;   // x = film grain, y = chromatic aberration, z = vignette scale, w = golden-hour grade
+  vec4 water;  // x = sea level, y = coast side, z = shoreline, w = SSR on water
 } g;
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
@@ -81,6 +82,42 @@ vec3 wetReflection(vec2 uv, float d, vec3 P) {
   return vec3(0.0);
 }
 
+// Screen-space reflection + refraction for the sea: mirror the view ray about the (rippled) water plane and march it against
+// the depth buffer; what is found on screen (buildings, palms, the pier, cars on the avenue) replaces the analytic sky reflection.
+bool isSea(vec3 wp) {
+  if (g.water.y < -0.5) return false;
+  if (abs(wp.y - g.water.x) > 0.55) return false;
+  int side = int(g.water.y + 0.5);
+  float c = side == 0 ? -wp.z : (side == 1 ? wp.x : (side == 2 ? wp.z : -wp.x));
+  return c > g.water.z - 0.5;
+}
+vec3 seaSSR(vec2 uv, vec3 P, vec3 Nv, out float hitW) {
+  hitW = 0.0;
+  vec3 I = normalize(P);
+  vec3 R = reflect(I, Nv);
+  if (R.z <= 0.02) return vec3(0.0);
+  float step0 = 0.6 + 0.04 * P.z;
+  float jitter = hash(uv * vec2(1733.0, 977.0) + pc.b.w);
+  float t = step0 * (0.3 + 0.7 * jitter);
+  for (int i = 0; i < 28; ++i) {
+    vec3 pos = P + R * t;
+    if (pos.z < pc.proj.x) break;
+    vec2 suv = vec2(pos.x / (pos.z * pc.proj.z), pos.y / (pos.z * pc.proj.w)) * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
+    float sd = texture(uDepth, suv).r;
+    if (sd < 0.99999) {
+      float diff = pos.z - linZ(sd);
+      if (diff > 0.0 && diff < 1.0 + 0.15 * pos.z) {
+        vec2 e = abs(suv - 0.5) * 2.0;
+        hitW = (1.0 - smoothstep(0.75, 1.0, max(e.x, e.y))) * (1.0 - float(i) / 28.0);
+        return min(texture(uScene, suv).rgb, vec3(30.0));
+      }
+    }
+    t += step0 * (1.0 + 0.14 * float(i));
+  }
+  return vec3(0.0);
+}
+
 void main() {
   // lens: slight chromatic aberration towards the edges (cheap, only 2 extra taps of the scene)
   vec2 qc = vUV - 0.5;
@@ -137,6 +174,33 @@ void main() {
       }
     }
     hdr *= 1.0 - occ * g.post.y * 0.55 * clamp(g.sunDir.w, 0.0, 1.0);
+  }
+  // the sea: refraction wobble + screen-space reflections of the shore
+  if (g.water.w > 0.5 && d0 < 0.99999) {
+    vec4 wp4 = g.invViewProj * vec4(vUV * 2.0 - 1.0, d0, 1.0);
+    vec3 wpos = wp4.xyz / wp4.w;
+    if (isSea(wpos)) {
+      float t = pc.b.w;
+      vec2 rip = vec2(sin(wpos.x * 1.7 + t * 1.9) + sin(wpos.z * 2.3 - t * 1.4), cos(wpos.z * 1.5 + t * 1.6) + sin(wpos.x * 2.9 + t * 1.1)) * 0.5;
+      float dist = length(wpos - g.camPos.xyz);
+      // refraction: the water body seen through moving ripples (strongest close to the camera)
+      vec2 ruv = vUV + rip * 0.0045 / (1.0 + dist * 0.05);
+      float rd = texture(uDepth, ruv).r;
+      if (rd < 0.99999) {
+        vec4 rw = g.invViewProj * vec4(ruv * 2.0 - 1.0, rd, 1.0);
+        if (isSea(rw.xyz / rw.w)) hdr = texture(uScene, ruv).rgb;
+      }
+      // reflection
+      vec3 Nw = normalize(vec3(rip.x * 0.06, 1.0, rip.y * 0.06));
+      vec3 nvv = mat3(g.view) * Nw;
+      vec3 Nv = vec3(nvv.x, -nvv.y, -nvv.z);
+      vec3 P = viewPos(vUV, linZ(d0));
+      float hw;
+      vec3 refl = seaSSR(vUV, P, normalize(Nv), hw);
+      float NoV = clamp(dot(-normalize(P), normalize(Nv)), 0.0, 1.0);
+      float fres = 0.02 + 0.98 * pow(1.0 - NoV, 5.0);
+      hdr = mix(hdr, refl, hw * clamp(fres * 1.6, 0.0, 0.85));
+    }
   }
   if (pc.refl.w > 0.02) {
     float dd = texture(uDepth, vUV).r;

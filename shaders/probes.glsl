@@ -17,9 +17,12 @@ vec3 probeAmbient(vec3 P, vec3 N, out float skyVis) {
   float vy = N.y > 0.0 ? a.z : a.w;
   float vz = N.z > 0.0 ? b.x : b.y;
   vec3 side = mix(g.ambGround.rgb, g.ambSky.rgb, 0.5);
-  vec3 colY = N.y > 0.0 ? g.ambSky.rgb : g.ambGround.rgb;
+  vec3 colY = N.y > 0.0 ? g.ambSky.rgb : g.ambGround.rgb * mix(vec3(1.0), clamp(vec3(b.z, b.w, max(0.0, 1.0 - b.z - b.w)) * 3.0, 0.4, 1.8), 0.75);
   // bounce light where the sky is hidden: walls and ground reflect part of what hits them
-  vec3 bounce = g.ambGround.rgb * 0.85 + g.sunColor.rgb * 0.02;
+  // b.zw: chromaticity of the surrounding surfaces (baked); turns the grey bounce into coloured one-bounce light
+  vec3 tint = vec3(b.z, b.w, max(0.0, 1.0 - b.z - b.w)) * 3.0;
+  tint = mix(vec3(1.0), clamp(tint, 0.4, 1.8), 0.75);
+  vec3 bounce = (g.ambGround.rgb * 0.85 + g.sunColor.rgb * 0.035 * max(g.sunDir.y, 0.0)) * tint;
   vec3 amb = w.x * (vx * side + (1.0 - vx) * bounce) + w.y * (vy * colY + (1.0 - vy) * bounce) + w.z * (vz * side + (1.0 - vz) * bounce);
   skyVis = dot(w, vec3(vx, vy, vz));
   return amb;

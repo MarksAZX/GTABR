@@ -73,6 +73,7 @@ struct GlobalsUBO {
   Vec4 post;           // x = motion blur, y = contact shadows, z = sharpening, w = volumetric clouds (0 / 1)
   Vec4 taa;            // x = history weight (0 = off / reset), yz = sub-pixel jitter (uv), w = unused
   Vec4 look;           // x = film grain, y = chromatic aberration, z = vignette scale, w = golden-hour grade amount
+  Vec4 water;          // x = sea level, y = coast side (-1 none), z = shoreline coordinate, w = screen-space water reflections (0/1)
 };
 
 enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4, ASTC8x8_SRGB = 5 };
