@@ -104,6 +104,9 @@ struct Bot {
       if (i % 45 == 0) { if (i > 0 && (v.pos - lastPos).length() < 0.4f && thr > 0.2f) reverse = 35; lastPos = v.pos; }
     }
     const Vehicle& v = g.vehicles()[g.player().vehicle];
+    for (const Collider& c : g.world().colliders)
+      if (std::fabs((c.box.mn.x + c.box.mx.x) * 0.5f - v.pos.x) < 5 && std::fabs((c.box.mn.z + c.box.mx.z) * 0.5f - v.pos.y) < 5)
+        LOGW("  near collider kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y);
     LOGW("driveTo (%.1f, %.1f) timed out: car at (%.2f, %.2f) yaw %.2f speed %.2f fuel %.1f", target.x, target.y, v.pos.x, v.pos.y, v.yaw, v.speed, v.fuel);
     return false;
   }
@@ -117,7 +120,7 @@ struct Bot {
       bool last = i + 1 == route.size();
       if (!last) {
         Vec2 d = p - prev;
-        if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 2.4f; }
+        if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 1.5f; }
         if ((p - g.vehicles()[g.player().vehicle].pos).length() < 5.0f) { prev = route[i]; continue; }
         if (!driveTo(p, 4.5f, maxFrames, maxSpeed)) return false;
       } else if (!driveTo(p, tol, maxFrames, std::min(maxSpeed, 8.0f))) return false;
@@ -278,7 +281,19 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(g.wantedLevel() >= 2, "repeated violent crimes raise the wanted level");
     float h0 = p.health;
     int frames = 0;
-    while (!p.dead && frames < 30 * 120) { b.idle(1); ++frames; }
+    while (!p.dead && frames < 30 * 120) {
+      // the police search the last reported spot; walk toward the nearest officer / patrol car so they can see us
+      Vec2 tgt = p.pos; float bd = 1e9f;
+      for (const Npc& c : g.npcs()) if (c.police && !c.despawn && c.state != NpcState::Dead && (c.pos - p.pos).length() < bd) { bd = (c.pos - p.pos).length(); tgt = c.pos; }
+      for (const Vehicle& v : g.vehicles()) if (v.police && !v.despawn && (v.pos - p.pos).length() < bd) { bd = (v.pos - p.pos).length(); tgt = v.pos; }
+      if (bd > 14.0f && bd < 1e8f) {
+        float yaw = g.camera().yaw();
+        Vec2 f{std::sin(yaw), -std::cos(yaw)}, rt{std::cos(yaw), std::sin(yaw)}, n = (tgt - p.pos).normalized();
+        InputFrame mv; mv.move = {n.dot(rt), n.dot(f)}; mv.runHeld = true;
+        b.step(mv, 1);
+      } else b.idle(1);
+      ++frames;
+    }
     LOGI("player health %.0f -> %.0f (dead %d) after %.1f s of police response, cops %d", h0, p.health, (int)p.dead, frames / 30.0f, g.aliveCops());
     CHECK(g.audio().playedCount("pistol") > 0, "police fired their weapons");
     CHECK(p.dead || p.health < h0, "police fire actually hits the player");
