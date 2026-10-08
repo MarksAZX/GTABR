@@ -1155,6 +1155,13 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       }
       std::vector<int> ids; W0.queryColliders(30, 192, 46, 214, ids);
       for (int id : ids) { const Collider& c = W0.colliders[id]; LOGI("col kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y); }
+      for (size_t e = 0; e < W0.redges.size(); ++e) {
+        const RoadEdge& r = W0.redges[e];
+        bool near = false; for (const Vec2& p : r.pts) if ((p - Vec2{35, 210}).length() < 25) near = true;
+        if (!near) continue;
+        std::string ps; for (const Vec2& p : r.pts) ps += "(" + std::to_string((int)p.x) + "," + std::to_string((int)p.y) + ")";
+        LOGI("edge %zu kind %d hw %.1f a %d b %d: %s", e, (int)r.kind, r.hw, r.a, r.b, ps.c_str());
+      }
       Vec2 q = W0.nearestRoadPointNet({37.8f, 199.9f}); LOGI("nearest road to stuck car: %.1f,%.1f landDist %.1f", q.x, q.y, W0.landDist(37.8f, 199.9f));
       return true;
     }
