@@ -40,3 +40,11 @@
 #define MAT_BRICK_RAW 38
 #define MAT_APT_TOWER 39
 #define MAT_BARK 40
+#define MAT_MUD 41
+#define MAT_PAVER 42
+#define MAT_COBBLE 43
+#define MAT_DIRT_ROAD 44
+#define MAT_FAVELA_WALL 45
+#define MAT_TIN 46
+#define MAT_RICH_VILLA 47
+#define MAT_RICH_TOWER 48

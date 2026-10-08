@@ -119,6 +119,8 @@ struct World {
   float waterLevel = 0.0f;
   std::vector<RoadLine> roads;
   std::vector<std::pair<RectF, District>> blocks;
+  std::vector<std::pair<RectF, int>> social;   // per block: 0 middle class, 1 self-built quarter, 2 wealthy quarter
+  int socialAt(float x, float z) const { for (const auto& s : social) if (s.first.contains(x, z)) return s.second; return 0; }
   std::string cityName;
 
   // chunk meshes (CPU) -> GPU handles are created by the game after generation

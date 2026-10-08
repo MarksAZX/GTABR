@@ -16,7 +16,7 @@ uint32_t MeshBuilder::vert(const Vec3& p0, const Vec3& n0, const Vec2& uv, int l
   w.n[3] = (int8_t)std::lround(clamp(emissive_, 0.0f, 1.0f) * 127);
   w.uv[0] = uv.x; w.uv[1] = uv.y;
   w.color = packRGBA8(tint_.x, tint_.y, tint_.z, ao);
-  w.layer = (float)layer;
+  w.layer = (float)layer + 0.4f * clamp(mud_, 0.0f, 1.0f);   // fractional part (< 0.5) = mud amount; whole part = material layer
   m_->v.push_back(w);
   m_->bounds.expand(p);
   return (uint32_t)m_->v.size() - 1;
@@ -33,6 +33,17 @@ void MeshBuilder::groundRect(float x0, float z0, float x1, float z1, float y, in
   // seen from above: counter-clockwise = (x0,z1) -> (x1,z1) -> (x1,z0) -> (x0,z0)
   quad({x0, y, z1}, {x1, y, z1}, {x1, y, z0}, {x0, y, z0}, {x0 / tile + uOff, z1 / tile + vOff}, {x1 / tile + uOff, z1 / tile + vOff},
        {x1 / tile + uOff, z0 / tile + vOff}, {x0 / tile + uOff, z0 / tile + vOff}, layer);
+}
+
+void MeshBuilder::groundRectMud(float x0, float z0, float x1, float z1, float y, int layer, float tile, float mNW, float mNE, float mSE, float mSW) {
+  // corners in the same order as groundRect: (x0,z1) (x1,z1) (x1,z0) (x0,z0); "N" is the z0 side
+  Vec3 n{0, 1, 0};
+  mud_ = mSW; uint32_t i0 = vert({x0, y, z1}, n, {x0 / tile, z1 / tile}, layer, 1.0f);
+  mud_ = mSE; uint32_t i1 = vert({x1, y, z1}, n, {x1 / tile, z1 / tile}, layer, 1.0f);
+  mud_ = mNE; uint32_t i2 = vert({x1, y, z0}, n, {x1 / tile, z0 / tile}, layer, 1.0f);
+  mud_ = mNW; uint32_t i3 = vert({x0, y, z0}, n, {x0 / tile, z0 / tile}, layer, 1.0f);
+  mud_ = 0;
+  m_->idx.insert(m_->idx.end(), {i0, i1, i2, i0, i2, i3});
 }
 
 void MeshBuilder::roofRect(float x0, float z0, float x1, float z1, float y, int layer, float tile) { groundRect(x0, z0, x1, z1, y, layer, tile); }

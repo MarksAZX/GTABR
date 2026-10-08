@@ -30,6 +30,9 @@ class MeshBuilder {
             const Vec2& ud, int layer, float aoA = 1, float aoB = 1, float aoC = 1, float aoD = 1);
   // Horizontal top face with world-space tiling (tile = metres per texture repeat).
   void groundRect(float x0, float z0, float x1, float z1, float y, int layer, float tile, float uOff = 0, float vOff = 0);
+  // ground quad whose mud/dirt amount (0..1) varies per corner: the shader dissolves the surface into mud with it (soft transitions)
+  void groundRectMud(float x0, float z0, float x1, float z1, float y, int layer, float tile, float mNW, float mNE, float mSE, float mSW);
+  void setMud(float m) { mud_ = m; }
   void roofRect(float x0, float z0, float x1, float z1, float y, int layer, float tile);
   // Vertical wall from (x0,z0) to (x1,z1) (left -> right as seen from the outside), bottom y0, top y1.
   void wall(float x0, float z0, float x1, float z1, float y0, float y1, int layer, float u0, float u1, float v0, float v1,
@@ -54,6 +57,7 @@ class MeshBuilder {
 
  private:
   uint32_t vert(const Vec3& p, const Vec3& n, const Vec2& uv, int layer, float ao);
+  float mud_ = 0;
   void tri(const Vec3& p0, const Vec3& n0, const Vec2& u0, const Vec3& p1, const Vec3& n1, const Vec2& u1, const Vec3& p2, const Vec3& n2,
            const Vec2& u2, int layer, float ao0, float ao1, float ao2, const Vec3& outward);
   MeshData* m_;

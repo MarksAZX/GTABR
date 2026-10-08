@@ -23,6 +23,7 @@ struct Facade {
   float height;      // wall height
   bool flat;         // flat roof (laje) vs gable tile roof
   float aspectH;     // preferred height for this facade (stretch control)
+  int roofLayer = -1;   // forced roof material (corrugated zinc in the self-built quarters)
 };
 
 // Lot-local frame for the special places: u runs along the street frontage, v goes from the street into the lot.
@@ -182,7 +183,7 @@ class Gen {
 
   void houseBuilding(const RectF& r, int front, const Facade& f, bool details = true) {
     float h = f.height;
-    sideLayer_ = (f.layer == mat::house_periferia_a || f.layer == mat::house_periferia_b) ? mat::brick_raw : mat::wall_paint;
+    sideLayer_ = (f.layer == mat::house_periferia_a || f.layer == mat::house_periferia_b || f.layer == mat::favela_wall) ? mat::brick_raw : mat::wall_paint;
     wallsFor(r, h, front, f.layer, f.sideTint);
     sideLayer_ = mat::wall_paint;
     collider(AABB({r.x0, 0, r.z0}, {r.x1, h + 1.5f, r.z1}), ColKind::Building);
@@ -191,7 +192,7 @@ class Gen {
     float cx = r.cx(), cz = r.cz();
     if (f.flat) {
       b.setTint({0.82f, 0.82f, 0.82f});
-      b.roofRect(r.x0, r.z0, r.x1, r.z1, h, mat::roof_laje, 3.0f);
+      b.roofRect(r.x0, r.z0, r.x1, r.z1, h, f.roofLayer >= 0 ? f.roofLayer : mat::roof_laje, 3.0f);
       b.setTint(f.sideTint);
       float p = 0.22f, ph = 0.7f;
       MeshBuilder pb = b;
@@ -225,7 +226,7 @@ class Gen {
       bool ridgeAlongX = (front == N || front == S);
       float rise = (ridgeAlongX ? (r.z1 - r.z0) : (r.x1 - r.x0)) * 0.22f;
       b.setTint(rng_.chance(0.8f) ? Vec3{1, 1, 1} : Vec3{0.85f, 0.85f, 0.85f});
-      int roofLayer = rng_.chance(0.78f) ? mat::roof_tile : mat::roof_fiber;
+      int roofLayer = f.roofLayer >= 0 ? f.roofLayer : (rng_.chance(0.78f) ? mat::roof_tile : mat::roof_fiber);
       float ov = 0.35f;
       b.gableRoof(r.x0, r.z0, r.x1, r.z1, h, rise, ridgeAlongX, roofLayer, 2.6f, ov);
       b.setTint(f.sideTint);
@@ -244,7 +245,7 @@ class Gen {
 
   // Front wall + gate of a house lot (muro com portao), on the sidewalk edge.
   void frontWall(const RectF& lot, int front, Vec3 tint) {
-    const float h = rng_.range(1.4f, 2.1f), t = 0.18f;
+    const float h = rich_ ? rng_.range(2.3f, 3.0f) : rng_.range(1.4f, 2.1f), t = 0.18f;
     float gateW = 2.8f;
     auto seg = [&](float x0, float z0, float x1, float z1) {
       if (std::fabs(x1 - x0) < 0.2f && std::fabs(z1 - z0) < 0.2f) return;
@@ -275,6 +276,11 @@ class Gen {
     // kind 0 house, 1 sobrado, 2 apartment, 3 shop-house, 4 tall apartment, 5 warehouse
     switch (kind) {
       case 0: {
+        if (rich_) {
+          static const Facade v[3] = {{mat::rich_villa, {1.0f, 1.0f, 1.0f}, 6.4f, true, 6.4f}, {mat::rich_villa, {0.96f, 0.94f, 0.9f}, 7.2f, true, 7.2f},
+                                      {mat::house_modern, {0.95f, 0.95f, 0.93f}, 6.0f, true, 6.0f}};
+          return v[rng.irange(0, 2)];
+        }
         if (periphery_ && rng.chance(0.75f)) {
           // self-built periphery houses: raw brick sides, flat slab roof with rebar, often a second floor
           static const Facade p[2] = {{mat::house_periferia_a, {0.72f, 0.42f, 0.3f}, 4.6f, true, 4.6f},
@@ -286,6 +292,7 @@ class Gen {
         return f[rng.irange(0, 3)];
       }
       case 1: {
+        if (rich_) return Facade{mat::rich_villa, {1.0f, 1.0f, 1.0f}, 8.2f, true, 8.2f};
         static const Facade f[2] = {{mat::sobrado_pink, {0.9f, 0.55f, 0.5f}, 7.4f, true, 7.4f}, {mat::house_modern, {0.92f, 0.92f, 0.9f}, 6.6f, true, 6.6f}};
         return f[rng.irange(0, 1)];
       }
@@ -295,6 +302,7 @@ class Gen {
         return f[rng.irange(0, 2)];
       }
       case 4: {
+        if (rich_ && rng.chance(0.7f)) { Facade t{mat::rich_tower, {1.0f, 0.97f, 0.92f}, 20.0f * rng.range(0.9f, 1.3f), true, 20.0f}; return t; }
         if (rng.chance(0.45f)) { Facade t{mat::apt_tower, {0.86f, 0.8f, 0.68f}, 26.0f * rng.range(0.85f, 1.3f), true, 26.0f}; return t; }
         static const Facade f[3] = {{mat::apt_beige, {0.85f, 0.78f, 0.58f}, 21.0f, true, 21.0f}, {mat::apt_bands, {0.72f, 0.72f, 0.72f}, 24.0f, true, 24.0f},
                                     {mat::apt_green, {0.45f, 0.62f, 0.45f}, 18.0f, true, 18.0f}};
@@ -311,7 +319,7 @@ class Gen {
   void plotRow(Side side, float a, float b, float fixed, float depth, int tallness, bool walls) {
     float pos = a;
     while (b - pos > 5.0f) {
-      float wpl = tallness >= 2 ? rng_.range(10.0f, 15.0f) : rng_.range(7.0f, 10.5f);
+      float wpl = rich_ ? rng_.range(15.0f, 21.0f) : (tallness >= 2 ? rng_.range(10.0f, 15.0f) : rng_.range(7.0f, 10.5f));
       if (b - (pos + wpl) < 6.0f) wpl = b - pos;
       float d = depth + rng_.range(-1.0f, 1.0f);
       RectF lot;
@@ -334,7 +342,7 @@ class Gen {
       RectF r = lot;
       bool yard = (kind == 0 || kind == 1) && walls && d > 9.0f;
       if (yard) {
-        float inset = rng_.range(2.2f, 3.2f);
+        float inset = rich_ ? rng_.range(5.2f, 6.8f) : rng_.range(2.2f, 3.2f);
         switch (side) {
           case N: r.z0 += inset; break;
           case S: r.z1 -= inset; break;
@@ -343,6 +351,22 @@ class Gen {
         }
         // shrink the house a little sideways to leave a garage passage
         if (side == N || side == S) r.x1 -= std::min(2.0f, r.w() * 0.2f); else r.z1 -= std::min(2.0f, r.h() * 0.2f);
+        if (rich_) {
+          ground(RectF{lot.x0, lot.z0, lot.x1, lot.z1}, kH + 0.005f, mat::grass, 4.0f, {0.8f, 0.95f, 0.75f}, false);
+          // swimming pool in the front garden with a stone coping
+          float pw = 5.5f, pd = 2.6f;
+          RectF pool;
+          if (side == N) pool = {lot.x0 + 1.5f, lot.z0 + 1.5f, lot.x0 + 1.5f + pw, lot.z0 + 1.5f + pd};
+          else if (side == S) pool = {lot.x0 + 1.5f, lot.z1 - 1.5f - pd, lot.x0 + 1.5f + pw, lot.z1 - 1.5f};
+          else if (side == W) pool = {lot.x0 + 1.5f, lot.z0 + 1.5f, lot.x0 + 1.5f + pd, lot.z0 + 1.5f + pw};
+          else pool = {lot.x1 - 1.5f - pd, lot.z0 + 1.5f, lot.x1 - 1.5f, lot.z0 + 1.5f + pw};
+          if (rng_.chance(0.6f)) {
+            ground(pool.inflated(0.45f), kH + 0.012f, mat::pedra_port, 2.0f, {0.95f, 0.95f, 0.92f}, false);
+            MeshBuilder wb = mb(pool.cx(), pool.cz(), {0.25f, 0.62f, 0.72f});
+            wb.groundRect(pool.x0, pool.z0, pool.x1, pool.z1, kH + 0.02f, mat::water, 3.0f);
+            collider(AABB({pool.x0, 0, pool.z0}, {pool.x1, 0.5f, pool.z1}), ColKind::Prop);
+          }
+        } else
         ground(RectF{lot.x0, lot.z0, lot.x1, lot.z1}, kH + 0.005f, rng_.chance(0.5f) ? mat::tile_floor : mat::concrete, 2.5f, {0.9f, 0.88f, 0.85f}, false);
         frontWall(lot, front, f.sideTint * 0.95f);
         {
@@ -537,6 +561,161 @@ class Gen {
         paint({cx - hx - 4.6f, cz, cx - hx - 4.3f, cz + hz}, {0.95f, 0.95f, 0.92f});
         paint({cx + hx + 4.3f, cz - hz, cx + hx + 4.6f, cz}, {0.95f, 0.95f, 0.92f});
       }
+  }
+
+
+  // Ground quad (chunk-split like ground()) whose mud amount varies per corner: N = z0 side, W = x0 side.
+  void groundMud(RectF r, float y, int layer, float tile, float mNW, float mNE, float mSE, float mSW, Vec3 tint = {1, 1, 1}) {
+    if (r.x1 - r.x0 < 1e-3f || r.z1 - r.z0 < 1e-3f) return;
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+    auto at = [&](float x, float z) {
+      float u = (x - r.x0) / (r.x1 - r.x0), v = (z - r.z0) / (r.z1 - r.z0);
+      return lerp(lerp(mNW, mNE, u), lerp(mSW, mSE, u), v);
+    };
+    int cx0 = (int)std::floor(r.x0 / World::kChunk), cx1 = (int)std::floor((r.x1 - 1e-4f) / World::kChunk);
+    int cz0 = (int)std::floor(r.z0 / World::kChunk), cz1 = (int)std::floor((r.z1 - 1e-4f) / World::kChunk);
+    for (int cz = cz0; cz <= cz1; ++cz)
+      for (int cx = cx0; cx <= cx1; ++cx) {
+        float x0 = std::max(r.x0, cx * World::kChunk), x1 = std::min(r.x1, (cx + 1) * World::kChunk);
+        float z0 = std::max(r.z0, cz * World::kChunk), z1 = std::min(r.z1, (cz + 1) * World::kChunk);
+        if (x1 - x0 < 1e-4f || z1 - z0 < 1e-4f) continue;
+        MeshBuilder b = mb((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, tint);
+        b.groundRectMud(x0, z0, x1, z1, y, layer, tile, at(x0, z0), at(x1, z0), at(x1, z1), at(x0, z1));
+      }
+  }
+
+  // Self-built quarter: no pavements, dirt streets running into mud, tightly packed small houses (raw brick, patchwork paint,
+  // zinc roofs, extra storeys) separated by narrow alleys (vielas).
+  void blockPoor(const RectF& B) {
+    sidewalkBands(B, true, true, true, true, mat::dirt_road);
+    RectF L = lotOf(B);
+    ground(L, kH, mat::dirt_road, 4.0f, {0.95f, 0.9f, 0.84f});
+    w_.walkable.push_back(L);
+    w_.mapWalk.push_back(L);
+    // soft transitions: asphalt -> mud on the road side of every edge, mud -> dirt on the block side
+    const float rw = 3.4f;
+    groundMud({B.x0, B.z0 - rw, B.x1, B.z0}, 0.004f, mat::asphalt, 6.0f, 0, 0, 1, 1, {0.9f, 0.9f, 0.9f});
+    groundMud({B.x0, B.z1, B.x1, B.z1 + rw}, 0.004f, mat::asphalt, 6.0f, 1, 1, 0, 0, {0.9f, 0.9f, 0.9f});
+    groundMud({B.x0 - rw, B.z0, B.x0, B.z1}, 0.004f, mat::asphalt, 6.0f, 0, 1, 1, 0, {0.9f, 0.9f, 0.9f});
+    groundMud({B.x1, B.z0, B.x1 + rw, B.z1}, 0.004f, mat::asphalt, 6.0f, 1, 0, 0, 1, {0.9f, 0.9f, 0.9f});
+    groundMud({B.x0, B.z0, B.x1, B.z0 + SW}, kH + 0.004f, mat::dirt_road, 4.0f, 1, 1, 0.1f, 0.1f);
+    groundMud({B.x0, B.z1 - SW, B.x1, B.z1}, kH + 0.004f, mat::dirt_road, 4.0f, 0.1f, 0.1f, 1, 1);
+    groundMud({B.x0, B.z0 + SW, B.x0 + SW, B.z1 - SW}, kH + 0.004f, mat::dirt_road, 4.0f, 1, 0.1f, 0.1f, 1);
+    groundMud({B.x1 - SW, B.z0 + SW, B.x1, B.z1 - SW}, kH + 0.004f, mat::dirt_road, 4.0f, 0.1f, 1, 1, 0.1f);
+    // bands of houses: the first faces the north street, the last the south street, the ones between face a horizontal alley
+    float z = L.z0 + 0.4f;
+    int band = 0;
+    std::vector<std::pair<float, float>> bandsZ;   // z0, depth
+    while (z < L.z1 - 7.0f) {
+      float d = rng_.range(7.5f, 10.0f);
+      if (z + d > L.z1 - 0.4f) d = L.z1 - 0.4f - z;
+      if (d < 5.0f) break;
+      bandsZ.push_back({z, d});
+      z += d + rng_.range(1.9f, 2.5f);   // horizontal alley
+      ++band;
+    }
+    if (!bandsZ.empty()) {   // stretch the last band to the south edge
+      auto& lb = bandsZ.back();
+      lb.second = std::max(lb.second, L.z1 - 0.4f - lb.first);
+      lb.second = std::min(lb.second, 11.0f);
+    }
+    for (size_t bi = 0; bi < bandsZ.size(); ++bi) {
+      float bz = bandsZ[bi].first, bd = bandsZ[bi].second;
+      int front = bi == 0 ? N : (bi + 1 == bandsZ.size() ? S : (bi % 2 ? S : N));
+      float x = L.x0 + 0.4f;
+      int sinceAlley = 0;
+      while (x < L.x1 - 3.5f) {
+        float w = rng_.range(3.6f, 6.2f);
+        if (x + w > L.x1 - 0.4f) w = L.x1 - 0.4f - x;
+        if (w < 3.0f) break;
+        float dd = bd * rng_.range(0.78f, 1.0f);
+        float zz = front == N ? bz : bz + (bd - dd);
+        RectF r{x, zz, x + w, zz + dd};
+        float roll = rng_.uni();
+        Facade f;
+        if (roll < 0.30f) f = Facade{mat::house_periferia_a, {0.78f, 0.5f, 0.38f}, 3.3f + 2.9f * (rng_.chance(0.5f) ? 1 : 0), true, 4.6f};
+        else if (roll < 0.58f) f = Facade{mat::house_periferia_b, {0.6f, 0.7f, 0.55f}, 3.3f + 2.9f * (rng_.chance(0.5f) ? 1 : 0), true, 6.4f};
+        else if (roll < 0.90f) f = Facade{mat::favela_wall, {0.9f, 0.82f, 0.74f}, 3.2f + 3.0f * (rng_.chance(0.55f) ? 1 : 0) + (rng_.chance(0.12f) ? 3.0f : 0.0f), true, 4.0f};
+        else f = Facade{mat::house_brick, {0.8f, 0.7f, 0.6f}, 3.4f, false, 4.4f};
+        if (f.height < 4.0f && rng_.chance(0.55f)) { f.flat = false; f.roofLayer = mat::tin; }
+        else if (rng_.chance(0.35f)) f.roofLayer = mat::tin;
+        houseBuilding(r, front, f, f.height > 5.0f);
+        // puxadinho: a small unfinished extra room on the slab
+        if (f.flat && f.height > 5.0f && rng_.chance(0.45f)) {
+          float bw = w * rng_.range(0.35f, 0.55f), bd2 = dd * rng_.range(0.35f, 0.55f);
+          float bx = r.x0 + rng_.range(0.2f, w - bw - 0.2f), bz2 = r.z0 + rng_.range(0.2f, dd - bd2 - 0.2f);
+          MeshBuilder pb = mb(bx, bz2, {0.85f, 0.78f, 0.7f});
+          pb.box(AABB({bx, f.height, bz2}, {bx + bw, f.height + 2.5f, bz2 + bd2}), mat::brick_raw, mat::tin, 1.6f);
+        }
+        x += w;
+        ++sinceAlley;
+        // vertical alley every few houses, otherwise a hand-wide gap
+        if (sinceAlley >= 3 && rng_.chance(0.55f)) { x += rng_.range(1.8f, 2.4f); sinceAlley = 0; }
+        else x += rng_.range(0.15f, 0.35f);
+      }
+    }
+    // mud blotches in the alleys and yards, litter and barrels
+    for (int k = 0; k < 10; ++k) {
+      float mx = rng_.range(L.x0 + 2, L.x1 - 2), mz = rng_.range(L.z0 + 2, L.z1 - 2), sz = rng_.range(2.5f, 5.0f);
+      groundMud({mx - sz, mz - sz * 0.7f, mx + sz, mz + sz * 0.7f}, kH + 0.006f, mat::dirt_road, 4.0f, 0.38f, 0.45f, 0.38f, 0.42f);
+    }
+    for (int k = 0; k < 9; ++k) {
+      float px = rng_.range(L.x0 + 1, L.x1 - 1), pz = rng_.range(L.z0 + 1, L.z1 - 1);
+      bool free = true;
+      for (const Collider& c : w_.colliders)
+        if (px > c.box.mn.x - 0.8f && px < c.box.mx.x + 0.8f && pz > c.box.mn.z - 0.8f && pz < c.box.mx.z + 0.8f) { free = false; break; }
+      if (free) prop(rng_.chance(0.5f) ? "tambor" : "lixeira", px, pz, rng_.range(0, kTau), true, 0.32f, 1.0f);
+    }
+  }
+
+  // Street surface variety after the blocks are known: some quiet streets are paved with blocks (bloquete) or cobbles, the ones
+  // that serve self-built quarters are cracked and fade into mud at their edges. Returns spans so lane marks can skip them.
+  std::vector<RectF> noMarks_;
+  void roadVariants(const std::vector<int>& classes, const std::vector<RectF>& blockRects) {
+    auto classNear = [&](float x, float z, float reach) {
+      int best = 0;
+      for (size_t k = 0; k < blockRects.size(); ++k)
+        if (blockRects[k].inflated(reach).contains(x, z)) best = std::max(best, classes[k] == 1 ? 1 : 0);
+      return best;
+    };
+    auto span = [&](RectF r, bool horizontal, bool avenue) {
+      if (avenue) return;
+      if (w_.coastSide >= 0) {   // never the coast road
+        bool coast = (w_.coastSide == 0 && horizontal && r.cz() < zs_.front() + 1) || (w_.coastSide == 2 && horizontal && r.cz() > zs_.back() - 1) ||
+                     (w_.coastSide == 3 && !horizontal && r.cx() < xs_.front() + 1) || (w_.coastSide == 1 && !horizontal && r.cx() > xs_.back() - 1);
+        if (coast) return;
+      }
+      if (horizontal) { r.x0 += 7.0f; r.x1 -= 7.0f; } else { r.z0 += 7.0f; r.z1 -= 7.0f; }   // keep crossings and stop lines on plain asphalt
+      if (r.x1 - r.x0 < 6.0f || r.z1 - r.z0 < 6.0f) return;
+      float cxm = r.cx(), czm = r.cz();
+      bool poor = classNear(cxm, czm, 7.0f) == 1;
+      float roll = rng_.uni();
+      float tile = 3.0f;
+      if (poor) {
+        // worn asphalt dissolving into mud along both kerbs
+        groundMud(r, 0.014f, mat::dirt_road, 4.0f, 0.5f, 0.5f, 0.5f, 0.5f);
+        if (horizontal) {
+          groundMud({r.x0, r.z0, r.x1, r.z0 + 3.0f}, 0.016f, mat::asphalt, 6.0f, 1, 1, 0, 0);
+          groundMud({r.x0, r.z1 - 3.0f, r.x1, r.z1}, 0.016f, mat::asphalt, 6.0f, 0, 0, 1, 1);
+        } else {
+          groundMud({r.x0, r.z0, r.x0 + 3.0f, r.z1}, 0.016f, mat::asphalt, 6.0f, 1, 0, 0, 1);
+          groundMud({r.x1 - 3.0f, r.z0, r.x1, r.z1}, 0.016f, mat::asphalt, 6.0f, 0, 1, 1, 0);
+        }
+        noMarks_.push_back(r);
+      } else if (roll < 0.30f) {
+        ground(r, 0.014f, mat::paver, tile, {1, 1, 1}, false);
+        noMarks_.push_back(r);
+      } else if (roll < 0.45f) {
+        ground(r, 0.014f, mat::cobble, 2.4f, {1, 1, 1}, false);
+        noMarks_.push_back(r);
+      }
+    };
+    for (size_t j = 0; j < zs_.size(); ++j)
+      for (size_t i = 0; i + 1 < xs_.size(); ++i)
+        span({xs_[i] + hwx_[i], zs_[j] - hwz_[j], xs_[i + 1] - hwx_[i + 1], zs_[j] + hwz_[j]}, true, avZ_[j]);
+    for (size_t i = 0; i < xs_.size(); ++i)
+      for (size_t j = 0; j + 1 < zs_.size(); ++j)
+        span({xs_[i] - hwx_[i], zs_[j] + hwz_[j], xs_[i] + hwx_[i], zs_[j + 1] - hwz_[j + 1]}, false, avX_[i]);
   }
 
   // ---- blocks -------------------------------------------------------------------------------------------
@@ -1388,6 +1567,29 @@ class Gen {
       }
       if (pass == 0) padaria = best; else ferragens = best;
     }
+    // social classes of the residential blocks: the quarters farthest from the sea are self-built (poor), the second row from
+    // the coast is the wealthy one, everything else is middle class
+    std::vector<int> cls(bks.size(), 0);
+    {
+      auto coastDist = [&](const Bk& b) {
+        switch (w_.coastSide) {
+          case 0: return b.j;
+          case 2: return nz - 1 - b.j;
+          case 3: return b.i;
+          case 1: return nx - 1 - b.i;
+          default: return (int)(std::sqrt(std::pow((b.i + 0.5f) / nx - 0.5f, 2.0f) + std::pow((b.j + 0.5f) / nz - 0.5f, 2.0f)) * 6.0f);
+        }
+      };
+      std::vector<int> res;
+      for (size_t k = 0; k < bks.size(); ++k) if (!bks[k].special && bks[k].d == District::Residencial) res.push_back((int)k);
+      std::sort(res.begin(), res.end(), [&](int a, int b) { int da = coastDist(bks[a]), db = coastDist(bks[b]); return da != db ? da > db : a < b; });
+      int nPoor = res.size() >= 2 ? std::max(1, (int)std::lround(res.size() * 0.34f)) : 0;
+      for (int q = 0; q < nPoor; ++q) cls[res[q]] = 1;
+      int cmin = 99;
+      for (int k : res) if (cls[k] == 0) cmin = std::min(cmin, coastDist(bks[k]));
+      for (int k : res) if (cls[k] == 0 && coastDist(bks[k]) == cmin && coastDist(bks[k]) <= 2 && rng_.chance(0.8f)) cls[k] = 2;
+      if (w_.coastSide < 0) for (int k : res) if (cls[k] == 2) cls[k] = 0;
+    }
     for (Bk& b : bks) {
       int k = (int)(&b - &bks[0]);
       bool frontS = b.j < nz / 2;   // specials face the street toward the city centre... and the south street of northern blocks
@@ -1417,14 +1619,20 @@ class Gen {
           } else {
             float dx = (b.i + 0.5f) / nx - 0.5f, dz = (b.j + 0.5f) / nz - 0.5f;
             periphery_ = b.d == District::Residencial && std::sqrt(dx * dx + dz * dz) > 0.34f;
-            blockCentre(b.r, tall);
+            if (cls[k] == 1) blockPoor(b.r);
+            else if (cls[k] == 2) { rich_ = true; blockCentre(b.r, std::max(tall, 0)); rich_ = false; }
+            else blockCentre(b.r, tall);
             periphery_ = false;
           }
           break;
         }
       }
       w_.blocks.push_back({b.r, b.special == 4 ? District::Parque : b.d});
+      w_.social.push_back({b.r, cls[k]});
     }
+    std::vector<RectF> rects;
+    for (const Bk& b : bks) rects.push_back(b.r);
+    roadVariants(cls, rects);
   }
 
   void population() {
@@ -1499,6 +1707,7 @@ class Gen {
   float interiorCursor_ = 0;
   bool placedNeighbour_ = false;
   bool periphery_ = false;
+  bool rich_ = false;
   Vec3 marketSpot_;
   float marketSpotYaw_ = 0;
   int sideLayer_ = mat::wall_paint;

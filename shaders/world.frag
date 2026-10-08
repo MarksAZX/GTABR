@@ -79,6 +79,16 @@ void main() {
   vec3 Ng = normalize(vNormal);
   vec4 tex = texture(uMat, vUVL);
   vec4 nr = texture(uMatN, vUVL);
+  // soft transitions: vertices carry a mud amount in the fractional part of the layer; the surface dissolves into wet mud with noise
+  float mudAmt = clamp(fract(vUVL.z + 0.5) - 0.5, 0.0, 0.4) * 2.5;
+  float mudMask = 0.0;
+  if (mudAmt > 0.002) {
+    float mn1 = vnoise(vWorld.xz * 1.1) * 0.6 + vnoise(vWorld.xz * 3.7 + 5.0) * 0.4;
+    mudMask = smoothstep(0.40, 0.60, mudAmt * 1.3 + (mn1 - 0.5) * 0.8);
+    vec3 mUV = vec3(vUVL.xy * 0.85 + 0.37, float(MAT_MUD));
+    tex = mix(tex, texture(uMat, mUV), mudMask);
+    nr = mix(nr, texture(uMatN, mUV), mudMask);
+  }
   if (int(vUVL.z + 0.5) == MAT_FOLIAGE) {
     // leaf cut-out: the dark gaps between the leaves of the canopy texture become holes, more of them toward the silhouette,
     // which gives ragged leafy edges and lets light and the trunk show through instead of a solid blob
@@ -108,7 +118,10 @@ void main() {
   albedo *= 1.0 - 0.35 * wet;
   rough = mix(rough, 0.12, wet * 0.85);
   // puddles on paved ground: mirror-like patches that reflect the sky, with raindrop ripples while it rains
-  if (layerId <= 3 && wet > 0.05) {
+  rough = mix(rough, rough * 0.7, mudMask);
+  albedo *= 1.0 - 0.18 * mudMask;
+  bool pavedGround = layerId <= 3 || (layerId >= MAT_MUD && layerId <= MAT_DIRT_ROAD);
+  if (pavedGround && wet > 0.05) {
     float pn = vnoise(vWorld.xz * 0.27) * 0.6 + vnoise(vWorld.xz * 0.85 + 7.0) * 0.4;
     float pud = clamp(g.cascade.w, 0.0, 1.0) * smoothstep(0.50, 0.60, pn) * smoothstep(0.85, 0.97, Ng.y);
     float rr = g.lightInfo.z;
@@ -130,7 +143,7 @@ void main() {
   vec3 H = normalize(L + V);
   float NoL = max(dot(N, L), 0.0), NoV = max(dot(N, V), 1e-3), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
   // bare metal layers (shutters, metal roofs, rails): coloured specular, no diffuse - values mirror METAL_LAYERS in build_assets.py
-  float metal = (layerId == MAT_ROOF_METAL) ? 0.75 : ((layerId == MAT_METAL) ? 0.25 : 0.0);   // painted street furniture only a little
+  float metal = (layerId == MAT_ROOF_METAL) ? 0.75 : ((layerId == MAT_TIN) ? 0.6 : ((layerId == MAT_METAL) ? 0.25 : 0.0));   // painted street furniture only a little
   vec3 f0 = mix(vec3(0.04), albedo, metal);
   albedo *= 1.0 - metal;
   float a = rough * rough;
@@ -154,7 +167,7 @@ void main() {
   vec3 col = direct + ambient + evalLights(vWorld, N, V, albedo, f0, rough);
   col += albedo * vEmissive * g.params.z * 6.0;   // shop signs / lamps glow at night
   // lit windows at night: the dark glass areas of the facade textures glow warm, a different random subset per window cell
-  bool isFacade = (layerId >= MAT_HOUSE_YELLOW && layerId <= MAT_APT_BANDS) || layerId == MAT_HOUSE_PERIFERIA_A || layerId == MAT_HOUSE_PERIFERIA_B || layerId == MAT_APT_TOWER;
+  bool isFacade = (layerId >= MAT_HOUSE_YELLOW && layerId <= MAT_APT_BANDS) || layerId == MAT_HOUSE_PERIFERIA_A || layerId == MAT_HOUSE_PERIFERIA_B || layerId == MAT_APT_TOWER || layerId == MAT_FAVELA_WALL || layerId == MAT_RICH_VILLA || layerId == MAT_RICH_TOWER;
   if (g.params.z > 0.05 && g.params.w < 0.5 && isFacade) {
     float lumT = dot(tex.rgb, vec3(0.30, 0.59, 0.11));
     float glass = smoothstep(0.075, 0.02, lumT) * step(tex.r * 0.9, tex.b + 0.01) * step(abs(Ng.y), 0.5);

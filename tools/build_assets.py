@@ -137,6 +137,7 @@ MATERIALS = [
     "concrete", "wall_dark", "white", "shelf", "wood", "metal", "sand", "water",
     "shop_padaria", "shop_ferragens", "shop_conveniencia", "foliage",
     "house_periferia_a", "house_periferia_b", "brick_raw", "apt_tower", "bark",
+    "mud", "paver", "cobble", "dirt_road", "favela_wall", "tin", "rich_villa", "rich_tower",
 ]
 
 
@@ -159,6 +160,13 @@ def material_layers():
     if fh:
         for i, n in enumerate(["house_yellow", "house_blue", "house_brick", "house_modern"]):
             layers[n] = to_arr(cell(fh, 2, 2, i % 2, i // 2, 10))
+    gc, fc = load("ground_c.png"), load("facades_c.png")
+    if gc:
+        for i, n in enumerate(["mud", "paver", "cobble", "dirt_road"]):
+            layers[n] = to_arr(seamless_blend(cell(gc, 2, 2, i % 2, i // 2, 14)) if n in ("mud", "dirt_road") else seamless_mirror(cell(gc, 2, 2, i % 2, i // 2, 14)))
+    if fc:
+        for i, n in enumerate(["favela_wall", "tin", "rich_villa", "rich_tower"]):
+            layers[n] = to_arr(cell(fc, 2, 2, i % 2, i // 2, 14))
     if fb:
         for i, n in enumerate(["apt_beige", "apt_green", "sobrado_pink", "apt_bands"]):
             layers[n] = to_arr(cell(fb, 2, 2, i % 2, i // 2, 10))
@@ -203,6 +211,7 @@ SURFACE = {
     "grass": (2.6, 0.95, 0.04), "dirt": (2.6, 0.92, 0.06), "tile_floor": (1.2, 0.32, 0.10), "garage_floor": (1.6, 0.62, 0.20),
     "roof_tile": (3.0, 0.70, 0.12), "roof_fiber": (2.4, 0.66, 0.10), "roof_laje": (2.0, 0.86, 0.08), "roof_metal": (2.0, 0.42, 0.18),
     "sand": (1.4, 0.92, 0.05), "water": (0.2, 0.08, 0.02), "foliage": (1.5, 0.75, 0.1), "bark": (2.8, 0.9, 0.08),
+    "mud": (3.2, 0.55, 0.25), "paver": (2.8, 0.74, 0.14), "cobble": (3.4, 0.76, 0.14), "dirt_road": (2.4, 0.93, 0.05), "tin": (2.6, 0.5, 0.2),
     "wall_paint": (1.6, 0.86, 0.08), "concrete": (2.0, 0.88, 0.08), "wall_dark": (1.6, 0.84, 0.08), "white": (1.0, 0.62, 0.06),
     "shelf": (1.0, 0.55, 0.10), "wood": (1.8, 0.66, 0.12), "metal": (1.4, 0.38, 0.14),
 }
@@ -259,6 +268,11 @@ def micro_height(name, size, seed):
         return (g - 0.5) * 0.9
     if name in ("bark",):
         return np.abs(np.sin(2 * np.pi * (xx * 14.0 + n1 * 1.5))) * 0.7
+    if name in ("mud", "dirt_road"):
+        d, i = _voronoi(size, 60, seed)
+        return np.clip(1.0 - d * 1.4, 0, 1) * 0.5 + (n1 - 0.5) * 0.8
+    if name == "tin":
+        return (0.5 + 0.5 * np.sin(2 * np.pi * xx * 10.0)) * 0.9 + (n2 - 0.5) * 0.15
     if name in ("dirt",):
         d, i = _voronoi(size, 70, seed)
         return np.clip(1.0 - d * 1.5, 0, 1) * 0.5 + (n1 - 0.5) * 0.6
@@ -268,7 +282,7 @@ def micro_height(name, size, seed):
 
 
 # metalness of the layers that are bare metal (the world shader reads the same table)
-METAL_LAYERS = {"metal": 0.25, "roof_metal": 0.75}
+METAL_LAYERS = {"metal": 0.25, "roof_metal": 0.75, "tin": 0.6}
 
 
 def derive_normal_rough(arr, name, size=512):

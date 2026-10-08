@@ -1107,6 +1107,29 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("life_accident");
     return 0;
   }
+  if (name == "classes") {
+    // visual review of the social classes: self-built quarter, wealthy quarter, paved streets
+    b.idle(30);
+    const World& w = g.world();
+    int counts[3] = {};
+    for (const auto& sc : w.social) counts[sc.second]++;
+    LOGI("blocks: middle %d, poor %d, rich %d", counts[0], counts[1], counts[2]);
+    for (int cls = 1; cls <= 2; ++cls)
+      for (const auto& sc : w.social) {
+        if (sc.second != cls) continue;
+        Vec2 c{sc.first.cx(), sc.first.cz()};
+        g.teleportPlayer(c, 0.0f);
+        b.idle(40);
+        b.shot(cls == 1 ? "class_poor_top" : "class_rich_top");
+        g.toggleCamera();
+        g.teleportPlayer({sc.first.cx(), sc.first.z0 + 1.0f}, kPi);
+        b.idle(60);
+        b.shot(cls == 1 ? "class_poor_third" : "class_rich_third");
+        g.toggleCamera();
+        break;
+      }
+    return 0;
+  }
   if (name == "jobs") {
     b.idle(30);
     int m0 = g.money();
