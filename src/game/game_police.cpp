@@ -63,7 +63,13 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
   } else {
     float err = wrapAngle(yawFromDir(d) - v.yaw);
     in.steer = clamp(err * 2.0f, -1.0f, 1.0f);
-    float tgt = clamp(std::max(dist, std::min(distGoal, 30.0f)) * 0.6f, 3.0f, maxSpeed) * clamp(1.0f - std::fabs(err) / 1.4f, 0.25f, 1.0f);
+    // keep speed through polyline waypoints only while the road ahead is straight; slow down for bends (stay in lane)
+    float speedDist = dist;
+    if (!v.route.empty() && v.routeIdx + 2 < v.route.size()) {
+      Vec2 a1 = (v.route[v.routeIdx + 1] - here), a2 = (v.route[v.routeIdx + 2] - v.route[v.routeIdx + 1]);
+      if (a1.length() > 0.5f && a2.length() > 0.5f && a1.normalized().dot(a2.normalized()) > 0.94f) speedDist = std::max(dist, std::min(distGoal, 30.0f));
+    }
+    float tgt = clamp(speedDist * 0.6f, 3.0f, maxSpeed) * clamp(1.0f - std::fabs(err) / 1.4f, 0.25f, 1.0f);
     if (distGoal < 6.0f) tgt = 0;
     in.throttle = clamp((tgt - v.speed) * 0.4f, -1.0f, 1.0f);
     in.handbrake = distGoal < 4.0f && std::fabs(v.speed) < 1.0f;
