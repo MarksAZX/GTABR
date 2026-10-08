@@ -27,7 +27,8 @@ void Game::updateTraffic(float dt){
   int active=0;const int budget[]={2,4,6,8};
   std::array<std::pair<float,int>,8> nearby{};int count=0;
   for(size_t i=0;i<vehicles_.size()&&count<8;++i){const auto& v=vehicles_[i];float distance=(v.pos-player_.pos).length();if(v.ambientTraffic&&!v.despawn&&distance<preset().drawDistance*1.25f)nearby[count++]={distance,int(i)};}
-  std::sort(nearby.begin(),nearby.begin()+count);
+  // Eight entries at most: bounded insertion sort avoids a larger generic sort buffer.
+  for(int i=1;i<count;++i){auto entry=nearby[i];int j=i;while(j>0&&entry<nearby[j-1]){nearby[j]=nearby[j-1];--j;}nearby[j]=entry;}
   for(int i=0;i<count;++i){auto& v=vehicles_[nearby[i].second];
     Vec2 forward=fwd2(v.yaw);bool blocked=false;
     auto ahead=[&](Vec2 p,float radius){Vec2 d=p-v.pos;float longitudinal=d.dot(forward);return longitudinal>-1&&longitudinal<radius&&std::fabs(d.dot(right2(v.yaw)))<2.0f;};
