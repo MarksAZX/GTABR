@@ -68,15 +68,17 @@ void Game::finishLoading() {
 
 // Per-city GPU resources, navigation and map (rebuilt whenever the world is regenerated from another seed).
 void Game::buildWorldGpu() {
+  size_t totTris = 0, totVerts = 0, lodTris = 0;
+  for (auto& c : world_.chunks) { totTris += c.mesh.idx.size() / 3; totVerts += c.mesh.v.size(); lodTris += c.lod.idx.size() / 3; }
+  LOGI("World meshes: %zu chunks, %zu verts, %zu tris (HLOD %zu tris), ~%.1f MB vertex data", world_.chunks.size(), totVerts, totTris, lodTris,
+       (totVerts * sizeof(gfx::WorldVertex) + totTris * 12) / 1048576.0);
+  // The CPU meshes stay in memory; only the small HLOD meshes are always on the GPU. Full-detail chunks become resident around the
+  // player (streamChunks), so GPU memory is bounded however large the city is.
   for (auto& c : world_.chunks) {
-    if (c.mesh.empty()) continue;
-    c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
     c.bounds = c.mesh.bounds;
-    c.mesh.v.clear(); c.mesh.v.shrink_to_fit(); c.mesh.idx.clear(); c.mesh.idx.shrink_to_fit();
-    if (!c.lod.empty()) {
-      c.lodHandle = r_->createMesh(c.lod.v.data(), c.lod.v.size(), c.lod.idx.data(), c.lod.idx.size());
-      c.lod.v.clear(); c.lod.v.shrink_to_fit(); c.lod.idx.clear(); c.lod.idx.shrink_to_fit();
-    }
+    c.resident = false;
+    c.handle = {};
+    if (!c.lod.empty()) c.lodHandle = r_->createMesh(c.lod.v.data(), c.lod.v.size(), c.lod.idx.data(), c.lod.idx.size());
   }
   if (!world_.interiorCeiling.empty()) {
     world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
@@ -122,10 +124,38 @@ void Game::buildWorldGpu() {
   }
 }
 
+// Budgeted residency: at most 'budget' chunks are uploaded and 'budget' retired per call, so walking or driving fast never causes a
+// hitch; retired buffers are freed a few frames later (Renderer::retireMesh), never with a GPU stall.
+void Game::streamChunks(Vec3 focus, int budget) {
+  const float inR = std::max(170.0f, lodDistance_ * 1.8f), outR = inR + 55.0f;
+  int created = 0, retired = 0;
+  int resident = 0;
+  for (auto& c : world_.chunks) {
+    Vec3 ctr = c.bounds.center();
+    float dx = ctr.x - focus.x, dz = ctr.z - focus.z;
+    float d = std::sqrt(dx * dx + dz * dz) - (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
+    if (!c.resident) {
+      if (d < inR && created < budget && !c.mesh.empty()) {
+        c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
+        c.resident = true;
+        ++created;
+      }
+    } else if (d > outR && retired < budget) {
+      r_->retireMesh(c.handle);
+      c.handle = {};
+      c.resident = false;
+      ++retired;
+    }
+    resident += c.resident ? 1 : 0;
+  }
+  stats_.residentChunks = resident;
+}
+
 void Game::destroyWorldGpu() {
   for (auto& c : world_.chunks) {
     if (c.handle.valid()) r_->destroyMesh(c.handle);
     if (c.lodHandle.valid()) r_->destroyMesh(c.lodHandle);
+    c.handle = {}; c.lodHandle = {}; c.resident = false;
   }
   if (world_.interiorCeilingHandle.valid()) r_->destroyMesh(world_.interiorCeilingHandle);
   if (mapTex_.valid()) r_->destroyTexture(mapTex_);
@@ -150,6 +180,7 @@ void Game::switchWorld(uint32_t seed, std::function<void()> then) {
 }
 
 void Game::beginPlaying(bool fresh) {
+  streamChunks({player_.pos.x, player_.y, player_.pos.y}, 100000);
   CameraInput ci;
   ci.focus = {player_.pos.x, player_.y, player_.pos.y};
   ci.headingYaw = player_.yaw;
@@ -237,6 +268,7 @@ void Game::resetEntities(bool fresh) {
   wheel_.slots[0] = {0};
   wheel_.slots[1] = {};
   spawnNpcs();
+  spawnTraffic();
 }
 
 void Game::teleportPlayer(Vec2 p, float yaw) {
@@ -311,6 +343,8 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   }
   if (phase_ == Phase::Menu) {
     updateMenuScene(dtReal);
+    streamChunks(cam_.focus(), menuStreamFirst_ ? 100000 : 2);
+    menuStreamFirst_ = false;
     handleMenuPointers(in);
     setupGlobals(fd);
     buildScene(fd);
@@ -318,6 +352,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
     return;
   }
   updatePlaying(dtReal, in);
+  streamChunks(cam_.focus(), 2);
   setupGlobals(fd);
   buildScene(fd);
   buildUi(fd, dtReal);
@@ -427,6 +462,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateNpcs(dt);
   updateWanted(dt);
   updatePolice(dt);
+  updateTraffic(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
   if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;
@@ -554,6 +590,7 @@ int Game::nearestVehicleTo(Vec2 p, float maxDist, bool) const {
   int best = -1;
   float bd = maxDist;
   for (size_t i = 0; i < vehicles_.size(); ++i) {
+    if (vehicles_[i].traffic || vehicles_[i].despawn) continue;
     float d = distToObb(p, vehicleObb(vehicles_[i]));
     if (d < bd) { bd = d; best = (int)i; }
   }
@@ -666,7 +703,7 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   else if (p.swimming && depth < 1.0f) p.swimming = false;
   if (p.swimming != wasSwimming) {
     audio_.play("splash", {p.pos.x, 0.2f, p.pos.y}, 0.8f);
-    if (p.swimming) { p.aimHold = 0; p.attackT = -1; p.reloadT = -1; toast("Nadando", "pin"); }
+    if (p.swimming) { p.aimHold = 0; p.attackT = -1; p.reloadT = -1; markProgress(kPgSwam); if (settings_.hints) toast("Nadando", "pin"); }
   }
   float wade = clamp(depth / 1.25f, 0.0f, 1.0f);
   float maxSpeed = p.swimming ? (p.running ? 2.7f : 1.6f) : (p.running ? 6.4f : 3.1f) * (1.0f - 0.45f * wade);
@@ -741,7 +778,7 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
   float h = dt / steps;
   for (int s = 0; s < steps; ++s) {
     for (Vehicle& v : vehicles_) {
-      if (v.despawn || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
+      if (v.despawn || v.traffic || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI cars are driven by updatePolice / updateTraffic
       VehicleInput vi;
       bool driven = (player_.vehicle == v.id && !player_.exiting);
       if (driven) {
@@ -756,6 +793,10 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
       }
       if (v.occupant < 0 && std::fabs(v.speed) < 0.15f && v.vel.length() < 0.15f) { v.vel = {}; v.speed = 0; v.yawRate = 0; continue; }
       float impact = stepVehicle(v, vi, h, world_, vehicles_);
+      if (driven) {
+        driven_ += std::fabs(v.speed) * h;
+        if (driven_ > 2000.0f) markProgress(kPgDrove);
+      }
       if (impact > 2.0f && driven) {
         cameraShake_ = std::max(cameraShake_, clamp(impact / 12.0f, 0.1f, 1.0f));
         if (impact > 7.0f) {
@@ -853,7 +894,7 @@ void Game::collectInteractables() {
   if (!driving) {
     for (size_t i = 0; i < vehicles_.size(); ++i) {
       const Vehicle& v = vehicles_[i];
-      if (v.occupant >= 0 || player_.indoors || v.despawn || v.wrecked || (v.police && v.driver >= 0)) continue;
+      if (v.occupant >= 0 || player_.indoors || v.despawn || v.wrecked || v.traffic || (v.police && v.driver >= 0)) continue;
       float d = distToObb(pp, vehicleObb(v));
       if (d < 2.4f) {
         Interactable it;
@@ -874,7 +915,7 @@ void Game::collectInteractables() {
         case 1: it.sub = "Frentista"; break;
         case 2: it.sub = "Mecânico"; break;
         case 3: it.sub = "Seu Manoel"; break;
-        case 4: it.sub = "Atendente"; break;
+        case 4: it.sub = n.shop >= 0 && n.shop < (int)world_.shops.size() ? world_.shops[n.shop].name : "Atendente"; break;
         default: it.sub = "Morador"; break;
       }
       it.icon = "chat";
@@ -883,18 +924,25 @@ void Game::collectInteractables() {
     for (const DoorDef& d : world_.doors) {
       if (d.toInterior == player_.indoors) continue;   // exterior doors are only usable outside, exit doors inside
       Interactable it;
-      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair"; it.sub = d.toInterior ? "Mercado do Zé" : "Voltar à rua"; it.icon = "door";
+      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair";
+      it.sub = d.toInterior && d.shop >= 0 && d.shop < (int)world_.shops.size() ? world_.shops[d.shop].name : "Voltar à rua";
+      it.icon = "door";
       add(it);
     }
-    if (player_.indoors)
+    if (player_.indoors) {
+      int room = world_.interiorAt(player_.pos.x, player_.pos.y);
+      int here = room >= 0 ? world_.interiors[room].shop : -1;
       for (const ProductPoint& pr : world_.products) {
+        if (pr.shop != here) continue;
         const ItemDef& d = itemDef(pr.item);
+        int price = shopPriceCents(here, pr.item);
         Interactable it;
         it.kind = IKind::Product; it.id = pr.id; it.pos = pr.pos; it.radius = 1.5f; it.label = "Comprar";
-        it.sub = std::string(d.name) + " • " + fmtMoney(d.priceCents); it.icon = "cart"; it.art = d.art ? d.art : "";
-        it.enabled = moneyCents_ >= d.priceCents;
+        it.sub = std::string(d.name) + " • " + fmtMoney(price); it.icon = "cart"; it.art = d.art ? d.art : "";
+        it.enabled = moneyCents_ >= price;
         add(it);
       }
+    }
   }
   // fuel pumps: any vehicle parked at a pump, reachable from the car seat or from the pavement
   if (!player_.indoors) {
@@ -949,11 +997,15 @@ void Game::activateInteractable(const Interactable& it) {
         ci.headingYaw = door.arriveYaw;
         ci.indoors = player_.indoors;
         cam_.snapTo(ci, world_, screenW_ / std::max(1.0f, screenH_));
-        toast(door.toInterior ? "Mercado do Zé" : "Na rua", door.toInterior ? "cart" : "pin");
+        if (door.toInterior && door.shop >= 0 && door.shop < (int)world_.shops.size()) {
+          shopsVisited_ |= 1u << door.shop;
+          if ((shopsVisited_ & 0xFu) == 0xFu) markProgress(kPgShops);
+          toast(world_.shops[door.shop].name, "cart");
+        } else toast("Na rua", "pin");
       };
       break;
     }
-    case IKind::Product: buyItem(world_.products[it.id].item, true); break;
+    case IKind::Product: { const ProductPoint& pr = world_.products[it.id]; buyItem(pr.item, true, shopPriceCents(pr.shop, pr.item)); break; }
     case IKind::FuelPump: openFuelPanel(it.id); break;
     case IKind::Workshop: openWorkshopPanel(); break;
   }

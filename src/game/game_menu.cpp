@@ -97,6 +97,7 @@ void Game::enterMainMenu() {
   refreshSlots();
   menuT_ = 0;
   menuCamT_ = 0;
+  menuStreamFirst_ = true;
   timeOfDay_ = 17.35f;               // golden hour behind the menu
   rain_ = weatherTarget_ = wetness_ = 0.0f;
   weatherMode_ = 1;                  // calm sky while on the menu
@@ -655,7 +656,7 @@ void Game::drawMapTab(float x, float y, float w, float h) {
   marker({world_.poiGas.x, world_.poiGas.z}, "fuel", kOk, 30 * S, "Posto");
   marker({world_.poiWorkshop.x, world_.poiWorkshop.z}, "wrench", kAcc, 30 * S, "Oficina");
   for (const Vehicle& v : vehicles_)
-    if (!v.police && !v.despawn && player_.vehicle != v.id) marker(v.pos, "car", kInk, 24 * S);
+    if (!v.police && !v.despawn && !v.traffic && player_.vehicle != v.id) marker(v.pos, "car", kInk, 24 * S);
   for (const Pickup& pk : pickups_)
     if (pk.active) marker({pk.pos.x, pk.pos.z}, weaponDef(pk.weapon).icon, kWarn, 22 * S);
   if (wanted_ > 0)

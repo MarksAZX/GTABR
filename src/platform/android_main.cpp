@@ -104,6 +104,7 @@ void onAppCmd(android_app* app, int32_t cmd) {
         gi.renderer = a->renderer.get();
         gi.jobs = a->jobs.get();
         gi.saveDir = app->activity->internalDataPath ? app->activity->internalDataPath : ".";
+        gi.menu = true;   // the app opens on the main menu (CONTINUAR / NOVO JOGO / CARREGAR / CONFIGURAÇÕES / SAIR)
         a->game->init(gi);
         a->gameStarted = true;
       }

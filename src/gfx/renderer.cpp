@@ -200,6 +200,8 @@ void Renderer::shutdown() {
   destroyOffscreenTargets();
   destroyRenderTargets();
   for (auto& m : meshes_) if (m.alive) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
+  for (auto& r : retired_) { ctx_.destroyBuffer(r.vb); ctx_.destroyBuffer(r.ib); }
+  retired_.clear();
   for (auto& t : textures_) if (t.alive) { ctx_.destroyImage(t.img); }
   for (auto& m : models_) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
   for (VkSampler s : samplers_) if (s) vkDestroySampler(dev, s, nullptr);
@@ -612,6 +614,12 @@ void Renderer::destroyMesh(MeshHandle h) {
   vkDeviceWaitIdle(ctx_.device);
   ctx_.destroyBuffer(meshes_[h.id].vb);
   ctx_.destroyBuffer(meshes_[h.id].ib);
+  meshes_[h.id] = MeshRes();
+}
+
+void Renderer::retireMesh(MeshHandle h) {
+  if (!h.valid() || h.id >= (int)meshes_.size() || !meshes_[h.id].alive) return;
+  retired_.push_back({meshes_[h.id].vb, meshes_[h.id].ib, frameCounter_});
   meshes_[h.id] = MeshRes();
 }
 
@@ -1044,6 +1052,16 @@ bool Renderer::renderFrame(const FrameData& fd) {
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return false;
   }
   VK_CHECK(vkResetFences(dev, 1, &fr.fence));
+  // release meshes retired at least kFrames+1 frames ago (no in-flight frame can still use them)
+  for (size_t i = 0; i < retired_.size();) {
+    if (retired_[i].frame + kFrames + 1 <= frameCounter_) {
+      ctx_.destroyBuffer(retired_[i].vb);
+      ctx_.destroyBuffer(retired_[i].ib);
+      retired_[i] = retired_.back();
+      retired_.pop_back();
+    } else ++i;
+  }
+  ++frameCounter_;
   VkCommandBuffer cb = fr.cmd;
   VK_CHECK(vkResetCommandBuffer(cb, 0));
   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};

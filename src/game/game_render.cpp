@@ -193,13 +193,15 @@ void Game::emitWorld(gfx::FrameData& fd) {
   Vec3 focus = cam_.focus();
   stats_.drawnChunks = 0;
   for (const World::Chunk& c : world_.chunks) {
-    if (!c.handle.valid()) continue;
     if (c.interior != indoors) continue;
+    const bool full = c.handle.valid();
+    if (!full && !c.lodHandle.valid()) continue;
     Vec3 ctr = c.bounds.center();
-    // HLOD: far chunks draw their merged low-detail mesh (one box per building, flat ground)
+    // HLOD: far (or not yet resident) chunks draw their merged low-detail mesh (one box per building, flat ground, tree silhouettes)
     float camD = std::sqrt((ctr.x - focus.x) * (ctr.x - focus.x) + (ctr.z - focus.z) * (ctr.z - focus.z));
-    bool far = c.lodHandle.valid() && camD > lodDistance_;
-    if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(far ? c.lodHandle.id : c.handle.id); stats_.drawnChunks++; }
+    bool useLod = !full || (c.lodHandle.valid() && camD > lodDistance_);
+    if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(useLod ? c.lodHandle.id : c.handle.id); stats_.drawnChunks++; }
+    if (!full) continue;
     float dx = ctr.x - shadowFocus_.x, dz = ctr.z - shadowFocus_.z;
     float ext = (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
     if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(c.handle.id);

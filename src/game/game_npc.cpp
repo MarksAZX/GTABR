@@ -21,6 +21,7 @@ void Game::spawnNpcs() {
     n.id = id++;
     n.archetype = s.archetype;
     n.role = s.role;
+    n.shop = s.shop;
     n.pos = {s.pos.x, s.pos.z};
     n.home = n.pos;
     n.yaw = s.yaw;

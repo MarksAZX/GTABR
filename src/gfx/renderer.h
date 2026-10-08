@@ -162,6 +162,8 @@ class Renderer {
   TexHandle createTextureRGBA(uint32_t w, uint32_t h, const uint8_t* rgba, bool srgb, bool mips, SamplerKind sampler);
   MeshHandle createMesh(const WorldVertex* v, size_t nv, const uint32_t* idx, size_t ni);
   void destroyMesh(MeshHandle h);
+  // Hands the mesh's GPU memory back once the frames that may still reference it have finished (never stalls the GPU).
+  void retireMesh(MeshHandle h);
   void destroyTexture(TexHandle h);
   ModelHandle createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
                           bool skinned);
@@ -272,6 +274,9 @@ class Renderer {
   static constexpr int kFrames = 2;
   FrameRes frames_[kFrames];
   uint32_t frameIndex_ = 0;
+  uint64_t frameCounter_ = 0;
+  struct Retired { Buffer vb, ib; uint64_t frame; };
+  std::vector<Retired> retired_;
 
   std::vector<MeshRes> meshes_;
   std::vector<TexRes> textures_;

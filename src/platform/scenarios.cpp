@@ -143,6 +143,149 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "stream") {
+    // chunk residency: jumping across the city (and into a shop) makes the chunks around the player resident within a few
+    // frames, and chunks far from it are released again; nothing is ever drawn from a destroyed buffer
+    b.render = true;
+    const World& W = g.world();
+    b.idle(20);
+    LOGI("resident %d / %zu chunks at start", g.residentChunks(), W.chunks.size());
+    auto chunkUnder = [&](Vec2 p) -> const World::Chunk* {
+      int cx = (int)std::floor(p.x / World::kChunk), cz = (int)std::floor(p.y / World::kChunk);
+      for (const World::Chunk& c : W.chunks) if (c.cx == cx && c.cz == cz) return &c;
+      return nullptr;
+    };
+    Vec2 spots[5] = {{W.land.x0 + 20, W.land.z0 + 20}, {W.land.x1 - 20, W.land.z1 - 20}, {W.land.x0 + 20, W.land.z1 - 20}, {W.land.x1 - 20, W.land.z0 + 20}, {0, 0}};
+    int maxResident = 0;
+    for (Vec2 sp : spots) {
+      Vec2 q = W.nearestRoadPoint(sp);
+      g.teleportPlayer(q, 0);
+      b.idle(40);
+      const World::Chunk* c = chunkUnder(q);
+      CHECK(c && c->resident, "the chunk under the player is resident after a jump");
+      CHECK(g.drawnChunks() > 0, "chunks are drawn after a jump");
+      maxResident = std::max(maxResident, g.residentChunks());
+    }
+    LOGI("max resident %d of %zu", maxResident, W.chunks.size());
+    CHECK((size_t)maxResident <= W.chunks.size(), "residency never exceeds the chunk count");
+    b.shot("stream_after_jumps");
+    return g_failures;
+  }
+  if (name == "traffic") {
+    // ambient traffic: the cars really move along the lanes, stay on the roads and keep their distance
+    b.render = false;
+    b.idle(10);
+    const World& W = g.world();
+    std::vector<Vec2> start;
+    int traffic = 0;
+    for (const Vehicle& v : g.vehicles()) if (v.traffic) { ++traffic; start.push_back(v.pos); }
+    LOGI("traffic cars: %d", traffic);
+    CHECK(traffic >= 6, "the city spawns ambient traffic");
+    float travelled = 0, maxSpeed = 0;
+    int offRoad = 0, samples = 0;
+    std::vector<Vec2> last = start;
+    for (int f = 0; f < 30 * 60; ++f) {
+      b.idle(1);
+      size_t k = 0;
+      for (const Vehicle& v : g.vehicles()) {
+        if (!v.traffic || v.despawn) continue;
+        if (k < last.size()) { travelled += (v.pos - last[k]).length() < 20.0f ? (v.pos - last[k]).length() : 0.0f; last[k] = v.pos; }
+        ++k;
+        maxSpeed = std::max(maxSpeed, std::fabs(v.speed));
+        if (f % 30 == 0) {
+          ++samples;
+          Vec2 rp = W.nearestRoadPoint(v.pos);
+          bool onRoad = false;
+          for (const RoadLine& r : W.roads) {
+            float along = r.horizontal ? v.pos.x : v.pos.y, across = r.horizontal ? v.pos.y : v.pos.x;
+            if (std::fabs(across - r.c) < r.hw + 1.0f && along > r.a - 2 && along < r.b + 2) onRoad = true;
+          }
+          (void)rp;
+          if (!onRoad) ++offRoad;
+        }
+      }
+    }
+    LOGI("traffic: travelled %.0f m in 60 s, max speed %.1f m/s, off-road samples %d/%d", travelled, maxSpeed, offRoad, samples);
+    CHECK(travelled > 600.0f, "traffic cars drive (more than 600 m in total in a minute)");
+    CHECK(maxSpeed > 6.0f && maxSpeed < 16.0f, "cruise speeds are city-like");
+    CHECK(offRoad * 10 <= samples, "traffic stays on the streets (<=10% samples off-road)");
+    // top-down view of busy streets
+    Vec2 c = W.nearestRoadPoint({W.spawnPlayer.x, W.spawnPlayer.z});
+    g.teleportPlayer(c + Vec2{0, 6}, 0);
+    b.render = true;
+    b.idle(60);
+    b.shot("traffic_topdown");
+    g.toggleCamera();
+    b.idle(60);
+    b.shot("traffic_third");
+    return g_failures;
+  }
+  if (name == "shops") {
+    // every enterable shop: go through the door, find the clerk, open the shop window, buy and leave
+    const World& W = g.world();
+    CHECK(W.shops.size() >= 4, "the city has the four shops");
+    b.idle(20);
+    for (const ShopDef& sh : W.shops) {
+      LOGI("== %s (shop %d, interior %d)", sh.name.c_str(), sh.id, sh.interior);
+      g.teleportPlayer({sh.door.x, sh.door.z}, 0);
+      b.idle(6);
+      CHECK(g.focusValid() && g.focus()->kind == IKind::Door, "the shop door can be used from the street");
+      InputFrame in; in.interactPressed = true; b.step(in, 1);
+      b.idle(60);
+      CHECK(g.player().indoors && W.interiorAt(g.player().pos.x, g.player().pos.y) == sh.interior, "entered the right interior");
+      if (sh.id == 0) b.shot("shop_interior_mercado");
+      if (sh.kind == ShopKind::Padaria) b.shot("shop_interior_padaria");
+      if (sh.kind == ShopKind::Ferragens) b.shot("shop_interior_ferragens");
+      if (sh.kind == ShopKind::Conveniencia) b.shot("shop_interior_conveniencia");
+      g.toggleCamera();
+      b.idle(45);
+      b.shot(std::string("shop_third_") + std::to_string(sh.id));
+      g.toggleCamera();
+      b.idle(40);
+      // the clerk across the counter
+      int clerk = -1;
+      for (const Npc& n : g.npcs()) if (n.role == 4 && n.shop == sh.id) clerk = n.id;
+      CHECK(clerk >= 0, "this shop has its clerk");
+      if (clerk < 0) continue;
+      g.teleportPlayer(g.npcs()[clerk].pos + Vec2{0.0f, 2.2f}, 0);
+      b.idle(10);
+      in = InputFrame(); in.interactPressed = true; b.step(in, 1); b.idle(15);
+      CHECK(g.panel().open, "talking to the clerk opens the dialogue");
+      g.selectPanelOptionPublic(0);   // Ver produtos
+      b.idle(10);
+      CHECK(g.panel().open && g.panel().title == sh.name, "the shop window shows this shop");
+      CHECK(g.panel().options.size() == sh.stock.size() + 1, "the window lists the shop's stock");
+      if (sh.kind == ShopKind::Ferragens) b.shot("shop_window_ferragens");
+      else b.shot(std::string("shop_window_") + std::to_string(sh.id));
+      int m0 = g.money();
+      g.money() = m0 + 20000;
+      m0 = g.money();
+      int price = sh.stock[0].priceCents;
+      int itemBefore = sh.stock[0].kind == 0 ? g.itemCount(sh.stock[0].id) : 0;
+      bool ownedBefore = sh.stock[0].kind == 1 ? g.player().owned[sh.stock[0].id] : false;
+      g.selectPanelOptionPublic(0);   // buy the first listed product
+      b.idle(5);
+      CHECK(g.money() == m0 - price, "the exact price was deducted");
+      if (sh.stock[0].kind == 0) CHECK(g.itemCount(sh.stock[0].id) == itemBefore + 1, "the item went to the inventory");
+      else CHECK(g.player().owned[sh.stock[0].id] && !ownedBefore, "the weapon went to the inventory");
+      g.selectPanelOptionPublic((int)sh.stock.size());   // Fechar
+      b.idle(10);
+      CHECK(!g.panel().open, "the shop window closed");
+      // leave by the inside door
+      const DoorDef* exitDoor = nullptr;
+      for (const DoorDef& d : W.doors) if (d.shop == sh.id && !d.toInterior) exitDoor = &d;
+      CHECK(exitDoor != nullptr, "the shop has an exit door");
+      if (exitDoor) {
+        g.teleportPlayer({exitDoor->pos.x, exitDoor->pos.z}, 0);
+        b.idle(6);
+        in = InputFrame(); in.interactPressed = true; b.step(in, 1); b.idle(60);
+        CHECK(!g.player().indoors, "left the shop");
+      }
+    }
+    CHECK((g.progress() & (1u << kPgShops)) != 0, "progress: visited every shop");
+    CHECK((g.progress() & (1u << kPgBought)) != 0, "progress: bought something");
+    return g_failures;
+  }
   if (name == "menu") {
     // the whole product flow: main menu -> new game (seed) -> play -> pause tabs -> codes -> settings -> save -> main menu ->
     // continue (same city, same state) -> another city -> load the first one back -> delete a slot
@@ -680,11 +823,11 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(market != nullptr, "the city has a market");
     CHECK(b.walkTo(v2(market->door), 0.7f, 500), "walked to the market door");
     b.idle(5);
-    CHECK(g.focusValid() && g.focus()->kind == IKind::Door, "door interaction available");
+    const Interactable* doorIt = nullptr;
+    for (auto& it : g.focusList()) if (it.kind == IKind::Door) doorIt = &it;
+    CHECK(doorIt != nullptr, "door interaction available");
     b.shot("20_market_door");
-    in = InputFrame();
-    in.interactPressed = true;
-    b.step(in, 1);
+    if (doorIt) { Interactable copy = *doorIt; g.activateInteractable(copy); }   // same call the interact button makes
     b.idle(60);
     CHECK(g.player().indoors, "entered the market interior");
     b.shot("21_market_interior_topdown");

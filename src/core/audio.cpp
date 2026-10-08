@@ -108,6 +108,17 @@ std::vector<float> surf(Synth& s) {
   for (size_t i = 0; i < f; ++i) { float k = (float)i / f; b[i] *= k; b[b.size() - 1 - i] *= k; }
   return b;
 }
+std::vector<float> horn(Synth& s) {
+  // two-tone car horn (a minor third apart) with a slightly buzzy edge
+  auto b = s.buf(0.55f);
+  for (size_t i = 0; i < b.size(); ++i) {
+    float t = (float)i / s.rate;
+    float env = std::min(1.0f, t * 60.0f) * std::min(1.0f, (0.55f - t) * 18.0f);
+    float v = std::sin(2 * kPi * 415.0f * t) + 0.35f * std::sin(2 * kPi * 830.0f * t) + std::sin(2 * kPi * 494.0f * t) + 0.3f * std::sin(2 * kPi * 988.0f * t);
+    b[i] = std::tanh(v * 0.9f) * 0.28f * env;
+  }
+  return b;
+}
 std::vector<float> rainLoop(Synth& s) {
   // steady hiss: high-passed noise with slow variation (4 s loop)
   auto b = s.buf(4.0f);
@@ -162,6 +173,7 @@ void Audio::synthesize() {
   samples_["rain"].data = rainLoop(s);
   samples_["rain"].loop = true;
   samples_["thunder"].data = thunder(s);
+  samples_["horn"].data = horn(s);
 }
 
 bool Audio::init() {

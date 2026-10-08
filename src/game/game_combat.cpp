@@ -534,6 +534,7 @@ void Game::updatePickups(float dt) {
     if ((Vec2{k.pos.x, k.pos.z} - p.pos).length() < 1.1f) {
       bool had = p.owned[k.weapon];
       giveWeapon(k.weapon, k.ammo);
+      markProgress(kPgArmed);
       k.active = false;
       k.respawn = 90.0f;
       audio_.play("reload", k.pos, 0.8f, 1.2f);

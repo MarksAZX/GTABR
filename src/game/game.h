@@ -164,6 +164,8 @@ class Game {
   bool loaded() const { return phase_ == Phase::Playing || phase_ == Phase::Menu; }
   bool inMenu() const { return phase_ == Phase::Menu; }
   bool playing() const { return phase_ == Phase::Playing; }
+  int residentChunks() const { return stats_.residentChunks; }
+  int drawnChunks() const { return stats_.drawnChunks; }
   bool switching() const { return phase_ == Phase::Switching; }
 
   // ---- state access (read by tests)
@@ -211,7 +213,12 @@ class Game {
   bool loadSettings();
   bool saveSettings() const;
   void startFueling(int vehicleIdx, int pumpId, int amountCents /*0 = fill*/);
-  void buyItem(int item, bool fromShelf);
+  void buyItem(int item, bool fromShelf, int priceCents = -1);
+  bool buyWeapon(int weapon, int priceCents);
+  void buyStock(int shopId, int stockIdx);
+  int shopPriceCents(int shopId, int item) const;
+  void openShopPanel(int shopId);
+  void openAttendantPanel(int shopId);
   void repairVehicle(int vehicleIdx);
   void useItem(int item);
   void openPauseMenu() { menu_ = MenuState::Pause; }
@@ -254,8 +261,6 @@ class Game {
   void openPanel(Panel p);
   void closePanel();
   void openFuelPanel(int pumpId);
-  void openShopPanel(const char* portrait);
-  void openAttendantPanel();
   void openWorkshopPanel();
   void openNpcPanel(int npcIdx);
   void openSettingsMenu() { settingsOnly_ = false; pauseTab_ = 4; menu_ = MenuState::Pause; }
@@ -421,6 +426,7 @@ class Game {
   void refreshSlots();
   void applyStateFromFile(const std::unordered_map<std::string, std::string>& kv);
   void buildWorldGpu();
+  void streamChunks(Vec3 focus, int budget);   // keeps GPU meshes resident near the focus only (budgeted per frame)
   void destroyWorldGpu();
   void switchWorld(uint32_t seed, std::function<void()> then);
   void beginPlaying(bool fresh);
@@ -518,6 +524,14 @@ class Game {
   void copThink(Npc& c, float dt);
   void spawnPoliceUnit(Vec2 dest, bool onFoot);
   void driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt);
+  void aiCarContacts(Vehicle& v);
+  // ---- ambient traffic (game_traffic.cpp)
+  void spawnTraffic();
+  bool spawnTrafficCar(bool farFromPlayer);
+  void planTrafficRoute(Vehicle& v);
+  void updateTraffic(float dt);
+  float trafficRespawnT_ = 0;
+  bool menuStreamFirst_ = true;
   bool copCanSee(const Npc& c, Vec2 target) const;
   Vec2 roadPointNear(Vec2 p) const;
 
@@ -572,7 +586,7 @@ class Game {
   void addDecalEllipse(Vec3 pos, float hx, float hz, float alpha, float yaw, float kind);
   void projectToScreen(const Vec3& p, Vec2& out, bool& visible) const;
   void selectPanelOption(int idx);
-  struct Stat { int drawnChunks = 0, drawnSprites = 0, drawnModels = 0, npcNear = 0, npcMid = 0, npcFar = 0; } stats_;
+  struct Stat { int residentChunks = 0, drawnChunks = 0, drawnSprites = 0, drawnModels = 0, npcNear = 0, npcMid = 0, npcFar = 0; } stats_;
 };
 
 }  // namespace gtabr

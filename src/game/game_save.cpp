@@ -99,7 +99,7 @@ bool Game::saveToSlot(int slot) {
   // only the persistent cars (police units are temporary and respawn with the wanted level)
   o << "currentVehicle=" << (player_.vehicle >= 0 && !vehicles_[player_.vehicle].police ? player_.vehicle : -1) << "\n";
   for (const Vehicle& v : vehicles_) {
-    if (v.police || v.despawn) continue;
+    if (v.police || v.despawn || v.traffic) continue;
     o << "veh" << v.id << "=" << v.pos.x << "," << v.pos.y << "," << v.yaw << "," << v.fuel << "," << v.health << "\n";
   }
   for (int w = 1; w < kWeaponCount; ++w)

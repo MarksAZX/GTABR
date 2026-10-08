@@ -174,6 +174,12 @@ def material_layers():
         im = load(f)
         if im:
             layers[n] = to_arr(seamless_blend(im) if mode == 0 else seamless_mirror(im))
+    if "wall_paint" in layers:
+        # clean painted plaster: keep the grain but flatten the stains of the generated source
+        a = layers["wall_paint"].astype(np.float32)
+        mean = a[..., :3].mean(axis=(0, 1), keepdims=True)
+        a[..., :3] = mean + (a[..., :3] - mean) * 0.38
+        layers["wall_paint"] = np.clip(a, 0, 255).astype(np.uint8)
     if roofs:
         for i, n in enumerate(["roof_tile", "roof_fiber", "roof_laje", "roof_metal"]):
             layers[n] = to_arr(seamless_blend(cell(roofs, 2, 2, i % 2, i // 2, 12)))

@@ -77,6 +77,11 @@ struct Vehicle {
   bool wrecked = false;
   float steerInput = 0;   // last steering input (turn signals)
   bool braking = false;   // brake lights
+  // ambient traffic (game_traffic.cpp): civilian cars cruising the street grid in their lane
+  bool traffic = false;
+  std::vector<Vec2> route;
+  size_t routeIdx = 0;
+  float cruise = 9.0f, blockedT = 0, honkT = 0;
 };
 
 // Steps one vehicle. Returns the impact speed of a collision this step (0 if none).
@@ -151,6 +156,7 @@ struct Npc {
   int id = 0;
   std::string archetype;
   int role = 0;            // 0 pedestrian, 1 frentista, 2 mecanico, 3 vizinho, 4 atendente
+  int shop = -1;           // shop this clerk works in (World::shops index)
   Vec2 pos;
   float yaw = 0;
   float y = 0;

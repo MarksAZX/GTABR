@@ -3,19 +3,21 @@
 #include <cmath>
 
 #include "game.h"
+#include "ui_theme.h"
 
 namespace gtabr {
 
 namespace {
 const Color kWhite = 0xFFFFFFFFu;
 Color C(float r, float g, float b, float a = 1.0f) { return rgba(r, g, b, a); }
-const Color kAccent = rgba(1.0f, 0.80f, 0.26f);
-const Color kGlass = rgba(0.045f, 0.055f, 0.08f, 0.60f);
-const Color kGlassHi = rgba(0.10f, 0.12f, 0.17f, 0.72f);
-const Color kMint = rgba(0.36f, 0.89f, 0.66f);
-const Color kRed = rgba(1.0f, 0.36f, 0.40f);
-const Color kSky = rgba(0.42f, 0.72f, 1.0f);
-const Color kMuted = rgba(1.0f, 1.0f, 1.0f, 0.62f);
+// HUD palette: graphite glass, silver accent, colour only where it means something (see ui_theme.h)
+const Color kAccent = theme::kAcc;
+const Color kGlass = rgba(0.030f, 0.034f, 0.042f, 0.64f);
+const Color kGlassHi = rgba(0.030f, 0.034f, 0.042f, 0.82f);
+const Color kMint = theme::kOk;
+const Color kRed = theme::kHot;
+const Color kSky = rgba(0.62f, 0.74f, 0.90f);
+const Color kMuted = rgba(0.84f, 0.86f, 0.90f, 0.62f);
 
 std::vector<std::string> wrapText(const UiPainter& ui, const std::string& s, float maxW, float size, bool bold) {
   std::vector<std::string> lines;
@@ -91,17 +93,17 @@ void Game::drawLoading(float dt) {
 
 // ------------------------------------------------------------------------------------------------ HUD pieces
 static void glassButton(UiPainter& ui, Vec2 c, float r, bool pressed, bool active, const char* icon, Color accent, float alpha, float iconScale = 0.95f) {
-  ui.glow(c.x - r, c.y - r + 6, r * 2, r * 2, r, r * 0.45f, C(0, 0, 0, 0.30f * alpha));
-  Color fill = pressed ? C(1, 1, 1, 0.30f * alpha) : C(0.04f, 0.05f, 0.08f, 0.42f * alpha);
-  if (active) fill = mixColor(fill, withAlpha(accent, 0.35f * alpha), 0.6f);
-  ui.circle(c.x, c.y, r, fill, std::max(1.5f, r * 0.03f), active ? withAlpha(accent, 0.95f * alpha) : C(1, 1, 1, 0.34f * alpha));
-  ui.icon(icon, c.x, c.y, r * iconScale, active ? withAlpha(accent, alpha) : C(1, 1, 1, 0.95f * alpha));
+  ui.glow(c.x - r, c.y - r + 4, r * 2, r * 2, r, r * 0.30f, C(0, 0, 0, 0.22f * alpha));
+  Color fill = pressed ? C(1, 1, 1, 0.22f * alpha) : C(0.03f, 0.034f, 0.042f, 0.50f * alpha);
+  if (active) fill = mixColor(fill, withAlpha(accent, 0.18f * alpha), 0.7f);
+  ui.circle(c.x, c.y, r, fill, std::max(1.2f, r * 0.022f), active ? withAlpha(accent, 0.85f * alpha) : C(1, 1, 1, 0.26f * alpha));
+  ui.icon(icon, c.x, c.y, r * iconScale, active ? withAlpha(accent, alpha) : C(0.93f, 0.94f, 0.96f, 0.92f * alpha));
 }
 
 void Game::drawTouchControls(const InputFrame& in) {
   InputLayout L = makeLayout();
   float S = uiScale();
-  float a = 1.0f - 0.85f * wheel_.anim;
+  float a = (1.0f - 0.85f * wheel_.anim) * settings_.hudOpacity;
   bool driving = player_.vehicle >= 0;
   // joystick
   if (in.joyActive) {
@@ -145,6 +147,7 @@ void Game::drawTouchControls(const InputFrame& in) {
 }
 
 void Game::drawMinimap() {
+  if (!settings_.showMinimap) return;
   float S = uiScale();
   float a = 1.0f - 0.85f * wheel_.anim;
   float size = 236 * S;
@@ -185,7 +188,7 @@ void Game::drawMinimap() {
       if (sh.kind != ShopKind::Conveniencia) marker({sh.door.x, sh.door.z}, "cart", kAccent, 26 * S, sh.kind == ShopKind::Mercado);
     marker({world_.poiWorkshop.x, world_.poiWorkshop.z}, "wrench", kSky, 30 * S, true);
     for (const Vehicle& v : vehicles_)
-      if (player_.vehicle != v.id && !v.despawn) marker(v.pos, "car", v.police && v.siren ? (std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky) : C(1, 1, 1, 0.95f), 22 * S, false);
+      if (player_.vehicle != v.id && !v.despawn && !v.traffic) marker(v.pos, "car", v.police && v.siren ? (std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky) : C(1, 1, 1, 0.95f), 22 * S, false);
     // officers on the radar while wanted (blink red/blue); weapon pickups as small markers
     if (wanted_ > 0)
       for (const Npc& c : npcs_)
@@ -411,7 +414,7 @@ void Game::drawPanel(float dt) {
   if (total > maxH) { rowH = std::max(50 * S, rowH - (total - maxH) / std::max<size_t>(1, n)); total = pad + headerH + 18 * S + gaugeH + n * (rowH + gap) + pad - gap; }
   float x = (screenW_ - cardW) / 2, y = screenH_ - total - 28 * S + (1.0f - a) * 90 * S;
   ui_.glow(x, y + 8, cardW, total, 30 * S, 26 * S, C(0, 0, 0, 0.5f * a));
-  ui_.rect(x, y, cardW, total, C(0.045f, 0.055f, 0.085f, 0.88f * a), 30 * S, 1.6f * S, C(1, 1, 1, 0.16f * a));
+  ui_.rect(x, y, cardW, total, withAlpha(settings_.highContrast ? theme::kPanelHc : theme::kGlassHi, a), 26 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
   if (portrait) {
     std::string key = "portrait_" + panel_.portrait;
     ui_.rect(x + pad - 4 * S, y + pad - 4 * S, portSize + 8 * S, portSize + 8 * S, C(1, 1, 1, 0.16f * a), 26 * S);
@@ -447,7 +450,7 @@ void Game::drawPanel(float dt) {
     float rx = x + pad, rw = cardW - pad * 2;
     bool pressed = pressedUi_ == (int)i;
     float oa = o.enabled ? 1.0f : 0.45f;
-    Color fill = pressed ? C(1, 1, 1, 0.22f * a) : C(1, 1, 1, 0.095f * a);
+    Color fill = pressed ? C(1, 1, 1, 0.16f * a) : C(1, 1, 1, 0.05f * a);
     ui_.rect(rx, oy, rw, rowH, fill, 22 * S, 1.2f * S, C(1, 1, 1, 0.12f * a * oa));
     float ix = rx + 22 * S;
     float iconBox = rowH - 20 * S;
@@ -572,7 +575,7 @@ void Game::drawDebug() {
   if (!settings_.showFps) return;
   float S = uiScale();
   char buf[160];
-  std::snprintf(buf, sizeof(buf), "%.0f FPS  %.1f ms  scale %.2f  chunks %d  sprites %d  npc %d/%d/%d", fpsShown_, frameMsAvg_, r_->renderScale(), stats_.drawnChunks,
+  std::snprintf(buf, sizeof(buf), "%.0f FPS  %.1f ms  scale %.2f  chunks %d/%d  sprites %d  npc %d/%d/%d", fpsShown_, frameMsAvg_, r_->renderScale(), stats_.drawnChunks, stats_.residentChunks,
                 stats_.drawnSprites, stats_.npcNear, stats_.npcMid, stats_.npcFar);
   ui_.rect(30 * S, screenH_ - 54 * S, ui_.textWidth(false, buf, 22 * S) + 24 * S, 38 * S, C(0, 0, 0, 0.55f), 10 * S);
   ui_.text(false, buf, 42 * S, screenH_ - 48 * S, 22 * S, kMint, Align::Left);

@@ -57,7 +57,12 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
   v.engineOn = true;
   float impact = stepVehicle(v, in, dt, world_, vehicles_);
   if (impact > 6.0f) audio_.play("crash", {v.pos.x, 0.8f, v.pos.y}, 0.6f);
-  // AI cars push and hurt pedestrians and the player like any other car (central damage system)
+  aiCarContacts(v);
+}
+
+// AI cars push and hurt pedestrians and the player like any other car (central damage system)
+void Game::aiCarContacts(Vehicle& v) {
+  {
   if (std::fabs(v.speed) > 1.0f) {
     phys::OBB o = vehicleObb(v);
     auto hitActor = [&](ActorRef who, Vec2& pos) {
@@ -81,6 +86,7 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
       if ((n.pos - v.pos).length() > 4.0f) continue;
       hitActor({ActorKind::Npc, n.id}, n.pos);
     }
+  }
   }
 }
 
@@ -155,6 +161,7 @@ void Game::updateWanted(float dt) {
     if (evadeT_ > searchTimeFor(wanted_)) {
       wanted_ = 0;
       wantedHeat_ = 0;
+      markProgress(kPgEscaped);
       toast("Você despistou a polícia", "pin", rgba(0.6f, 1.0f, 0.7f));
       for (Npc& c : npcs_) if (c.police && !c.despawn && c.state != NpcState::Dead) { c.state = NpcState::CopReturn; c.path.clear(); }
     }

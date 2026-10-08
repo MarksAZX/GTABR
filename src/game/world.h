@@ -108,7 +108,7 @@ struct World {
   std::string cityName;
 
   // chunk meshes (CPU) -> GPU handles are created by the game after generation
-  struct Chunk { int cx, cz; MeshData mesh; MeshData lod; gfx::MeshHandle handle, lodHandle; AABB bounds; bool interior = false; };
+  struct Chunk { int cx, cz; MeshData mesh; MeshData lod; gfx::MeshHandle handle, lodHandle; AABB bounds; bool interior = false; bool resident = false; };
   std::vector<Chunk> chunks;
   MeshData interiorCeiling;
   gfx::MeshHandle interiorCeilingHandle;
