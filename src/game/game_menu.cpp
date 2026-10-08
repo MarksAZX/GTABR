@@ -935,7 +935,7 @@ void Game::menuAction(int id) {
   }
   if (id >= 2820 && id < 2828 && id - 2820 < (int)favs_.size()) { favs_.erase(favs_.begin() + (id - 2820)); toast("Local removido", "close"); return; }
   // ---- settings
-  if (id >= 3000 && id < 3100) { applySettingStep(id); return; }
+  if (id >= 3000 && id < 3200) { applySettingStep(id); return; }
 }
 
 void Game::applySettingStep(int id) {

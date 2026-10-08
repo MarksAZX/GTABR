@@ -1107,6 +1107,20 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("life_accident");
     return 0;
   }
+  if (name == "advanced") {
+    // every toggle of the AVANCADO tab must flip its setting when tapped
+    b.idle(20);
+    bool before = g.settings().taa;
+    g.tapUi(3100);
+    CHECK(g.settings().taa != before, "tapping TAA toggles it");
+    bool c0 = g.settings().volClouds;
+    g.tapUi(3103);
+    CHECK(g.settings().volClouds != c0, "tapping volumetric clouds toggles it");
+    int cs = g.settings().colorStyle;
+    g.tapUi(3108);
+    CHECK(g.settings().colorStyle != cs, "tapping colour style cycles it");
+    return 0;
+  }
   if (name == "ultra") {
     // AAA post stack: volumetric clouds, contact shadows, sharpening, motion blur (Ultra preset, third person)
     g.setQuality(3);
