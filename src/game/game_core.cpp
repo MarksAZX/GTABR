@@ -1,8 +1,12 @@
 #include <algorithm>
 #include <cmath>
+#include <ctime>
+#include <random>
 
 #include "../core/fileio.h"
 #include "../core/log.h"
+#include <sstream>
+
 #include "game.h"
 
 namespace gtabr {
@@ -10,10 +14,22 @@ namespace gtabr {
 // ------------------------------------------------------------------------------------------------ lifecycle
 bool Game::init(const Init& i) {
   cfg_ = i;
-  if (i.seed) worldSeed_ = i.seed;
   r_ = i.renderer;
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
+  loadSettings();
+  activeSlot_ = clamp(i.slot, 1, kSlots);
+  if (i.seed) worldSeed_ = i.seed;
+  else if (i.menu) {
+    // the menu opens on the city of the most recent save (CONTINUAR is instant); a first run gets a fresh random city
+    int ls = latestSlot();
+    SlotInfo si = ls ? readSlotInfo(ls) : SlotInfo{};
+    if (si.used) worldSeed_ = si.seed;
+    else { worldSeed_ = std::random_device{}() ^ (uint32_t)std::time(nullptr); if (!worldSeed_) worldSeed_ = 1; }
+  } else if (!i.newGame) {
+    SlotInfo si = readSlotInfo(activeSlot_);
+    if (si.used) worldSeed_ = si.seed;   // tests / --continue rebuild the saved city
+  }
   assets_.startLoading(r_, jobs_);
   queueModels();
   audio_.init();
@@ -36,7 +52,22 @@ void Game::startWorldJob() {
 }
 
 void Game::finishLoading() {
-  // GPU meshes
+  // one-time resources (shared by every city)
+  materials_ = assets_.materials;
+  finishModels();
+  buildWeaponMeshes(*r_, weaponMeshes_);
+  worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
+  buildWorldGpu();
+  if (cfg_.menu) { enterMainMenu(); return; }
+  resetEntities(true);
+  bool loaded = false;
+  if (!cfg_.newGame) loaded = loadGame();
+  if (!loaded) LOGI("Starting a new game");
+  beginPlaying(!loaded);
+}
+
+// Per-city GPU resources, navigation and map (rebuilt whenever the world is regenerated from another seed).
+void Game::buildWorldGpu() {
   for (auto& c : world_.chunks) {
     if (c.mesh.empty()) continue;
     c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
@@ -51,12 +82,8 @@ void Game::finishLoading() {
     world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
                                                   world_.interiorCeiling.idx.size());
   }
-  materials_ = assets_.materials;
-  finishModels();
-  buildWeaponMeshes(*r_, weaponMeshes_);
-  // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
+  // weapon pickups on spots chosen by the city generator (melee first, firearms later in the list)
   {
-    // weapon pickups on spots chosen by the city generator (melee first, firearms later in the list)
     const int kinds[8] = {kWpnBat, kWpnKnife, kWpnCrowbar, kWpnBaton, kWpnPistol, kWpnRevolver, kWpnSmg, kWpnShotgun};
     const int ammo[8] = {0, 0, 0, 0, 45, 24, 90, 24};
     pickups_.clear();
@@ -67,7 +94,6 @@ void Game::finishLoading() {
     phys::depenetrateCircle(world_, p, 0.5f);
     k.pos = {p.x, world_.heightAt(p.x, p.y), p.y};
   }
-  worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
   {
@@ -84,28 +110,98 @@ void Game::finishLoading() {
       ib.x1 = std::max(ib.x1, in.bounds.x1 + 1); ib.z1 = std::max(ib.z1, in.bounds.z1 + 1);
     }
     navIndoor_.build(ib, 0.4f, world_.interiorWalkable, world_.interiorBlockers, 0.35f);
-    LOGI("Navmesh: outdoor %zu polys, indoor %zu polys", navOutdoor_.polyCount(), navIndoor_.polyCount());
+    LOGI("City '%s' (seed %u): navmesh outdoor %zu polys, indoor %zu polys, %zu chunks", world_.cityName.c_str(), world_.seed,
+         navOutdoor_.polyCount(), navIndoor_.polyCount(), world_.chunks.size());
   }
-  // minimap texture
+  // map texture (used by the minimap and the full map)
   {
     std::vector<uint8_t> px;
     mapExtent_ = world_.half;
-    renderMinimap(world_, px, 512, mapExtent_);
-    mapTex_ = r_->createTextureRGBA(512, 512, px.data(), true, true, gfx::SamplerKind::ClampLinear);
+    renderMinimap(world_, px, 1024, mapExtent_);
+    mapTex_ = r_->createTextureRGBA(1024, 1024, px.data(), true, true, gfx::SamplerKind::ClampLinear);
   }
-  resetEntities(true);
-  bool loaded = false;
-  if (!cfg_.newGame) loaded = loadGame();
-  if (!loaded) LOGI("Starting a new game");
+}
+
+void Game::destroyWorldGpu() {
+  for (auto& c : world_.chunks) {
+    if (c.handle.valid()) r_->destroyMesh(c.handle);
+    if (c.lodHandle.valid()) r_->destroyMesh(c.lodHandle);
+  }
+  if (world_.interiorCeilingHandle.valid()) r_->destroyMesh(world_.interiorCeilingHandle);
+  if (mapTex_.valid()) r_->destroyTexture(mapTex_);
+  mapTex_ = {};
+  for (int* h : {&surfHandle_, &rainHandle_, &sirenHandle_})
+    if (*h) { audio_.loopStop(*h); *h = 0; }
+  waypoint_ = Waypoint();
+}
+
+// Regenerates the city for 'seed' on a worker thread behind a loading screen, then runs 'then' (new game / load slot).
+void Game::switchWorld(uint32_t seed, std::function<void()> then) {
+  destroyWorldGpu();
+  panel_ = Panel();
+  wheel_.open = false;
+  menu_ = MenuState::None;
+  worldSeed_ = seed;
+  worldReady_ = false;
+  afterWorld_ = std::move(then);
+  loadingAnim_ = 0;
+  phase_ = Phase::Switching;
+  startWorldJob();
+}
+
+void Game::beginPlaying(bool fresh) {
   CameraInput ci;
   ci.focus = {player_.pos.x, player_.y, player_.pos.y};
   ci.headingYaw = player_.yaw;
   cam_.snapTo(ci, world_, screenW_ / std::max(1.0f, screenH_));
   phase_ = Phase::Playing;
+  menu_ = MenuState::None;
+  confirm_.open = false;
   fadeAlpha_ = 1.0f;
   fadeTarget_ = 0.0f;
+  autosave_ = 0;
   applySettings();
-  toast("Bem-vindo ao bairro! Ache o carro e vá ao posto.", "pin");
+  if (fresh && settings_.hints) toast("Bem-vindo a " + world_.cityName + "! Ache o carro e vá ao posto.", "pin");
+}
+
+void Game::startNewGame(int slot, uint32_t seed) {
+  if (!seed) { seed = std::random_device{}() ^ (uint32_t)std::time(nullptr); if (!seed) seed = 1; }
+  activeSlot_ = clamp(slot, 1, kSlots);
+  int sl = activeSlot_;
+  switchWorld(seed, [this, sl]() {
+    activeSlot_ = sl;
+    resetEntities(true);
+    progress_ = 0; shopsVisited_ = 0; driven_ = 0; time_ = 0;
+    timeOfDay_ = 9.0f;
+    rain_ = weatherTarget_ = wetness_ = 0.0f;
+    cam_.init(CamMode::TopDown);
+    beginPlaying(true);
+    saveGame();   // the new slot exists (with its seed) from the first second
+  });
+}
+
+bool Game::loadSlot(int slot) {
+  SlotInfo si = readSlotInfo(slot);
+  if (!si.used) return false;
+  std::string text;
+  if (!fileio::readFile(slotPath(slot), text)) return false;
+  activeSlot_ = slot;
+  auto apply = [this, slot, text]() {
+    std::unordered_map<std::string, std::string> kv;
+    std::istringstream in(text);
+    std::string line;
+    while (std::getline(in, line)) {
+      size_t eq = line.find('=');
+      if (eq != std::string::npos) kv[line.substr(0, eq)] = line.substr(eq + 1);
+    }
+    activeSlot_ = slot;
+    resetEntities(true);
+    applyStateFromFile(kv);
+    beginPlaying(false);
+  };
+  if (si.seed != worldSeed_ || phase_ == Phase::Loading) switchWorld(si.seed, apply);
+  else { menu_ = MenuState::None; apply(); }
+  return true;
 }
 
 void Game::resetEntities(bool fresh) {
@@ -125,6 +221,11 @@ void Game::resetEntities(bool fresh) {
     v.health = health[i];
     vehicles_.push_back(v);
   }
+  wanted_ = 0; wantedHeat_ = 0; sinceSeen_ = 1e9f; evadeT_ = 0; policeSpawnT_ = 0;
+  events_.clear(); tracers_.clear(); stains_.clear(); toasts_.clear();
+  fueling_ = Fueling();
+  panel_ = Panel();
+  waypoint_ = Waypoint();
   player_ = Player();
   player_.pos = {world_.spawnPlayer.x, world_.spawnPlayer.z};
   player_.yaw = player_.targetYaw = world_.spawnYaw;
@@ -153,8 +254,11 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   lastDt_ = dtReal;
   fd_ = &fd;
   fd.clear();
-  timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
-  updateWeather(dtReal);
+  const bool paused = phase_ == Phase::Playing && menu_ != MenuState::None;
+  if (!paused && phase_ != Phase::Switching) {
+    timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
+    updateWeather(dtReal);
+  }
   fd.blur = 0; fd.fade = 0; fd.dim = 0;
 
   // smoothed frame time for adaptive quality + FPS counter
@@ -188,6 +292,31 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
       return;
     }
   }
+  if (phase_ == Phase::Switching) {
+    // a new city is being generated (new game / load): loading screen until the worker is done, then the pending action runs
+    loadingAnim_ += dtReal;
+    if (worldReady_) {
+      buildWorldGpu();
+      auto fn = std::move(afterWorld_);
+      afterWorld_ = nullptr;
+      if (fn) fn();
+    }
+    if (phase_ == Phase::Switching) {
+      ui_.begin(&fd, &assets_, screenW_, screenH_, uiScale());
+      drawLoading(dtReal);
+      ui_.end();
+      setupGlobals(fd);
+      return;
+    }
+  }
+  if (phase_ == Phase::Menu) {
+    updateMenuScene(dtReal);
+    handleMenuPointers(in);
+    setupGlobals(fd);
+    buildScene(fd);
+    buildUi(fd, dtReal);
+    return;
+  }
   updatePlaying(dtReal, in);
   setupGlobals(fd);
   buildScene(fd);
@@ -209,7 +338,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   }
   // ---- menus take over the whole input
   if (menu_ != MenuState::None) {
-    handleUiPointers(in);
+    handleMenuPointers(in);
     timeScale_ += (0.0f - timeScale_) * expDecay(20.0f, dtReal);
     // camera keeps the scene alive but frozen
     return;
@@ -270,7 +399,13 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (panel_.open) handleUiPointers(in);
 
   // ---- global buttons
-  if (in.pausePressed && !panel_.open) { menu_ = MenuState::Pause; return; }
+  if (in.pausePressed && !panel_.open) {
+    menu_ = MenuState::Pause;
+    pauseTab_ = 0; settingsOnly_ = false; confirm_.open = false; menuT_ = 0;
+    mapZoom_ = 0;   // the map opens fitted around the player
+    refreshSlots();
+    return;
+  }
   if (in.cameraPressed && !wheel_.open) toggleCamera();
   if (!panel_.open && !wheel_.open && fadeAlpha_ < 0.5f) {
     if (in.enterExitPressed && !player_.swimming) tryEnterExit();
@@ -338,7 +473,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     }
     ci.indoors = player_.indoors;
     ci.look = in.look; ci.zoomDelta = in.zoom; ci.userDragging = in.lookDragging;
-    ci.shake = cameraShake_;
+    ci.shake = settings_.reduceMotion ? 0.0f : cameraShake_;
     cam_.sensitivity = settings_.sensitivity;
     cam_.invertY = settings_.invertY;
     if (!panel_.open && !wheel_.open) cam_.update(dtReal, ci, world_, screenW_ / std::max(1.0f, screenH_));
@@ -360,7 +495,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   neighbourCooldown_ = std::max(0.0f, neighbourCooldown_ - dtReal);
 
   autosave_ += dtReal;
-  if (autosave_ > 25.0f && !fueling_.active && fadeAlpha_ < 0.05f) { autosave_ = 0; saveGame(); }
+  if (autosave_ > 25.0f && settings_.autosave && !fueling_.active && fadeAlpha_ < 0.05f) { autosave_ = 0; saveGame(); }
   updateAdaptiveQuality(dtReal);
 }
 
@@ -382,6 +517,16 @@ void Game::applySettings() {
   r_->setShadowsEnabled(settings_.shadows && qp.shadowCascades > 0);
   cam_.sensitivity = settings_.sensitivity;
   cam_.invertY = settings_.invertY;
+  lodDistance_ = 105.0f * settings_.drawDistance * (qp.drawDistance / 125.0f);
+  static const float kRate[3] = {0.0f, 1.0f / 60.0f, 1.0f / 20.0f};
+  if (!dayRateOverridden_) dayRate_ = kRate[clamp(settings_.dayCycle, 0, 2)];
+  if (weatherMode_ != settings_.weatherMode) setWeatherMode(settings_.weatherMode);
+  applyAudioSettings();
+}
+
+void Game::applyAudioSettings() {
+  audio_.setMasterVolume(settings_.muted ? 0.0f : settings_.master);
+  audio_.setBusVolumes(settings_.sfx, settings_.ambience);
 }
 
 void Game::toast(const std::string& s, const char* icon, uint32_t color) {

@@ -82,7 +82,7 @@ void Game::applyWeatherToLighting(DayLighting& d) const {
     d.exposure *= 1.0f + 0.12f * r;
   }
   if (flash_ > 0.01f) {
-    float f = flash_ * flash_ * (0.6f + 0.4f * std::sin(flash_ * 40.0f));
+    float f = flash_ * flash_ * (0.6f + 0.4f * std::sin(flash_ * 40.0f)) * (settings_.reduceFlashes ? 0.25f : 1.0f);
     d.ambSky = d.ambSky + Vec3{0.9f, 1.0f, 1.4f} * f * 1.2f;
     d.zenith = d.zenith + Vec3{0.5f, 0.55f, 0.8f} * f;
     d.horizon = d.horizon + Vec3{0.6f, 0.65f, 0.85f} * f;
@@ -92,7 +92,7 @@ void Game::applyWeatherToLighting(DayLighting& d) const {
 // Falling drops are billboard streaks in a box around the camera focus: the pattern is world anchored (a hash lattice wrapped
 // around the focus), so it costs no pool or per-drop state and never "pops".
 void Game::emitRain() {
-  if (rain_ < 0.03f || player_.indoors) return;
+  if (rain_ < 0.03f || player_.indoors || !settings_.weatherFx) return;
   UvRect dot = assets_.icon("dot");
   if (!dot.valid) return;
   SpriteDef sd;

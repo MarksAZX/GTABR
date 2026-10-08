@@ -51,6 +51,13 @@ void UiPainter::gradient(float x, float y, float w, float h, Color top, Color bo
   u.radius = radius;
 }
 
+void UiPainter::hgradient(float x, float y, float w, float h, Color left, Color right, float radius) {
+  setTex(a_->iconsTex);
+  gfx::UiInst& u = push(x, y, w, h, gfx::kUiHGradient, left);
+  u.color2 = right;
+  u.radius = radius;
+}
+
 void UiPainter::glow(float x, float y, float w, float h, float radius, float blur, Color c) {
   setTex(a_->iconsTex);
   gfx::UiInst& u = push(x - blur, y - blur, w + 2 * blur, h + 2 * blur, gfx::kUiGlow, c);
@@ -94,6 +101,7 @@ void UiPainter::map(gfx::TexHandle tex, float cu, float cv, float uvScale, float
 }
 
 float UiPainter::textWidth(bool bold, const std::string& s, float size) const {
+  size *= textScale_;
   const FontData& f = bold ? a_->fontBold : a_->fontRegular;
   float sc = size / f.baseSize, wsum = 0;
   for (uint32_t cp : Assets::decodeUtf8(s)) {
@@ -105,11 +113,13 @@ float UiPainter::textWidth(bool bold, const std::string& s, float size) const {
 }
 
 float UiPainter::lineHeight(bool bold, float size) const {
+  size *= textScale_;
   const FontData& f = bold ? a_->fontBold : a_->fontRegular;
   return (f.ascent + f.descent) * size / f.baseSize;
 }
 
 float UiPainter::text(bool bold, const std::string& s, float x, float y, float size, Color c, Align al, Color outline, float outlineW) {
+  size *= textScale_;
   const FontData& f = bold ? a_->fontBold : a_->fontRegular;
   float width = textWidth(bold, s, size);
   if (al == Align::Center) x -= width * 0.5f;

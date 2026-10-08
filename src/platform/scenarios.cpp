@@ -143,6 +143,155 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "menu") {
+    // the whole product flow: main menu -> new game (seed) -> play -> pause tabs -> codes -> settings -> save -> main menu ->
+    // continue (same city, same state) -> another city -> load the first one back -> delete a slot
+    auto waitPlaying = [&](int maxFrames) {
+      for (int i = 0; i < maxFrames && !(g.loaded() && !g.inMenu()); ++i) b.idle(1);
+      b.idle(5);
+      return g.playing();
+    };
+    b.idle(40);
+    CHECK(g.inMenu() && g.menu() == MenuState::Main, "the app opens on the main menu");
+    b.shot("menu_main");
+    g.tapUi(2001);   // NOVO JOGO
+    b.idle(20);
+    CHECK(g.menu() == MenuState::Slots, "new game opens the slot picker");
+    b.shot("menu_slots_new");
+    g.tapUi(2104);   // create in slot 1
+    CHECK(waitPlaying(900), "a new city was generated and the game started");
+    uint32_t seedA = g.seed();
+    std::string cityA = g.world().cityName;
+    size_t collA = g.world().colliders.size();
+    Vec3 shopA = g.world().shops.empty() ? Vec3{} : g.world().shops[0].door;
+    LOGI("new game: seed %u city %s colliders %zu", seedA, cityA.c_str(), collA);
+    CHECK(g.readSlotInfo(1).used && g.readSlotInfo(1).seed == seedA, "the seed was saved in the slot");
+    b.idle(30);
+    b.shot("menu_game_started");
+    // ---- play a bit: state that must persist
+    g.money() = 123456;
+    g.giveWeapon(kWpnPistol, 33);
+    g.equipWeapon(kWpnPistol);
+    g.teleportPlayer({g.player().pos.x + 3.0f, g.player().pos.y + 2.0f}, 1.0f);
+    g.useItem(1);
+    Vec2 posA = g.player().pos;
+    // ---- pause menu tabs
+    g.openMenu(MenuState::Pause);
+    b.idle(15);
+    const char* tabNames[7] = {"mapa", "jogo", "inventario", "codigos", "config", "salvar", "menuprincipal"};
+    for (int t = 0; t < 7; ++t) {
+      g.tapUi(2300 + t);
+      b.idle(8);
+      b.shot(std::string("pause_") + tabNames[t]);
+    }
+    g.tapUi(2300);
+    b.idle(5);
+    // map: zoom, drag is exercised by the pointer path in the full game; here the buttons
+    g.tapUi(2801); b.idle(3); g.tapUi(2801); b.idle(3);
+    b.shot("pause_mapa_zoom");
+    g.tapUi(2802); g.tapUi(2803); b.idle(3);
+    // ---- codes with real effects
+    g.tapUi(2303);
+    g.player().health = 20;
+    g.tapUi(2500);
+    CHECK(g.player().health >= 99.0f, "code: recover health");
+    for (int w = 1; w < kWeaponCount; ++w) g.player().owned[w] = false;
+    g.tapUi(2501);
+    bool allWeapons = true;
+    for (int w = 1; w < kWeaponCount; ++w) allWeapons &= g.player().owned[w];
+    CHECK(allWeapons, "code: all weapons");
+    g.player().reserve[kWpnPistol] = 0; g.player().mag[kWpnPistol] = 0;
+    g.tapUi(2502);
+    CHECK(g.player().mag[kWpnPistol] == weaponDef(kWpnPistol).magazine && g.player().reserve[kWpnPistol] > 0, "code: ammo refill");
+    int m0 = g.money();
+    g.tapUi(2503);
+    CHECK(g.money() == m0 + 500000, "code: test money");
+    g.tapUi(2505);
+    b.idle(3);
+    CHECK(g.wantedLevel() >= 1, "code: add wanted level");
+    b.shot("pause_codigos_feedback");
+    g.tapUi(2504);
+    CHECK(g.wantedLevel() == 0, "code: remove wanted");
+    g.vehicles()[0].health = 30; g.vehicles()[0].fuel = 1;
+    g.teleportPlayer(g.vehicles()[0].pos + Vec2{2, 0}, 0);
+    g.tapUi(2506);
+    g.tapUi(2507);
+    CHECK(g.vehicles()[0].health >= 99.9f, "code: repair vehicle");
+    CHECK(g.vehicles()[0].fuel >= vehicleDef(g.vehicles()[0].model).fuelCap - 0.1f, "code: fill tank");
+    g.teleportPlayer(posA, 1.0f);
+    // ---- settings really apply
+    g.tapUi(2304);
+    for (int t = 0; t < 5; ++t) { g.tapUi(2400 + t); b.idle(5); b.shot(std::string("settings_tab") + std::to_string(t)); }
+    int q0 = g.settings().quality;
+    g.tapUi(3000);
+    CHECK(g.settings().quality == (q0 + 1) % 4, "setting: quality preset changed");
+    g.tapUi(3000); g.tapUi(3000); g.tapUi(3000);
+    bool fx0 = g.settings().weatherFx;
+    g.tapUi(3004);
+    CHECK(g.settings().weatherFx != fx0, "setting: weather fx toggled");
+    g.tapUi(3004);
+    g.tapUi(3010);
+    CHECK(g.settings().muted, "setting: mute");
+    g.tapUi(3010);
+    g.tapUi(3040);
+    CHECK(g.settings().highContrast, "setting: high contrast");
+    b.idle(5);
+    b.shot("settings_highcontrast");
+    g.tapUi(3040);
+    // ---- save from the menu, back to the main menu
+    g.tapUi(2305);
+    g.tapUi(2900);
+    SlotInfo si = g.readSlotInfo(1);
+    CHECK(si.used && si.money == g.money() && si.seed == seedA, "slot metadata written (money, seed)");
+    b.shot("pause_salvar2");
+    g.tapUi(2306);
+    g.tapUi(2910);
+    b.idle(30);
+    CHECK(g.inMenu() && g.menu() == MenuState::Main, "back to the main menu");
+    b.shot("menu_main_continue");
+    // ---- continue: same city, same state
+    int moneyBefore = si.money;
+    g.tapUi(2000);
+    CHECK(waitPlaying(900), "continue loaded the most recent save");
+    CHECK(g.seed() == seedA && g.world().cityName == cityA && g.world().colliders.size() == collA, "the same city was rebuilt from the seed");
+    CHECK(g.money() == moneyBefore, "money restored");
+    CHECK((g.player().pos - posA).length() < 0.05f, "position restored");
+    CHECK(g.player().owned[kWpnPistol] && g.player().weapon == kWpnPistol, "weapons restored");
+    b.idle(20);
+    b.shot("menu_continue_loaded");
+    // ---- second city in slot 2, then load the first one back
+    g.openMenu(MenuState::Pause);
+    g.tapUi(2306); g.tapUi(2910);
+    b.idle(20);
+    g.tapUi(2001);
+    g.tapUi(2110);   // row tap on slot 2 (new game, empty -> starts)
+    CHECK(waitPlaying(900), "second city generated");
+    uint32_t seedB = g.seed();
+    LOGI("second city: seed %u (%s)", seedB, g.world().cityName.c_str());
+    CHECK(seedB != seedA, "a different seed was generated");
+    b.shot("menu_second_city");
+    g.openMenu(MenuState::Pause);
+    g.tapUi(2306); g.tapUi(2910);
+    b.idle(20);
+    g.tapUi(2002);  // CARREGAR
+    b.shot("menu_slots_load");
+    g.tapUi(2101);  // load slot 1
+    CHECK(waitPlaying(900), "slot 1 loaded again");
+    CHECK(g.seed() == seedA && g.world().cityName == cityA && g.world().colliders.size() == collA &&
+              (g.world().shops.empty() || (g.world().shops[0].door - shopA).length() < 1e-3f),
+          "loading rebuilds exactly the same city (seed determinism)");
+    // ---- delete slot 2
+    g.openMenu(MenuState::Pause);
+    g.tapUi(2306); g.tapUi(2910);
+    b.idle(20);
+    g.tapUi(2002);
+    g.tapUi(2113);   // delete slot 2 -> confirmation
+    b.idle(5);
+    b.shot("menu_confirm_delete");
+    g.tapUi(2190);
+    CHECK(!g.readSlotInfo(2).used, "slot deleted after confirming");
+    return g_failures;
+  }
   if (name == "tour") {
     // visual review of the city: a handful of representative spots from both cameras
     const World& W = g.world();

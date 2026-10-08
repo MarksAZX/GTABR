@@ -20,5 +20,7 @@ bool readTextAsset(const std::string& relPath, std::string& out);
 
 bool writeFileAtomic(const std::string& absPath, const void* data, size_t size);
 bool readFile(const std::string& absPath, std::string& out);
+bool removeFile(const std::string& absPath);
+bool fileExists(const std::string& absPath);
 }  // namespace fileio
 }  // namespace gtabr

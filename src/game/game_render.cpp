@@ -178,8 +178,8 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   fd.blur = blur_;
   fd.dim = blur_ * 0.5f;
   // indoors: neutral lamp exposure
-  fd.exposure = lerp(day_.exposure, 1.05f, ind);
-  fd.bloom = qp.bloom ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
+  fd.exposure = lerp(day_.exposure, 1.05f, ind) * settings_.brightness;
+  fd.bloom = (qp.bloom && settings_.bloom) ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
   fd.bloomThreshold = lerp(1.1f, 0.55f, day_.night);
   fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
   fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};

@@ -41,7 +41,7 @@ struct DecalInst {
 static_assert(sizeof(DecalInst) == 32, "DecalInst layout");
 
 enum UiKind : int {
-  kUiRect = 0, kUiImage = 1, kUiText = 2, kUiArc = 3, kUiMap = 4, kUiGradient = 5, kUiGlow = 6
+  kUiRect = 0, kUiImage = 1, kUiText = 2, kUiArc = 3, kUiMap = 4, kUiGradient = 5, kUiGlow = 6, kUiHGradient = 7
 };
 struct UiInst {
   float rect[4];
@@ -162,6 +162,7 @@ class Renderer {
   TexHandle createTextureRGBA(uint32_t w, uint32_t h, const uint8_t* rgba, bool srgb, bool mips, SamplerKind sampler);
   MeshHandle createMesh(const WorldVertex* v, size_t nv, const uint32_t* idx, size_t ni);
   void destroyMesh(MeshHandle h);
+  void destroyTexture(TexHandle h);
   ModelHandle createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
                           bool skinned);
   // World material: two texture arrays. Model material: albedo, normal, ORM 2D textures (invalid -> neutral defaults).

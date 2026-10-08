@@ -615,6 +615,15 @@ void Renderer::destroyMesh(MeshHandle h) {
   meshes_[h.id] = MeshRes();
 }
 
+void Renderer::destroyTexture(TexHandle h) {
+  if (h.id < 0 || h.id >= (int)textures_.size() || !textures_[h.id].alive) return;
+  vkDeviceWaitIdle(ctx_.device);
+  TexRes& t = textures_[h.id];
+  if (t.set) vkFreeDescriptorSets(ctx_.device, pool_, 1, &t.set);
+  ctx_.destroyImage(t.img);
+  t = TexRes();
+}
+
 ModelHandle Renderer::createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
                                   bool skinned) {
   ModelRes m;

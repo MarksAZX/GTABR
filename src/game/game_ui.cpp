@@ -549,81 +549,8 @@ void Game::drawWheel(float dt) {
 }
 
 // ------------------------------------------------------------------------------------------------ menus
-void Game::openSettingsMenu() { menu_ = MenuState::Settings; }
-
-void Game::drawMenus(float dt) {
-  (void)dt;
-  if (menu_ == MenuState::None) return;
-  float S = uiScale();
-  uiRects_.clear();
-  ui_.rect(0, 0, screenW_, screenH_, C(0.01f, 0.015f, 0.03f, 0.62f));
-  float cardW = std::min(760.0f * S, screenW_ - 80 * S);
-  float x = (screenW_ - cardW) / 2;
-  auto button = [&](float y, float h, const std::string& label, const char* icon, int id, bool accent = false) {
-    float rx = x + 34 * S, rw = cardW - 68 * S;
-    bool pressed = pressedUi_ == id;
-    ui_.rect(rx, y, rw, h, pressed ? C(1, 1, 1, 0.22f) : (accent ? withAlpha(kAccent, 0.22f) : C(1, 1, 1, 0.10f)), 22 * S, 1.2f * S, accent ? withAlpha(kAccent, 0.7f) : C(1, 1, 1, 0.14f));
-    if (icon) ui_.icon(icon, rx + 46 * S, y + h / 2, 40 * S, accent ? kAccent : C(1, 1, 1, 0.9f));
-    ui_.text(true, label, rx + (icon ? 90 : 34) * S, y + h / 2 - 20 * S, 34 * S, kWhite, Align::Left);
-    uiRects_.push_back({Vec4(rx, y, rw, h), id});
-  };
-  if (menu_ == MenuState::Pause) {
-    float h = 520 * S, y = (screenH_ - h) / 2;
-    ui_.glow(x, y + 8, cardW, h, 30 * S, 28 * S, C(0, 0, 0, 0.5f));
-    ui_.rect(x, y, cardW, h, C(0.05f, 0.06f, 0.09f, 0.9f), 30 * S, 1.6f * S, C(1, 1, 1, 0.16f));
-    ui_.text(true, "PAUSADO", x + cardW / 2, y + 28 * S, 54 * S, kWhite, Align::Center);
-    float by = y + 120 * S, bh = 78 * S, bg = 14 * S;
-    button(by, bh, "Continuar", "play", 200, true); by += bh + bg;
-    button(by, bh, "Salvar jogo", "save", 201); by += bh + bg;
-    button(by, bh, "Configurações", "gear", 202); by += bh + bg;
-    button(by, bh, "Sair do jogo", "close", 203);
-    ui_.text(false, "Dinheiro " + fmtMoney(moneyCents_) + "   •   Progresso salvo automaticamente", x + cardW / 2, y + h - 40 * S, 22 * S, kMuted, Align::Center);
-  } else {
-    float h = 790 * S, y = (screenH_ - h) / 2;
-    ui_.glow(x, y + 8, cardW, h, 30 * S, 28 * S, C(0, 0, 0, 0.5f));
-    ui_.rect(x, y, cardW, h, C(0.05f, 0.06f, 0.09f, 0.92f), 30 * S, 1.6f * S, C(1, 1, 1, 0.16f));
-    ui_.text(true, "CONFIGURAÇÕES", x + cardW / 2, y + 26 * S, 46 * S, kWhite, Align::Center);
-    float ry = y + 110 * S, rh = 84 * S;
-    auto slider = [&](const char* label, float v, float lo, float hi, int id, const std::string& valueText) {
-      float rx = x + 34 * S, rw = cardW - 68 * S;
-      ui_.rect(rx, ry, rw, rh - 10 * S, C(1, 1, 1, 0.07f), 20 * S);
-      ui_.text(true, label, rx + 24 * S, ry + 8 * S, 28 * S, kWhite, Align::Left);
-      ui_.text(false, valueText, rx + rw - 24 * S, ry + 8 * S, 24 * S, kMuted, Align::Right);
-      float tx = rx + 24 * S, tw = rw - 48 * S, ty = ry + rh - 30 * S;
-      float t = clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
-      ui_.rect(tx, ty - 4 * S, tw, 8 * S, C(1, 1, 1, 0.16f), 4 * S);
-      ui_.rect(tx, ty - 4 * S, tw * t, 8 * S, kAccent, 4 * S);
-      ui_.circle(tx + tw * t, ty, 15 * S, kWhite, 3 * S, kAccent);
-      uiRects_.push_back({Vec4(tx - 20 * S, ty - 34 * S, tw + 40 * S, 68 * S), id});
-      ry += rh;
-    };
-    auto toggle = [&](const char* label, bool on, int id, const std::string& txt = "") {
-      float rx = x + 34 * S, rw = cardW - 68 * S;
-      bool pressed = pressedUi_ == id;
-      ui_.rect(rx, ry, rw, rh - 10 * S, pressed ? C(1, 1, 1, 0.2f) : C(1, 1, 1, 0.07f), 20 * S);
-      ui_.text(true, label, rx + 24 * S, ry + (rh - 10 * S) / 2 - 18 * S, 28 * S, kWhite, Align::Left);
-      if (!txt.empty()) ui_.text(true, txt, rx + rw - 24 * S, ry + (rh - 10 * S) / 2 - 16 * S, 26 * S, kAccent, Align::Right);
-      else {
-        float sw = 86 * S, sh = 44 * S, sx = rx + rw - sw - 24 * S, sy = ry + (rh - 10 * S) / 2 - sh / 2;
-        ui_.rect(sx, sy, sw, sh, on ? withAlpha(kMint, 0.85f) : C(1, 1, 1, 0.2f), sh / 2);
-        ui_.circle(sx + (on ? sw - sh / 2 : sh / 2), sy + sh / 2, sh / 2 - 4 * S, kWhite);
-      }
-      uiRects_.push_back({Vec4(rx, ry, rw, rh - 10 * S), id});
-      ry += rh;
-    };
-    slider("Sensibilidade da câmera", settings_.sensitivity, 0.4f, 2.0f, 100, fmtFloat(settings_.sensitivity, 2) + "x");
-    slider("Tamanho dos controles", settings_.hudScale, 0.75f, 1.35f, 101, std::to_string((int)(settings_.hudScale * 100)) + "%");
-    static const char* q[4] = {"BAIXO", "MÉDIO", "ALTO", "ULTRA"};
-    toggle("Qualidade gráfica", false, 303, q[clamp(settings_.quality, 0, 3)]);
-    toggle("Resolução dinâmica", settings_.dynamicRes, 305);
-    toggle("Sombras dinâmicas", settings_.shadows, 301);
-    toggle("Inverter eixo Y da câmera", settings_.invertY, 300);
-    toggle("Mostrar FPS", settings_.showFps, 302);
-    button(ry + 10 * S, 74 * S, "Voltar", "arrow", 304, true);
-  }
-}
-
 void Game::handleUiPointers(const InputFrame& in) {
+  // dialogue / shop panel taps (the menus have their own handler in game_menu.cpp)
   auto hit = [&](Vec2 p) {
     for (auto it = uiRects_.rbegin(); it != uiRects_.rend(); ++it) {
       const Vec4& r = it->first;
@@ -631,43 +558,11 @@ void Game::handleUiPointers(const InputFrame& in) {
     }
     return -1;
   };
-  auto applySlider = [&](int slider, float px) {
-    for (const auto& pr : uiRects_)
-      if (pr.second == slider) {
-        float tx = pr.first.x + 20 * uiScale(), tw = pr.first.z - 40 * uiScale();
-        float t = clamp((px - tx) / tw, 0.0f, 1.0f);
-        if (slider == 100) settings_.sensitivity = 0.4f + t * 1.6f;
-        if (slider == 101) settings_.hudScale = 0.75f + t * 0.6f;
-      }
-  };
   for (const UiPointer& p : in.ui) {
-    if (p.pressed) {
-      pressedUi_ = hit(p.pos);
-      if (pressedUi_ == 100 || pressedUi_ == 101) { activeSlider_ = pressedUi_; applySlider(activeSlider_, p.pos.x); }
-    } else if (p.down && activeSlider_ >= 0) {
-      applySlider(activeSlider_, p.pos.x);
-    }
+    if (p.pressed) pressedUi_ = hit(p.pos);
     if (p.released) {
-      if (activeSlider_ >= 0) { applySlider(activeSlider_, p.pos.x); activeSlider_ = -1; pressedUi_ = -1; applySettings(); continue; }
       int id = hit(p.pos);
-      if (id >= 0 && id == pressedUi_) {
-        if (menu_ == MenuState::Pause) {
-          if (id == 200) menu_ = MenuState::None;
-          else if (id == 201) { saveGame(); toast("Jogo salvo", "save"); menu_ = MenuState::None; }
-          else if (id == 202) menu_ = MenuState::Settings;
-          else if (id == 203) { saveGame(); quit_ = true; }
-        } else if (menu_ == MenuState::Settings) {
-          if (id == 300) settings_.invertY = !settings_.invertY;
-          else if (id == 301) settings_.shadows = !settings_.shadows;
-          else if (id == 302) settings_.showFps = !settings_.showFps;
-          else if (id == 303) { settings_.quality = (settings_.quality + 1) % 4; applySettings(); }
-          else if (id == 305) settings_.dynamicRes = !settings_.dynamicRes;
-          else if (id == 304) { menu_ = MenuState::Pause; saveGame(); }
-          applySettings();
-        } else if (panel_.open && id >= 0 && id < 100) {
-          selectPanelOption(id);
-        }
-      }
+      if (id >= 0 && id == pressedUi_ && panel_.open && id < 100) selectPanelOption(id);
       pressedUi_ = -1;
     }
   }
@@ -685,6 +580,7 @@ void Game::drawDebug() {
 
 void Game::buildUi(gfx::FrameData& fd, float dt) {
   ui_.begin(&fd, &assets_, screenW_, screenH_, uiScale());
+  ui_.setTextScale(settings_.textScale);
   InputFrame in;   // draw uses the polled state stored by frame(); rebuild a lightweight view for visuals
   in = useScripted_ ? scripted_ : InputFrame();
   if (!useScripted_) {
@@ -692,10 +588,14 @@ void Game::buildUi(gfx::FrameData& fd, float dt) {
     // non-destructive snapshot kept in lastVisual_.
   }
   in = visualInput_;
-  drawHud(dt, in);
-  if (wheel_.anim > 0.01f) drawWheel(dt);
-  if (panel_.open) drawPanel(dt);
-  if (menu_ != MenuState::None) drawMenus(dt);
+  if (phase_ == Phase::Playing) {
+    drawHud(dt, in);
+    if (wheel_.anim > 0.01f) drawWheel(dt);
+    if (panel_.open) drawPanel(dt);
+  }
+  if (menu_ == MenuState::Main || menu_ == MenuState::Slots) drawMainMenu(dt);
+  else if (menu_ == MenuState::Pause) drawPauseMenu(dt);
+  if (confirm_.open) drawConfirm();
   drawDebug();
   ui_.end();
 }

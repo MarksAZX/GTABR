@@ -1249,7 +1249,7 @@ class Gen {
           for (float x = g0 + 1.0f; x < g1 - 0.5f && k < (int)itemsOnShelves.size(); x += 2.4f) product(itemsOnShelves[k++], x, gz + 0.75f);
         }
         furn(X0, Z0 + 0.5f, X0 + 0.9f, Z1 - 2.5f, 2.0f, mat::metal, mat::white, {0.85f, 0.92f, 1.0f});
-        while (k < (int)itemsOnShelves.size()) product(itemsOnShelves[k++], X0 + 1.4f, Z0 + 1.0f + k * 1.2f);
+        while (k < (int)itemsOnShelves.size()) { product(itemsOnShelves[k], X0 + 1.4f, Z0 + 1.0f + (k + 1) * 1.2f); ++k; }
         break;
       }
       case ShopKind::Padaria: {
@@ -1642,12 +1642,12 @@ void renderMinimap(const World& w, std::vector<uint8_t>& rgba, int size, float e
   };
   for (const RectF& r : w.mapWater) fill(r, 0.07f, 0.17f, 0.22f);
   for (const RectF& r : w.mapSand) fill(r, 0.36f, 0.33f, 0.26f);
-  for (const RectF& r : w.mapGreen) fill(r, 0.14f, 0.2f, 0.16f);
-  for (const RectF& r : w.mapWalk) fill(r, 0.25f, 0.27f, 0.29f);
+  for (const RectF& r : w.mapGreen) fill(r, 0.17f, 0.27f, 0.2f);
+  for (const RectF& r : w.mapWalk) fill(r, 0.19f, 0.2f, 0.22f);
   for (const RectF& r : w.mapParking) fill(r, 0.2f, 0.21f, 0.23f);
   for (const RectF& r : w.mapRoads) fill(r, 0.42f, 0.44f, 0.47f);
   for (const RectF& r : w.mapPlaza) fill(r, 0.33f, 0.33f, 0.31f);
-  for (const RectF& r : w.mapBuildings) fill(r, 0.2f, 0.2f, 0.22f);
+  for (const RectF& r : w.mapBuildings) fill(r, 0.30f, 0.31f, 0.34f);
   for (int i = 0; i < size; ++i) { put(i, 0, 0.05f, 0.06f, 0.08f); put(i, size - 1, 0.05f, 0.06f, 0.08f); put(0, i, 0.05f, 0.06f, 0.08f); put(size - 1, i, 0.05f, 0.06f, 0.08f); }
 }
 

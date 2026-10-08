@@ -29,6 +29,7 @@ struct Args {
   float dayRate = 0.0f;
   int quality = 2;
   uint32_t seed = 0;
+  bool menu = false;
 };
 
 void screenshot(gfx::Renderer& r, const std::string& path) {
@@ -58,6 +59,7 @@ int main(int argc, char** argv) {
     else if (s == "--time") a.time = (float)std::atof(next().c_str());
     else if (s == "--day-rate") a.dayRate = (float)std::atof(next().c_str());
     else if (s == "--seed") a.seed = (uint32_t)std::strtoul(next().c_str(), nullptr, 10);
+    else if (s == "--menu") a.menu = true;
     else if (s == "--quality") a.quality = std::atoi(next().c_str());
   }
   std::string mk = "mkdir -p '" + a.out + "' '" + a.save + "'";
@@ -80,6 +82,7 @@ int main(int argc, char** argv) {
   gi.saveDir = a.save;
   gi.newGame = a.newGame;
   gi.seed = a.seed;
+  gi.menu = a.menu;
   game.init(gi);
   game.setScreenSize((float)a.width, (float)a.height);
 

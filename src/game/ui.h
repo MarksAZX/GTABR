@@ -29,9 +29,11 @@ class UiPainter {
   float height() const { return h_; }
   float S(float v) const { return v * scale_; }
   float scale() const { return scale_; }
+  void setTextScale(float t) { textScale_ = t; }
 
   void rect(float x, float y, float w, float h, Color c, float radius = 0, float border = 0, Color borderCol = 0);
   void gradient(float x, float y, float w, float h, Color top, Color bottom, float radius = 0);
+  void hgradient(float x, float y, float w, float h, Color left, Color right, float radius = 0);
   void glow(float x, float y, float w, float h, float radius, float blur, Color c);
   void circle(float cx, float cy, float r, Color c, float border = 0, Color borderCol = 0);
   // angles in radians, 0 = up, clockwise
@@ -50,7 +52,7 @@ class UiPainter {
   gfx::UiInst& push(float x, float y, float w, float h, gfx::UiKind kind, Color c);
   gfx::FrameData* fd_ = nullptr;
   const Assets* a_ = nullptr;
-  float w_ = 0, h_ = 0, scale_ = 1;
+  float w_ = 0, h_ = 0, scale_ = 1, textScale_ = 1;
   gfx::TexHandle cur_;
 };
 

@@ -318,7 +318,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
   pendingLights_.clear();
   const bool indoors = player_.indoors;
   const Frustum& fr = cam_.frustum();
-  const float drawDist = preset().drawDistance;
+  const float drawDist = preset().drawDistance * settings_.drawDistance;
   const Vec3 eye = cam_.eye();
   auto visible = [&](Vec3 p, float r) {
     if ((p - eye).lengthSq() > drawDist * drawDist) return false;
@@ -447,7 +447,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     Vec3 d = L.dir.lengthSq() > 1e-4f ? L.dir.normalized() : Vec3{0, -1, 0};
     u.dirCone = {d.x, d.y, d.z, L.cone};
   }
-  fd.globals.lightInfo = {(float)n, wind_, rain_, flash_};
+  fd.globals.lightInfo = {(float)n, settings_.reduceMotion ? wind_ * 0.35f : wind_, rain_, flash_};
 }
 
 }  // namespace gtabr

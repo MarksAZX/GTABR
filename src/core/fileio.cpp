@@ -92,5 +92,12 @@ bool readFile(const std::string& path, std::string& out) {
   out = ss.str();
   return true;
 }
+bool removeFile(const std::string& path) { return std::remove(path.c_str()) == 0; }
+bool fileExists(const std::string& path) {
+  FILE* f = fopen(path.c_str(), "rb");
+  if (!f) return false;
+  fclose(f);
+  return true;
+}
 }  // namespace fileio
 }  // namespace gtabr

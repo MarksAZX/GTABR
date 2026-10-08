@@ -26,13 +26,35 @@
 namespace gtabr {
 
 struct Settings {
-  float sensitivity = 1.0f;
-  bool invertY = false;
-  bool shadows = true;
+  // graphics
   int quality = 2;          // 0 BAIXO, 1 MÉDIO, 2 ALTO, 3 ULTRA (see kQualityPresets)
   bool dynamicRes = true;   // lower the render scale when the frame time is over budget
-  float hudScale = 1.0f;
+  bool shadows = true;
+  float drawDistance = 1.0f;   // multiplies the preset draw distance (props, NPCs, vehicles, HLOD switch)
+  bool bloom = true;
+  bool weatherFx = true;       // rain streaks / splashes (the weather itself still affects light and ground)
+  float brightness = 1.0f;     // exposure multiplier
   bool showFps = false;
+  // audio
+  float master = 0.9f, sfx = 1.0f, ambience = 1.0f;
+  bool muted = false;
+  // controls
+  float sensitivity = 1.0f;
+  bool invertY = false;
+  float hudScale = 1.0f;
+  float hudOpacity = 1.0f;
+  bool aimAssist = true;
+  // gameplay
+  int weatherMode = 0;      // 0 automatic, 1 clear, 2 rain, 3 storm
+  int dayCycle = 1;         // 0 frozen, 1 normal, 2 fast
+  bool showMinimap = true;
+  bool hints = true;
+  bool autosave = true;
+  // accessibility
+  float textScale = 1.0f;
+  bool highContrast = false;
+  bool reduceMotion = false;   // no camera shake / speed zoom, calmer wind
+  bool reduceFlashes = false;  // softer lightning and muzzle flashes
 };
 
 // Graphics presets: every field changes real work done per frame.
@@ -97,7 +119,19 @@ struct Panel {
   int scroll = 0;
 };
 
-enum class MenuState { None, Pause, Settings };
+enum class MenuState { None, Main, Slots, Pause };
+enum class SlotMode { Load, New, Save };
+constexpr int kSlots = 5;
+struct SlotInfo {
+  bool used = false;
+  uint32_t seed = 0;
+  int playSecs = 0, money = 0;
+  std::string city, location;
+  long long saved = 0;     // unix time of the last save
+  float progress = 0;      // 0..1 (milestones reached)
+};
+// Progress milestones (bit index in Game::progress_).
+enum Milestone { kPgFueled = 0, kPgBought, kPgRepaired, kPgSwam, kPgArmed, kPgShops, kPgEscaped, kPgDrove, kPgCount };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
@@ -112,6 +146,8 @@ class Game {
     std::string saveDir;
     bool newGame = false;
     uint32_t seed = 0;   // city seed for a new game (0 = pick one)
+    bool menu = false;   // show the main menu after loading (the app); tests start playing directly
+    int slot = 1;        // active save slot when starting without the menu
   };
   bool init(const Init& i);
   void shutdown();
@@ -125,7 +161,10 @@ class Game {
   // ---- test / scripting hooks (used by headless tests and the demo driver)
   void injectInput(const InputFrame& f) { scripted_ = f; useScripted_ = true; }
   void clearInjected() { useScripted_ = false; }
-  bool loaded() const { return phase_ == Phase::Playing; }
+  bool loaded() const { return phase_ == Phase::Playing || phase_ == Phase::Menu; }
+  bool inMenu() const { return phase_ == Phase::Menu; }
+  bool playing() const { return phase_ == Phase::Playing; }
+  bool switching() const { return phase_ == Phase::Switching; }
 
   // ---- state access (read by tests)
   Player& player() { return player_; }
@@ -150,8 +189,27 @@ class Game {
   void activateInteractable(const Interactable& it);
   void toggleCamera();
   void tryEnterExit();
-  bool saveGame();
-  bool loadGame();
+  bool saveGame();                 // writes the active slot
+  bool loadGame();                 // reads the active slot (same city)
+  // ---- slots / menus (game_save.cpp, game_menu.cpp)
+  SlotInfo readSlotInfo(int slot) const;
+  int latestSlot() const;          // most recently saved slot (0 = none)
+  bool saveToSlot(int slot);
+  bool deleteSlot(int slot);
+  void startNewGame(int slot, uint32_t seed = 0);
+  bool loadSlot(int slot);
+  void enterMainMenu();
+  void openMenu(MenuState m) { menu_ = m; }
+  void tapUi(int id) { menuAction(id); }          // test hook: same path as a finger tap
+  uint32_t seed() const { return worldSeed_; }
+  uint32_t progress() const { return progress_; }
+  int activeSlot() const { return activeSlot_; }
+  void markProgress(int bit) { if (!(progress_ & (1u << bit))) { progress_ |= 1u << bit; } }
+  void runCode(int code);          // pause-menu codes (cheats), each with a real effect
+  bool menuIsOpen() const { return menu_ != MenuState::None; }
+  std::string locationName(Vec2 p, bool indoors) const;
+  bool loadSettings();
+  bool saveSettings() const;
   void startFueling(int vehicleIdx, int pumpId, int amountCents /*0 = fill*/);
   void buyItem(int item, bool fromShelf);
   void repairVehicle(int vehicleIdx);
@@ -170,7 +228,7 @@ class Game {
   void setDebugOverlay(bool b) { settings_.showFps = b; }
 
  private:
-  enum class Phase { Loading, Playing };
+  enum class Phase { Loading, Menu, Playing, Switching };
 
   // ---- core (game_core.cpp)
   void startWorldJob();
@@ -200,7 +258,7 @@ class Game {
   void openAttendantPanel();
   void openWorkshopPanel();
   void openNpcPanel(int npcIdx);
-  void openSettingsMenu();
+  void openSettingsMenu() { settingsOnly_ = false; pauseTab_ = 4; menu_ = MenuState::Pause; }
 
   // ---- rendering (game_render.cpp)
   void buildScene(gfx::FrameData& fd);
@@ -210,7 +268,7 @@ class Game {
   void flushSprites(gfx::FrameData& fd);
   void setupGlobals(gfx::FrameData& fd);
  public:
-  void setTimeOfDay(float h, float rate) { timeOfDay_ = h; dayRate_ = rate; }
+  void setTimeOfDay(float h, float rate) { timeOfDay_ = h; dayRate_ = rate; dayRateOverridden_ = true; }
   void setWeatherMode(int mode);
   int weatherMode() const { return weatherMode_; }
   float rainAmount() const { return rain_; }
@@ -233,14 +291,12 @@ class Game {
   void drawFuelGauge();
   void drawPanel(float dt);
   void drawWheel(float dt);
-  void drawMenus(float dt);
   void drawDebug();
   InputLayout makeLayout() const;
   void handleUiPointers(const InputFrame& in);
   float uiScale() const;
 
   // ---- save (game_save.cpp)
-  std::string savePath() const;
 
   Init cfg_;
   gfx::Renderer* r_ = nullptr;
@@ -291,7 +347,6 @@ class Game {
   std::deque<Toast> toasts_;
   Pool<Particle> particles_{256};
   Panel panel_;
-  MenuState menu_ = MenuState::None;
   std::vector<std::pair<Vec4, int>> uiRects_;   // clickable rects built while drawing panels/menus: (x,y,w,h) -> index
   float panelScrollVel_ = 0;
   int pressedUi_ = -1;
@@ -340,6 +395,7 @@ class Game {
   // time of day / weather
   float timeOfDay_ = 10.0f;      // hours
   float dayRate_ = 1.0f / 60.0f; // game hours per real second (a full day in 24 minutes)
+  bool dayRateOverridden_ = false;   // a test pinned the clock
   float cloudCover_ = 0.42f;
   float wetness_ = 0.0f;
   // weather (see game_weather.cpp)
@@ -347,6 +403,54 @@ class Game {
   float weatherTarget_ = 0.0f, rain_ = 0.0f, wind_ = 0.3f, weatherTimer_ = 90.0f, flash_ = 0.0f, flashTimer_ = 8.0f, thunderIn_ = 0.0f;
   int rainHandle_ = 0;
   Rng wRng_{0xBADC0FFEE0DDF00Dull};   // weather has its own stream so it never perturbs gameplay randomness
+
+  // ---- menus, slots and world switching (game_menu.cpp / game_save.cpp / game_core.cpp)
+  void menuAction(int id);
+  void drawMainMenu(float dt);
+  void drawPauseMenu(float dt);
+  void drawSlotList(float x, float y, float w, float h, SlotMode mode);
+  void drawConfirm();
+  void drawMapTab(float x, float y, float w, float h);
+  void drawGameTab(float x, float y, float w, float h);
+  void drawInventoryTab(float x, float y, float w, float h);
+  void drawCodesTab(float x, float y, float w, float h);
+  void drawSettingsTab(float x, float y, float w, float h);
+  void drawSaveTab(float x, float y, float w, float h);
+  void handleMenuPointers(const InputFrame& in);
+  void updateMenuScene(float dt);
+  void refreshSlots();
+  void applyStateFromFile(const std::unordered_map<std::string, std::string>& kv);
+  void buildWorldGpu();
+  void destroyWorldGpu();
+  void switchWorld(uint32_t seed, std::function<void()> then);
+  void beginPlaying(bool fresh);
+  void applyAudioSettings();
+  void showConfirm(const std::string& title, const std::string& text, const std::string& yes, const std::string& no, std::function<void()> onYes);
+  std::string slotPath(int slot) const;
+  void applySettingStep(int id);
+  void applySettingSlider(int id, float t);
+  MenuState menu_ = MenuState::None;
+  int pauseTab_ = 0, settingsTab_ = 0;
+  bool settingsOnly_ = false;           // settings opened from the main menu (no pause tabs)
+  SlotMode slotMode_ = SlotMode::Load;
+  SlotInfo slots_[kSlots];
+  int activeSlot_ = 1;
+  uint32_t progress_ = 0, shopsVisited_ = 0;
+  float driven_ = 0;                    // metres driven
+  struct Confirm { bool open = false; std::string title, text, yes, no; std::function<void()> onYes; } confirm_;
+  std::function<void()> afterWorld_;
+  std::string codeStatus_;
+  float codeStatusT_ = 0;
+  float menuT_ = 0;                     // time since the current menu opened (fade-in)
+  float menuCamT_ = 0;
+  // full map view
+  Vec2 mapCenter_;
+  float mapZoom_ = 0;                   // pixels per metre (0 = fit)
+  Vec2 mapDragPrev_;
+  bool mapDragging_ = false, mapMoved_ = false;
+  float mapPinchPrev_ = 0;
+  Vec4 mapRect_;
+  float uiMoved_ = 0;                   // pointer travel since press (tap vs drag)
   DayLighting day_;
   Vec3 shadowFocus_;
   float shadowRadius_ = 70.0f;

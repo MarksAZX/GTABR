@@ -255,11 +255,12 @@ void Audio::mix(float* out, int frames) {
   std::fill(out, out + frames * 2, 0.0f);
   std::lock_guard<std::mutex> l(m_);
   float master = master_;
+  const float sfxVol = sfx_, ambVol = amb_;
   for (Voice& v : voices_) {
     if (!v.active || !v.s || v.s->data.empty()) continue;
     Vec3 d = v.p - listener_;
     float dist = d.length();
-    float att = v.vol / (1.0f + dist * dist * 0.012f);
+    float att = v.vol * (v.loop ? ambVol : sfxVol) / (1.0f + dist * dist * 0.012f);
     float pan = dist > 0.5f ? clamp(d.dot(listenerRight_) / dist, -1.0f, 1.0f) * 0.7f : 0.0f;
     float gl = att * std::sqrt(0.5f * (1.0f - pan)), gr = att * std::sqrt(0.5f * (1.0f + pan));
     const std::vector<float>& s = v.s->data;

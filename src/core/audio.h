@@ -25,6 +25,8 @@ class Audio {
   void loopStop(int handle);
   void setListener(Vec3 pos, Vec3 right) { std::lock_guard<std::mutex> l(m_); listener_ = pos; listenerRight_ = right; }
   void setMasterVolume(float v) { master_ = v; }
+  // Bus levels: one-shot effects vs looping ambience (sirens, surf, rain). 0 mutes.
+  void setBusVolumes(float sfx, float ambience) { sfx_ = sfx; amb_ = ambience; }
   // Renders interleaved stereo float frames (called by the device callback).
   void mix(float* out, int frames);
   int playedCount(const std::string& id) const;
@@ -40,6 +42,7 @@ class Audio {
   mutable std::mutex m_;
   Vec3 listener_, listenerRight_{1, 0, 0};
   std::atomic<float> master_{0.9f};
+  std::atomic<float> sfx_{1.0f}, amb_{1.0f};
   int nextHandle_ = 1;
   void* device_ = nullptr;
   int rate_ = 48000;
