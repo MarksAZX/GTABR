@@ -1112,12 +1112,12 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.setQuality(3);
     g.toggleCamera();
     b.idle(90);
-    for (float hour : {10.0f, 15.5f, 18.4f}) {
-      g.setTimeOfDay(hour, 0.6f);
+    for (float hour : {10.0f, 16.9f, 17.7f}) {
+      g.setTimeOfDay(hour, 0.0f);
       b.idle(6);
       b.shot("ultra_" + std::to_string((int)hour));
     }
-    g.setTimeOfDay(12.0f, 0.5f);
+    g.setTimeOfDay(12.0f, 0.0f);
     for (int i = 0; i < 6; ++i) { InputFrame in; in.look = {120, 0}; in.lookDragging = true; b.step(in, 1); }
     b.shot("ultra_turn_blur");
     return 0;

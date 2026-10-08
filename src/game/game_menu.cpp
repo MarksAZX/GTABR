@@ -518,12 +518,12 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
   (void)h;
   const float S = uiScale();
   Ctx c{ui_, uiRects_, S, pressedUi_, settings_.highContrast};
-  static const char* names[5] = {"GRÁFICOS", "ÁUDIO", "CONTROLES", "JOGABILIDADE", "ACESSIBILIDADE"};
-  float tabW = w / 5.0f;
-  for (int i = 0; i < 5; ++i) {
+  static const char* names[6] = {"GRÁFICOS", "AVANÇADO", "ÁUDIO", "CONTROLES", "JOGO", "ACESSIBILIDADE"};
+  float tabW = w / 6.0f;
+  for (int i = 0; i < 6; ++i) {
     bool sel = settingsTab_ == i;
     float tx = x + i * tabW;
-    ui_.text(true, names[i], tx + tabW * 0.5f, y + 14 * S, 20 * S, sel ? kInk : dimCol(c), Align::Center);
+    ui_.text(true, names[i], tx + tabW * 0.5f, y + 14 * S, 18 * S, sel ? kInk : dimCol(c), Align::Center);
     ui_.rect(tx + 14 * S, y + 52 * S, tabW - 28 * S, sel ? 3 * S : 1.2f * S, sel ? kAcc : kLine, 1.5f * S);
     uiRects_.push_back({Vec4(tx, y, tabW, 60 * S), 2400 + i});
   }
@@ -583,13 +583,40 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
       break;
     }
     case 1: {
+      // advanced graphics: two columns of compact rows so everything fits without scrolling
+      static const char* cs[3] = {"NATURAL", "GOLDEN HOUR", "VÍVIDO"};
+      float colW = (w - 16 * S) * 0.5f;
+      float y0 = ry;
+      rw = colW;
+      rh = 58 * S;
+      step("Estilo de cor", "Gradação de cinema", cs[clamp(s.colorStyle, 0, 2)], 3108);
+      toggle("Anti-aliasing temporal", "TAA: bordas estáveis", s.taa, 3100);
+      toggle("Oclusão de ambiente", "SSAO (Alto / Ultra)", s.ssao, 3101);
+      toggle("Sombras de contato", "Pés, rodas, props", s.contactShadows, 3102);
+      toggle("Nuvens volumétricas", "Alto / Ultra", s.volClouds, 3103);
+      toggle("Raios de luz", "Feixes do sol", s.lightShafts, 3104);
+      float yEnd = ry;
+      ry = y0;
+      float xs = x;
+      x = xs + colW + 16 * S;
+      toggle("Granulação de filme", "", s.filmGrain, 3105);
+      toggle("Aberração cromática", "Bordas da lente", s.chromAb, 3106);
+      toggle("Vinheta", "Escurece os cantos", s.vignette, 3107);
+      slider("Nitidez", "", s.sharpness, 0.0f, 1.0f, 1040, pct(s.sharpness));
+      slider("Resolução", "Escala da renderização", s.resScale, 0.5f, 1.0f, 1041, pct(s.resScale));
+      slider("Campo de visão", "", s.fovScale, 0.85f, 1.25f, 1042, pct(s.fovScale));
+      x = xs;
+      ry = std::max(ry, yEnd);
+      break;
+    }
+    case 2: {
       slider("Volume geral", "", s.master, 0.0f, 1.0f, 1010, pct(s.master));
       slider("Efeitos", "Tiros, passos, impactos, motores", s.sfx, 0.0f, 1.0f, 1011, pct(s.sfx));
       slider("Ambiente", "Mar, chuva, trovões, sirenes", s.ambience, 0.0f, 1.0f, 1012, pct(s.ambience));
       toggle("Silenciar tudo", "", s.muted, 3010);
       break;
     }
-    case 2: {
+    case 3: {
       slider("Sensibilidade da câmera", "Arrastar para girar", s.sensitivity, 0.4f, 2.0f, 1020, fmtFloat(s.sensitivity, 2) + "x");
       toggle("Inverter eixo Y", "Terceira pessoa", s.invertY, 3020);
       toggle("Câmera isométrica", "Top Down vira vista isométrica", s.isometric, 3090);
@@ -598,7 +625,7 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
       toggle("Mira assistida", "Ajuda a acertar alvos próximos", s.aimAssist, 3021);
       break;
     }
-    case 3: {
+    case 4: {
       static const char* wn[4] = {"AUTOMÁTICO", "LIMPO", "CHUVA", "TEMPESTADE"};
       static const char* dn[3] = {"PARADO", "NORMAL", "RÁPIDO"};
       step("Clima", "Automático alterna sol e chuva sozinho", wn[clamp(s.weatherMode, 0, 3)], 3030);
@@ -830,7 +857,7 @@ void Game::menuAction(int id) {
     showConfirm("Voltar sem salvar?", "O progresso desde o último salvamento será perdido.", "VOLTAR AO MENU", "CANCELAR", [this]() { enterMainMenu(); });
     return;
   }
-  if (id >= 2400 && id <= 2404) { settingsTab_ = id - 2400; return; }
+  if (id >= 2400 && id <= 2405) { settingsTab_ = id - 2400; return; }
   if (id >= 2500 && id < 2510) { runCode(id - 2500); return; }
   if (id >= 2600 && id < 2650) { useItem(id - 2600); return; }
   if (id >= 2650 && id < 2700) {
@@ -856,6 +883,15 @@ void Game::applySettingStep(int id) {
     case 3003: s.bloom = !s.bloom; break;
     case 3091: s.reflections = !s.reflections; break;
     case 3092: s.motionBlur = !s.motionBlur; break;
+    case 3100: s.taa = !s.taa; break;
+    case 3101: s.ssao = !s.ssao; break;
+    case 3102: s.contactShadows = !s.contactShadows; break;
+    case 3103: s.volClouds = !s.volClouds; break;
+    case 3104: s.lightShafts = !s.lightShafts; break;
+    case 3105: s.filmGrain = !s.filmGrain; break;
+    case 3106: s.chromAb = !s.chromAb; break;
+    case 3107: s.vignette = !s.vignette; break;
+    case 3108: s.colorStyle = (s.colorStyle + 1) % 3; break;
     case 3004: s.weatherFx = !s.weatherFx; break;
     case 3005: s.showFps = !s.showFps; break;
     case 3010: s.muted = !s.muted; break;
@@ -889,6 +925,9 @@ void Game::applySettingSlider(int id, float t) {
     case 1021: s.hudScale = 0.75f + t * 0.6f; break;
     case 1022: s.hudOpacity = 0.3f + t * 0.7f; break;
     case 1030: s.textScale = 0.85f + t * 0.45f; break;
+    case 1040: s.sharpness = t; break;
+    case 1041: s.resScale = 0.5f + t * 0.5f; applySettings(); break;
+    case 1042: s.fovScale = 0.85f + t * 0.4f; cam_.fovScale = s.fovScale; break;
     default: break;
   }
   if (id >= 1010 && id <= 1012) applyAudioSettings();

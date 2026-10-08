@@ -133,7 +133,24 @@ void Game::setupGlobals(gfx::FrameData& fd) {
     const QualityPreset& q = preset();
     bool hi = q.ao > 0.0f;
     bool mb = settings_.motionBlur && hi && !settings_.reduceMotion && fadeAlpha_ < 0.3f;
-    g.post = {mb ? 0.5f : 0.0f, hi ? 1.0f : 0.0f, q.renderScale < 0.95f ? 0.34f : 0.16f, q.ao >= 0.7f ? 1.0f : 0.0f};
+    const Settings& st = settings_;
+    float sharp = st.sharpness * (q.renderScale * st.resScale < 0.95f ? 0.7f : 0.45f) * (st.taa ? 1.3f : 1.0f);
+    g.post = {mb ? 0.5f : 0.0f, (hi && st.contactShadows) ? 1.0f : 0.0f, sharp, (hi && st.volClouds) ? 1.0f : 0.0f};
+    // TAA: Halton(2,3) sub-pixel jitter applied to the projection the scene is drawn with; the unjittered matrices stay in
+    // prevViewProj / invViewProj for reprojection
+    bool taaOn = st.taa && !cut;
+    Vec2 jit{0, 0};
+    if (st.taa) {
+      auto halton = [](uint32_t i, uint32_t b) { float f = 1, r = 0; while (i > 0) { f /= (float)b; r += f * (float)(i % b); i /= b; } return r; };
+      uint32_t n = (taaFrame_++ % 8u) + 1u;
+      float sw = std::max(1.0f, screenW_ * q.renderScale * st.resScale), sh = std::max(1.0f, screenH_ * q.renderScale * st.resScale);
+      jit = {(halton(n, 2) - 0.5f) * 2.0f / sw, (halton(n, 3) - 0.5f) * 2.0f / sh};
+      Mat4 J = Mat4::translation({jit.x, jit.y, 0.0f});
+      g.viewProj = J * g.viewProj;
+    }
+    g.taa = {taaOn ? 0.9f : (st.taa ? 0.0001f : 0.0f), jit.x * 0.5f, jit.y * 0.5f, 0.0f};
+    prevJitter_ = jit;
+    g.look = {st.filmGrain ? 1.0f : 0.0f, st.chromAb ? 1.0f : 0.0f, st.vignette ? 1.0f : 0.0f, (float)st.colorStyle};
   }
   g.camPos = {cam_.eye().x, cam_.eye().y, cam_.eye().z, realTime_};
   g.camRight = {cam_.right().x, cam_.right().y, cam_.right().z, 0};
@@ -206,7 +223,7 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   fd.nearZ = cam_.nearZ(); fd.farZ = cam_.farZ();
   fd.tanHalfY = std::tan(cam_.fov() * 0.5f);
   fd.tanHalfX = fd.tanHalfY * aspect;
-  fd.aoStrength = qp.ao * (1.0f - 0.5f * ind);
+  fd.aoStrength = settings_.ssao ? qp.ao * (1.0f - 0.5f * ind) : 0.0f;
   fd.aoRadius = 0.9f;
   fd.wetness = (settings_.reflections && qp.ao > 0.0f) ? wetness_ * (1.0f - ind) : 0.0f;
   {
@@ -224,7 +241,7 @@ void Game::setupGlobals(gfx::FrameData& fd) {
     fd.sunUV = cw > 0.01f ? Vec2{cx / cw * 0.5f + 0.5f, cy / cw * 0.5f + 0.5f} : Vec2{0.5f, -2.0f};
     float up = clamp(L.y * 3.0f, 0.0f, 1.0f);                    // sun above the horizon
     float clear = (1.0f - day_.cloudCover * 0.8f) * (1.0f - clamp(rain_ * 1.5f, 0.0f, 1.0f));
-    fd.shaftIntensity = qp.shafts * 0.55f * front * up * clear * (1.0f - day_.night) * (1.0f - ind);
+    fd.shaftIntensity = (settings_.lightShafts ? 1.0f : 0.0f) * qp.shafts * 0.55f * front * up * clear * (1.0f - day_.night) * (1.0f - ind);
     fd.shaftColor = day_.sunColor * 0.16f;
   }
 }

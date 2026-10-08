@@ -51,6 +51,7 @@ class CameraRig {
   void kick(float k) { kick_ = std::max(kick_, k); }   // impact punch: a brief tightening of the lens
   float sensitivity = 1.0f;
   bool invertY = false;
+  float fovScale = 1.0f;    // user field-of-view multiplier
   bool isometric = false;   // top-down becomes a 45-degree isometric view (fixed yaw steps, long lens, 4 snap angles)
 
  private:

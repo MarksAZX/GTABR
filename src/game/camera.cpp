@@ -153,6 +153,7 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   yaw_ = yaw;
   kick_ *= 1.0f - expDecay(9.0f, dt);
   fov_ *= 1.0f - 0.045f * kick_;
+  fov_ *= fovScale;
   dist_ *= 1.0f - 0.03f * kick_;
 
   Vec3 fwdH = forwardFromYaw(yaw_);

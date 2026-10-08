@@ -5,6 +5,8 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 sunDir, sunColor, ambSky, ambGround, fog, params, sky0, sky1, cascade, lightInfo, probeRect, probeInfo, lightGrid;
   mat4 prevViewProj;
   vec4 post;   // x = motion blur, y = contact shadows, z = sharpening
+  vec4 taa;
+  vec4 look;   // x = film grain, y = chromatic aberration, z = vignette scale, w = golden-hour grade
 } g;
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
@@ -82,7 +84,7 @@ vec3 wetReflection(vec2 uv, float d, vec3 P) {
 void main() {
   // lens: slight chromatic aberration towards the edges (cheap, only 2 extra taps of the scene)
   vec2 qc = vUV - 0.5;
-  vec2 ca = qc * (0.0016 * dot(qc, qc) * 4.0);
+  vec2 ca = qc * (0.0016 * dot(qc, qc) * 4.0) * g.look.y;
   vec3 hdr = vec3(texture(uScene, vUV + ca).r, texture(uScene, vUV).g, texture(uScene, vUV - ca).b);
   float d0 = texture(uDepth, vUV).r;
   // camera motion blur: reproject this pixel with the previous frame's camera and smear along the screen-space velocity
@@ -172,16 +174,32 @@ void main() {
   c = clamp((c - 0.5) * pc.gain.w + 0.5, 0.0, 1.0);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, pc.lift.w);
+  // colour style. Golden hour (cinema): teal-leaning shadows, warm amber highlights, a soft highlight bloom wash and a gentle
+  // S-curve, the sun-drenched look of late afternoon on a coast. Vivid: more saturation and punch.
+  if (g.look.w > 0.5 && g.look.w < 1.5) {
+    float lw = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    vec3 shadowT = vec3(0.93, 1.00, 1.06), highT = vec3(1.06, 1.00, 0.90);
+    c *= mix(shadowT, highT, smoothstep(0.08, 0.80, lw));
+    c += vec3(1.0, 0.62, 0.32) * max(blurred - vec3(0.6), 0.0).r * 0.015 * pc.b.x;   // warm glow around bright areas
+    c = clamp(c, 0.0, 1.0);
+    c = c * c * (3.0 - 2.0 * c) * 0.22 + c * 0.78;                                       // filmic S-curve
+    float l2 = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(l2), c, 1.10);
+  } else if (g.look.w > 1.5) {
+    float l2 = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(l2), c, 1.22);
+    c = clamp((c - 0.5) * 1.06 + 0.5, 0.0, 1.0);
+  }
   // vignette + subtle grain
   vec2 q = vUV - 0.5;
-  c *= 1.0 - pc.a.z * smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.2)));
+  c *= 1.0 - pc.a.z * g.look.z * smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.2)));
   c = mix(c, vec3(0.0), pc.a.y);
   c = clamp(c, 0.0, 1.0);
   // display encoding
   vec3 outc = pow(c, vec3(1.0 / 2.2));
   // film grain after encoding (never amplified by the gamma curve), stronger in mid tones, almost absent in the darks
   float gl = dot(outc, vec3(0.3, 0.59, 0.11));
-  outc += (hash(vUV * 1000.0 + pc.b.w) - 0.5) * 0.020 * smoothstep(0.02, 0.35, gl);
+  outc += (hash(vUV * 1000.0 + pc.b.w) - 0.5) * 0.020 * smoothstep(0.02, 0.35, gl) * g.look.x;
   if (pc.a.w > 0.5) outc = clamp(c + (outc - pow(c, vec3(1.0 / 2.2))) * 0.6, 0.0, 1.0);   // sRGB swapchain encodes in hardware
   outColor = vec4(outc, 1.0);
 }

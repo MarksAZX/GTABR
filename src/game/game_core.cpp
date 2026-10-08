@@ -559,7 +559,7 @@ void Game::updateAdaptiveQuality(float dt) {
   if (adaptTimer_ < 3.0f || !settings_.dynamicRes) return;
   adaptTimer_ = 0;
   // dynamic resolution: never above the preset's base scale, never below 60% of it
-  float base = preset().renderScale;
+  float base = preset().renderScale * settings_.resScale;
   float s = r_->renderScale();
   if (frameMsAvg_ > 36.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.08f));
   else if (frameMsAvg_ < 24.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.08f));
@@ -567,7 +567,8 @@ void Game::updateAdaptiveQuality(float dt) {
 
 void Game::applySettings() {
   const QualityPreset& qp = preset();
-  r_->setRenderScale(qp.renderScale);
+  r_->setRenderScale(qp.renderScale * settings_.resScale);
+  cam_.fovScale = settings_.fovScale;
   r_->setShadowMapSize(qp.shadowMapSize);
   r_->setShadowsEnabled(settings_.shadows && qp.shadowCascades > 0);
   cam_.sensitivity = settings_.sensitivity;

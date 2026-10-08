@@ -197,7 +197,7 @@ bool Game::saveSettings() const {
   o.precision(5);
   const Settings& s = settings_;
   o << "quality=" << s.quality << "\ndynamicRes=" << s.dynamicRes << "\nshadows=" << s.shadows << "\ndrawDistance=" << s.drawDistance
-    << "\nmotionBlur=" << s.motionBlur << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
+    << "\nmotionBlur=" << s.motionBlur << "\ntaa=" << s.taa << "\nssao=" << s.ssao << "\ncontactShadows=" << s.contactShadows << "\nvolClouds=" << s.volClouds << "\nlightShafts=" << s.lightShafts << "\nfilmGrain=" << s.filmGrain << "\nchromAb=" << s.chromAb << "\nvignette=" << s.vignette << "\ncolorStyle=" << s.colorStyle << "\nsharpness=" << s.sharpness << "\nresScale=" << s.resScale << "\nfovScale=" << s.fovScale << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
     << "\nmaster=" << s.master << "\nsfx=" << s.sfx << "\nambience=" << s.ambience << "\nmuted=" << s.muted
     << "\nsensitivity=" << s.sensitivity << "\ninvertY=" << s.invertY << "\nisometric=" << s.isometric << "\nhudScale=" << s.hudScale << "\nhudOpacity=" << s.hudOpacity
     << "\naimAssist=" << s.aimAssist << "\nweatherMode=" << s.weatherMode << "\ndayCycle=" << s.dayCycle << "\nshowMinimap=" << s.showMinimap
@@ -219,6 +219,18 @@ bool Game::loadSettings() {
   s.bloom = numOf(kv, "bloom", 1) > 0.5f;
   s.reflections = numOf(kv, "reflections", 1) > 0.5f;
   s.motionBlur = numOf(kv, "motionBlur", 1) > 0.5f;
+  s.taa = numOf(kv, "taa", 1) > 0.5f;
+  s.ssao = numOf(kv, "ssao", 1) > 0.5f;
+  s.contactShadows = numOf(kv, "contactShadows", 1) > 0.5f;
+  s.volClouds = numOf(kv, "volClouds", 1) > 0.5f;
+  s.lightShafts = numOf(kv, "lightShafts", 1) > 0.5f;
+  s.filmGrain = numOf(kv, "filmGrain", 1) > 0.5f;
+  s.chromAb = numOf(kv, "chromAb", 1) > 0.5f;
+  s.vignette = numOf(kv, "vignette", 1) > 0.5f;
+  s.colorStyle = clamp((int)numOf(kv, "colorStyle", 1), 0, 2);
+  s.sharpness = clamp(numOf(kv, "sharpness", 0.5f), 0.0f, 1.0f);
+  s.resScale = clamp(numOf(kv, "resScale", 1.0f), 0.5f, 1.0f);
+  s.fovScale = clamp(numOf(kv, "fovScale", 1.0f), 0.85f, 1.25f);
   s.weatherFx = numOf(kv, "weatherFx", 1) > 0.5f;
   s.brightness = clamp(numOf(kv, "brightness", 1.0f), 0.7f, 1.4f);
   s.showFps = numOf(kv, "showFps", 0) > 0.5f;

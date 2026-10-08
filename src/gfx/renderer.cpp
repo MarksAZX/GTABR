@@ -233,7 +233,7 @@ void Renderer::shutdown() {
   }
   VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
                         pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
-                        pipeShadowSkinned_, pipeAo_, pipeAoBlur_};
+                        pipeShadowSkinned_, pipeAo_, pipeAoBlur_, pipeTaa_};
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
   VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_, plAo_};
   for (auto p : pls) if (p) vkDestroyPipelineLayout(dev, p, nullptr);
@@ -490,6 +490,7 @@ bool Renderer::createLayoutsAndPipelines() {
   pipeUi_ = buildPipeline("ui.vert.spv", "ui.frag.spv", compositePass_, plUi_, 4, false, false, LEQ, true, VK_CULL_MODE_NONE, false,
                           VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
   pipeBlurDown_ = buildPipeline("fullscreen.vert.spv", "blur_down.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeTaa_ = buildPipeline("fullscreen.vert.spv", "taa.frag.spv", blurPass_, plComposite_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeBlurUp_ = buildPipeline("fullscreen.vert.spv", "blur_up.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeAo_ = buildPipeline("fullscreen.vert.spv", "ssao.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeAoBlur_ = buildPipeline("fullscreen.vert.spv", "ssao_blur.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
@@ -755,6 +756,14 @@ void Renderer::destroyRenderTargets() {
     }
     v->clear();
   }
+  for (int i = 0; i < 2; ++i) {
+    if (taaFb_[i]) vkDestroyFramebuffer(dev, taaFb_[i], nullptr);
+    taaFb_[i] = VK_NULL_HANDLE;
+    for (VkDescriptorSet* s : {&taaSet_[i], &taaSceneSet_[i], &taaCompositeSet_[i]}) { if (*s) vkFreeDescriptorSets(dev, pool_, 1, s); *s = VK_NULL_HANDLE; }
+    if (taaHist_[i].image) ctx_.destroyImage(taaHist_[i]);
+    taaHist_[i] = {};
+  }
+  taaHistValid_ = false;
   if (sceneSampleSet_) vkFreeDescriptorSets(dev, pool_, 1, &sceneSampleSet_);
   if (compositeSet_) vkFreeDescriptorSets(dev, pool_, 1, &compositeSet_);
   sceneSampleSet_ = compositeSet_ = VK_NULL_HANDLE;
@@ -926,6 +935,30 @@ void Renderer::createRenderTargets() {
                                                    : VkDescriptorImageInfo{lin, aoB_.view, RO};
   compositeSet_ = allocSet(layoutTex4_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
                                          VkDescriptorImageInfo{lin, aoB_.view, RO}, depthSample});
+  // temporal anti-aliasing: two resolved histories (ping-pong). Frame N writes hist[N&1] from the scene + hist[(N+1)&1];
+  // bloom and the composite then read the resolved image instead of the raw jittered scene.
+  if (aoSupported_) {
+    VkCommandBuffer ocb = ctx_.beginOneShot();
+    for (int i = 0; i < 2; ++i) {
+      taaHist_[i] = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+      ctx_.transitionImage(ocb, taaHist_[i].image, VK_IMAGE_LAYOUT_UNDEFINED, RO, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+      VkFramebufferCreateInfo tf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+      tf.renderPass = blurPass_;
+      tf.attachmentCount = 1;
+      tf.pAttachments = &taaHist_[i].view;
+      tf.width = sceneW_; tf.height = sceneH_; tf.layers = 1;
+      VK_CHECK(vkCreateFramebuffer(dev, &tf, nullptr, &taaFb_[i]));
+    }
+    ctx_.endOneShot(ocb);
+    for (int i = 0; i < 2; ++i) {
+      taaSet_[i] = allocSet(layoutTex4_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, taaHist_[1 - i].view, RO},
+                                          VkDescriptorImageInfo{nearS, sceneDepth_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL},
+                                          VkDescriptorImageInfo{lin, sceneColor_.view, RO}});
+      taaSceneSet_[i] = allocTexSet(taaHist_[i].view, lin);
+      taaCompositeSet_[i] = allocSet(layoutTex4_, {VkDescriptorImageInfo{lin, taaHist_[i].view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
+                                                   VkDescriptorImageInfo{lin, aoB_.view, RO}, depthSample});
+    }
+  }
 }
 
 void Renderer::bindProbeSets() {
@@ -1367,6 +1400,33 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdEndRenderPass(cb);
   }
 
+  // ---- temporal anti-aliasing resolve
+  const bool doTaa = taaFb_[0] && fd.globals.taa.x > 0.0f;
+  const int taaCur = (int)(frameCounter_ & 1u);
+  if (doTaa) {
+    VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rb.renderPass = blurPass_;
+    rb.framebuffer = taaFb_[taaCur];
+    rb.renderArea = {{0, 0}, {sceneW_, sceneH_}};
+    vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport vp{0, 0, (float)sceneW_, (float)sceneH_, 0, 1};
+    VkRect2D sc{{0, 0}, {sceneW_, sceneH_}};
+    vkCmdSetViewport(cb, 0, 1, &vp);
+    vkCmdSetScissor(cb, 0, 1, &sc);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeTaa_);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 0, 1, &fr.globalsA, 0, nullptr);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &taaSet_[taaCur], 0, nullptr);
+    float tp[32] = {taaHistValid_ ? fd.globals.taa.x : 0.0f, 1.0f / sceneW_, 1.0f / sceneH_, 0.0f, fd.nearZ, fd.farZ, 0, 0};
+    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128, tp);
+    vkCmdDraw(cb, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cb);
+    taaHistValid_ = true;
+  } else {
+    taaHistValid_ = false;
+  }
+  VkDescriptorSet sceneSrc = doTaa ? taaSceneSet_[taaCur] : sceneSampleSet_;
+  VkDescriptorSet compSrc = doTaa ? taaCompositeSet_[taaCur] : compositeSet_;
+
   // ---- ambient occlusion + sky mask (half resolution). When off the target is only cleared to "fully visible".
   const bool doAo = aoSupported_ && (fd.aoStrength > 0.001f || fd.shaftIntensity > 0.001f);
   {
@@ -1423,7 +1483,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
       vkCmdEndRenderPass(cb);
     };
     float off = doBlur ? 1.6f : 1.0f;
-    pass(blurDown_[0], sceneSampleSet_, (float)sceneW_, (float)sceneH_, pipeBlurDown_, off);
+    pass(blurDown_[0], sceneSrc, (float)sceneW_, (float)sceneH_, pipeBlurDown_, off);
     for (int i = 1; i < 4; ++i)
       pass(blurDown_[i], blurDown_[i - 1].set, (float)blurDown_[i - 1].w, (float)blurDown_[i - 1].h, pipeBlurDown_, off);
     pass(blurUp_[0], blurDown_[3].set, (float)blurDown_[3].w, (float)blurDown_[3].h, pipeBlurUp_, off);
@@ -1444,7 +1504,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 0, 1, &fr.globalsA, 0, nullptr);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compSrc, 0, nullptr);
     float pcv[32] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
                      fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,
                      fd.globals.camPos.w,

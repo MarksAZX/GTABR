@@ -71,6 +71,8 @@ struct GlobalsUBO {
   Vec4 lightGrid;   // x = light count, y = tiles per pixel (x), z = tiles per pixel (y), w = tiles in x
   Mat4 prevViewProj;   // previous frame's camera, for motion blur reprojection
   Vec4 post;           // x = motion blur, y = contact shadows, z = sharpening, w = volumetric clouds (0 / 1)
+  Vec4 taa;            // x = history weight (0 = off / reset), yz = sub-pixel jitter (uv), w = unused
+  Vec4 look;           // x = film grain, y = chromatic aberration, z = vignette scale, w = golden-hour grade amount
 };
 
 enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4, ASTC8x8_SRGB = 5 };
@@ -321,6 +323,11 @@ class Renderer {
   Image portraitColor_, portraitDepth_;
   VkFramebuffer portraitFb_ = VK_NULL_HANDLE;
   TexHandle portraitTex_;
+  Image taaHist_[2];
+  VkFramebuffer taaFb_[2] = {};
+  VkDescriptorSet taaSet_[2] = {}, taaSceneSet_[2] = {}, taaCompositeSet_[2] = {};
+  VkPipeline pipeTaa_ = VK_NULL_HANDLE;
+  bool taaHistValid_ = false;
   std::vector<ModelRes> models_;
   std::vector<VkDescriptorSet> materials_;
   TexHandle dummyTex_, flatNormalTex_, defaultOrmTex_, dummyArray_, flatNormalArray_;
