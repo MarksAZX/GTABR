@@ -66,12 +66,16 @@ struct Bot {
     idle(2);
   }
   bool walkTo(Vec2 target, float tol, int maxFrames, bool run = false) {
+    Vec2 lastP = g.player().pos; int sideT = 0;
     for (int i = 0; i < maxFrames; ++i) {
       Vec2 d = target - g.player().pos;
       if (d.length() < tol) { idle(2); return true; }
       float yaw = g.camera().yaw();
       Vec2 f{std::sin(yaw), -std::cos(yaw)}, rt{std::cos(yaw), std::sin(yaw)};
       Vec2 n = d.normalized();
+      // stuck behind something (a parked car, a pole): slide sideways for a moment to get around it
+      if (i % 30 == 0) { if (i > 0 && (g.player().pos - lastP).length() < 0.4f) sideT = 25; lastP = g.player().pos; }
+      if (sideT > 0) { --sideT; n = (n + Vec2{-n.y, n.x} * 1.5f).normalized(); }
       InputFrame in;
       in.move = {n.dot(rt), n.dot(f)};
       in.runHeld = run;
