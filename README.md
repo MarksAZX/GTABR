@@ -99,9 +99,22 @@ A resolução dinâmica é opcional.
 |---|---|
 | Texturas, sprites, fontes, ícones | `tools/build_assets.py` |
 | Modelos 3D: GLB para `.gmesh`/`.ganim` + GTEX (ASTC 6x6 + fallback RGBA) | `tools/meshconv` (cgltf + meshoptimizer) e `tools/build_models.py` |
+| Rig: esqueleto único ajustado à malha de cada personagem + pesos de pele pintados | `tools/rigfit.py` (roda depois do meshconv; marca o `.gmesh` com `kRigFitted`) |
+
+### Rig e animação
+
+- Todos os personagens compartilham os mesmos 24 ossos e os mesmos clipes (biblioteca Meshy via Higgsfield). O `rigfit` mede cada malha (fatias de membros, pontas das mãos, centros de tronco/cabeça), coloca as juntas dentro do corpo, mantém as rotações de repouso dos clipes e recalcula `invBind` para que a pose de repouso (braços relaxados) e a pose de bind (malha em A-pose) sejam consistentes.
+- Pesos: distância a segmentos de osso (com lado esquerdo/direito separados) suavizada sobre a superfície da malha, 4 influências por vértice.
+- Grafo de animação (`Animator`): camada base com estados Ground (idle / ready stance / walk / run por velocidade real), Swim, Air (clipe de pulo guiado pela física) e Dead, com fades temporizados a partir de um snapshot da pose; camada de ações pontuais com taxas de blend por ação; passos de giro no lugar; camadas procedurais aditivas só para gestos (fala, alcançar, abastecer, olhar).
+
+### Renderização
+
+- SSAO em meia resolução com blur bilateral, raios de luz volumétricos, reflexos em tela no chão molhado, bloom Dual-Kawase, ACES + grade.
+- Grade de probes de visibilidade do céu assada por cidade (ambiente local e oclusão especular), até 128 luzes dinâmicas culladas em tiles de tela, decals texturizados (rachaduras, óleo, bueiros, grelhas, marcas de pneu, folhas, remendos, grafites, sujeira, cartazes).
 
 ## Limitações conhecidas
 
 - Ready Player Me não estava disponível; os personagens vêm do pipeline 3D do Higgsfield.
-- Ainda não existem modelos próprios para mecânico e pedestre homem, por falta de créditos. Eles reutilizam outros corpos.
+- Os pesos de pele e as juntas são gerados automaticamente (`tools/rigfit.py`), não pintados à mão.
+- Texturas de albedo vêm do GPT Image; normais/rugosidade são derivadas com micro-relevo autoral por material. Não há mapas PBR escaneados.
 - Só houve teste em renderizador por software (lavapipe). O desempenho real precisa ser medido em aparelho.
