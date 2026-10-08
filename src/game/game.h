@@ -32,6 +32,7 @@ struct Settings {
   bool shadows = true;
   float drawDistance = 1.0f;   // multiplies the preset draw distance (props, NPCs, vehicles, HLOD switch)
   bool bloom = true;
+  bool motionBlur = true;    // camera motion blur (Alto / Ultra)
   bool reflections = true;   // screen-space reflections on wet ground (Alto / Ultra)
   bool weatherFx = true;       // rain streaks / splashes (the weather itself still affects light and ground)
   float brightness = 1.0f;     // exposure multiplier
@@ -427,6 +428,9 @@ class Game {
   Job job_;
   int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
   float statusBottom_ = 200;
+  Mat4 prevVP_;
+  Vec3 prevEye_;
+  bool prevVPValid_ = false;
   int runMode_ = 0;
   float runIdleT_ = 0;
   float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit

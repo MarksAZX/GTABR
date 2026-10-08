@@ -123,6 +123,18 @@ void Game::setupGlobals(gfx::FrameData& fd) {
     float id = std::fabs(det) > 1e-20f ? 1.0f / det : 0.0f;
     for (int i = 0; i < 16; ++i) g.invViewProj.m[i] = inv[i] * id;
   }
+  {
+    // previous frame's camera for motion blur; a cut (teleport, menu, long hitch) resets it so nothing smears across the jump
+    bool cut = !prevVPValid_ || (cam_.eye() - prevEye_).length() > 5.0f || lastDt_ > 0.2f || menu_ != MenuState::None;
+    g.prevViewProj = cut ? cam_.viewProj() : prevVP_;
+    prevVP_ = cam_.viewProj();
+    prevEye_ = cam_.eye();
+    prevVPValid_ = true;
+    const QualityPreset& q = preset();
+    bool hi = q.ao > 0.0f;
+    bool mb = settings_.motionBlur && hi && !settings_.reduceMotion && fadeAlpha_ < 0.3f;
+    g.post = {mb ? 0.5f : 0.0f, hi ? 1.0f : 0.0f, q.renderScale < 0.95f ? 0.34f : 0.16f, q.ao >= 0.7f ? 1.0f : 0.0f};
+  }
   g.camPos = {cam_.eye().x, cam_.eye().y, cam_.eye().z, realTime_};
   g.camRight = {cam_.right().x, cam_.right().y, cam_.right().z, 0};
   g.camUp = {cam_.up().x, cam_.up().y, cam_.up().z, 0};

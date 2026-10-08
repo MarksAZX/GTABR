@@ -197,7 +197,7 @@ bool Game::saveSettings() const {
   o.precision(5);
   const Settings& s = settings_;
   o << "quality=" << s.quality << "\ndynamicRes=" << s.dynamicRes << "\nshadows=" << s.shadows << "\ndrawDistance=" << s.drawDistance
-    << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
+    << "\nmotionBlur=" << s.motionBlur << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
     << "\nmaster=" << s.master << "\nsfx=" << s.sfx << "\nambience=" << s.ambience << "\nmuted=" << s.muted
     << "\nsensitivity=" << s.sensitivity << "\ninvertY=" << s.invertY << "\nisometric=" << s.isometric << "\nhudScale=" << s.hudScale << "\nhudOpacity=" << s.hudOpacity
     << "\naimAssist=" << s.aimAssist << "\nweatherMode=" << s.weatherMode << "\ndayCycle=" << s.dayCycle << "\nshowMinimap=" << s.showMinimap
@@ -218,6 +218,7 @@ bool Game::loadSettings() {
   s.drawDistance = clamp(numOf(kv, "drawDistance", 1.0f), 0.6f, 1.5f);
   s.bloom = numOf(kv, "bloom", 1) > 0.5f;
   s.reflections = numOf(kv, "reflections", 1) > 0.5f;
+  s.motionBlur = numOf(kv, "motionBlur", 1) > 0.5f;
   s.weatherFx = numOf(kv, "weatherFx", 1) > 0.5f;
   s.brightness = clamp(numOf(kv, "brightness", 1.0f), 0.7f, 1.4f);
   s.showFps = numOf(kv, "showFps", 0) > 0.5f;

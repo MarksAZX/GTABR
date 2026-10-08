@@ -1,4 +1,11 @@
 #version 450
+layout(set = 0, binding = 0, std140) uniform Globals {
+  mat4 viewProj; mat4 view; mat4 invViewProj; mat4 lightViewProj[2];
+  vec4 camPos, camRight, camUp, camFwd;
+  vec4 sunDir, sunColor, ambSky, ambGround, fog, params, sky0, sky1, cascade, lightInfo, probeRect, probeInfo, lightGrid;
+  mat4 prevViewProj;
+  vec4 post;   // x = motion blur, y = contact shadows, z = sharpening
+} g;
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
 layout(set = 1, binding = 2) uniform sampler2D uAo;
@@ -77,6 +84,58 @@ void main() {
   vec2 qc = vUV - 0.5;
   vec2 ca = qc * (0.0016 * dot(qc, qc) * 4.0);
   vec3 hdr = vec3(texture(uScene, vUV + ca).r, texture(uScene, vUV).g, texture(uScene, vUV - ca).b);
+  float d0 = texture(uDepth, vUV).r;
+  // camera motion blur: reproject this pixel with the previous frame's camera and smear along the screen-space velocity
+  if (g.post.x > 0.001) {
+    vec4 clip = vec4(vUV * 2.0 - 1.0, d0, 1.0);
+    vec4 wp = g.invViewProj * clip;
+    wp /= wp.w;
+    vec4 pc0 = g.prevViewProj * wp;
+    vec2 prevUV = pc0.xy / pc0.w * 0.5 + 0.5;
+    vec2 vel = (vUV - prevUV) * g.post.x;
+    float vl = length(vel);
+    if (vl > 0.022) vel *= 0.022 / vl;
+    if (vl > 0.0008) {
+      vec3 acc = hdr;
+      float wsum = 1.0;
+      for (int i = 1; i <= 7; ++i) {
+        float t = float(i) / 7.0 - 0.5;
+        vec2 suv = vUV + vel * t * 1.6 + vel * (hash(vUV * 733.0 + float(i)) - 0.5) * 0.15;
+        acc += texture(uScene, suv).rgb;
+        wsum += 1.0;
+      }
+      hdr = acc / wsum;
+    }
+  }
+  // gentle sharpening (unsharp mask on the HDR scene, clamped so highlights do not ring)
+  if (g.post.z > 0.001) {
+    vec2 px = 1.0 / vec2(textureSize(uScene, 0));
+    vec3 avg = (texture(uScene, vUV + vec2(px.x, 0)).rgb + texture(uScene, vUV - vec2(px.x, 0)).rgb + texture(uScene, vUV + vec2(0, px.y)).rgb + texture(uScene, vUV - vec2(0, px.y)).rgb) * 0.25;
+    vec3 dlt = hdr - avg;
+    hdr += clamp(dlt, -0.35 * hdr, 0.35 * hdr + 0.02) * g.post.z;
+  }
+  // contact shadows: a short march toward the sun in view space against the depth buffer grounds props, feet and wheels
+  if (g.post.y > 0.001 && d0 < 0.99999 && g.sunDir.w > 0.01) {
+    vec3 sv = mat3(g.view) * g.sunDir.xyz;
+    vec3 L = normalize(vec3(sv.x, -sv.y, -sv.z));      // x right, y down, z forward (the convention of viewPos below)
+    float z0 = linZ(d0);
+    vec3 P0 = viewPos(vUV, z0);
+    float occ = 0.0;
+    float jit = hash(vUV * 977.0 + pc.b.w);
+    for (int i = 0; i < 8; ++i) {
+      float t = (float(i) + 0.3 + jit * 0.7) / 8.0 * (0.12 + 0.05 * z0);
+      vec3 p = P0 + L * t;
+      if (p.z < pc.proj.x) break;
+      vec2 suv = vec2(p.x / (p.z * pc.proj.z), p.y / (p.z * pc.proj.w)) * 0.5 + 0.5;
+      if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
+      float sd = texture(uDepth, suv).r;
+      if (sd < 0.99999) {
+        float diff = p.z - linZ(sd);
+        if (diff > 0.012 * (1.0 + 0.3 * z0) && diff < 0.30 + 0.06 * z0) occ = max(occ, 1.0 - float(i) / 10.0);
+      }
+    }
+    hdr *= 1.0 - occ * g.post.y * 0.55 * clamp(g.sunDir.w, 0.0, 1.0);
+  }
   if (pc.refl.w > 0.02) {
     float dd = texture(uDepth, vUV).r;
     if (dd < 0.99999) hdr += wetReflection(vUV, dd, viewPos(vUV, linZ(dd)));

@@ -115,7 +115,7 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex4_}, 128, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutGlobalsA_, layoutTex4_}, 128, VK_SHADER_STAGE_FRAGMENT_BIT);
   plAo_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
@@ -1443,6 +1443,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 0, 1, &fr.globalsA, 0, nullptr);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
     float pcv[32] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
                      fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,

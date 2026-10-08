@@ -69,6 +69,8 @@ struct GlobalsUBO {
   Vec4 probeRect;   // x0, z0, 1/width, 1/depth of the ambient probe grid (world metres)
   Vec4 probeInfo;   // x = enabled, y = ground layer height offset, z = rooftop layer height offset, w = unused
   Vec4 lightGrid;   // x = light count, y = tiles per pixel (x), z = tiles per pixel (y), w = tiles in x
+  Mat4 prevViewProj;   // previous frame's camera, for motion blur reprojection
+  Vec4 post;           // x = motion blur, y = contact shadows, z = sharpening, w = volumetric clouds (0 / 1)
 };
 
 enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4, ASTC8x8_SRGB = 5 };

@@ -576,6 +576,7 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
       slider("Distância de visão", "Props, pedestres, veículos e troca de LOD", s.drawDistance, 0.6f, 1.5f, 1002, pct(s.drawDistance));
       toggle("Brilho do bloom", "Halo em luzes, faróis e letreiros", s.bloom, 3003);
       toggle("Reflexos em tela", "Chão molhado reflete carros, prédios e luzes", s.reflections, 3091);
+      toggle("Desfoque de movimento", "Suaviza giros rápidos da câmera (Alto / Ultra)", s.motionBlur, 3092);
       toggle("Efeitos de chuva", "Gotas e respingos (o clima continua afetando a luz)", s.weatherFx, 3004);
       slider("Exposição", "Brilho geral da imagem", s.brightness, 0.7f, 1.4f, 1003, pct(s.brightness));
       toggle("Mostrar FPS", "Contador e métricas de desempenho", s.showFps, 3005);
@@ -854,6 +855,7 @@ void Game::applySettingStep(int id) {
     case 3002: s.shadows = !s.shadows; break;
     case 3003: s.bloom = !s.bloom; break;
     case 3091: s.reflections = !s.reflections; break;
+    case 3092: s.motionBlur = !s.motionBlur; break;
     case 3004: s.weatherFx = !s.weatherFx; break;
     case 3005: s.showFps = !s.showFps; break;
     case 3010: s.muted = !s.muted; break;
