@@ -49,7 +49,7 @@ void Assets::queueTexture(const std::string& key, const std::string& file, gfx::
     std::string secondary = (astc ? "generated_rgba/data/" : "data/") + file;
     if (fileio::readAsset(primary, bytes) || fileio::readAsset(secondary, bytes)) p.ok = parseGtex(bytes, p.data);
     // a compressed texture the device cannot sample is unusable
-    if (p.ok && p.data.format == gfx::TexFormat::ASTC6x6_SRGB && !astc) p.ok = false;
+    if (p.ok && (p.data.format == gfx::TexFormat::ASTC6x6_SRGB || p.data.format == gfx::TexFormat::ASTC6x6_UNORM || p.data.format == gfx::TexFormat::ASTC8x8_SRGB) && !astc) p.ok = false;
     if (!p.ok) LOGE("Failed to load texture %s", file.c_str());
     std::lock_guard<std::mutex> l(m_);
     done_.push_back(std::move(p));
@@ -73,6 +73,7 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
       }
   }
   queueTexture("materials", "materials.gtex", gfx::SamplerKind::Repeat);
+  queueTexture("materials_n", "materials_n.gtex", gfx::SamplerKind::Repeat);
   queueTexture("font_regular", "font_regular.gtex", gfx::SamplerKind::ClampLinear);
   queueTexture("font_bold", "font_bold.gtex", gfx::SamplerKind::ClampLinear);
   queueTexture("icons", "icons.gtex", gfx::SamplerKind::ClampLinear);
@@ -88,15 +89,17 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
 }
 
 void Assets::onTexture(const Pending& p) {
-  if (!p.ok) { failed_ = true; return; }
+  if (!p.ok) { if (p.key.rfind("model:", 0) != 0 && p.key.rfind("page:", 0) != 0) failed_ = true; return; }  // models fall back to neutral maps
   gfx::TexHandle h = r_->createTexture(p.data, p.sampler);
   if (!h.valid()) { LOGE("GPU upload failed for %s", p.key.c_str()); failed_ = true; return; }
   if (p.key == "materials") materials = h;
+  else if (p.key == "materials_n") materialsNormal = h;
   else if (p.key == "font_regular") fontRegular.tex = h;
   else if (p.key == "font_bold") fontBold.tex = h;
   else if (p.key == "icons") iconsTex = h;
   else if (p.key == "ui_art") artTex = h;
   else if (p.key.rfind("page:", 0) == 0) pageTex_[p.key.substr(5)] = h;
+  else extraTex_[p.key] = h;
 }
 
 bool Assets::pump() {

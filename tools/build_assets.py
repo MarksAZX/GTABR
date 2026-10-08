@@ -109,6 +109,19 @@ def proc_layer(kind, seed):
     elif kind == "wall_dark":
         base = 0.32 + (n - 0.5) * 0.18
         rgb = np.stack([base, base * 0.98, base * 0.95], -1)
+    elif kind == "sand":
+        # fine beach sand: warm, speckled, with faint wind ripples
+        yy = np.arange(MAT_SIZE)[:, None]
+        rip = 0.5 + 0.5 * np.sin(yy * 0.22 + n * 9.0)
+        speck = np.random.default_rng(seed).random((MAT_SIZE, MAT_SIZE))
+        base = 0.74 + (n - 0.5) * 0.12 + rip * 0.03 - (speck > 0.985) * 0.18
+        rgb = np.stack([base * 1.0, base * 0.9, base * 0.72], -1)
+    elif kind == "water":
+        base = 0.5 + (n - 0.5) * 0.05
+        rgb = np.stack([base * 0.3, base * 0.55, base * 0.62], -1)
+    elif kind == "foliage":
+        base = 0.32 + (n - 0.5) * 0.25
+        rgb = np.stack([base * 0.55, base * 0.95, base * 0.4], -1)
     elif kind == "white":
         rgb = np.ones((MAT_SIZE, MAT_SIZE, 3), np.float32)
     else:
@@ -121,12 +134,13 @@ MATERIALS = [
     "asphalt", "asphalt_cracked", "sidewalk", "pedra_port", "grass", "dirt", "tile_floor", "garage_floor",
     "house_yellow", "house_blue", "house_brick", "house_modern", "apt_beige", "apt_green", "sobrado_pink", "apt_bands",
     "shop_posto", "shop_mercado", "shop_oficina", "roof_tile", "roof_fiber", "roof_laje", "roof_metal", "wall_paint",
-    "concrete", "wall_dark", "white", "shelf", "wood", "metal", "reserved0", "reserved1",
+    "concrete", "wall_dark", "white", "shelf", "wood", "metal", "sand", "water",
+    "shop_padaria", "shop_ferragens", "shop_conveniencia", "foliage",
+    "house_periferia_a", "house_periferia_b", "brick_raw", "apt_tower", "bark",
 ]
 
 
-def build_materials(quality):
-    print("materials ->", len(MATERIALS), "layers")
+def material_layers():
     ga, gb = load("ground_a.png"), load("ground_b.png")
     fh, fb = load("facades_houses.png"), load("facades_buildings.png")
     roofs = load("roofs.png")
@@ -148,16 +162,30 @@ def build_materials(quality):
     if fb:
         for i, n in enumerate(["apt_beige", "apt_green", "sobrado_pink", "apt_bands"]):
             layers[n] = to_arr(cell(fb, 2, 2, i % 2, i // 2, 10))
-    for n, f in [("shop_posto", "shop_posto.png"), ("shop_mercado", "shop_mercado.png"), ("shop_oficina", "shop_oficina.png")]:
+    for n, f in [("shop_posto", "shop_posto.png"), ("shop_mercado", "shop_mercado.png"), ("shop_oficina", "shop_oficina.png"),
+                 ("house_periferia_a", "house_periferia_a.png"), ("house_periferia_b", "house_periferia_b.png"), ("apt_tower", "apt_tower.png"),
+                 ("shop_padaria", "shop_padaria.png"), ("shop_ferragens", "shop_ferragens.png"), ("shop_conveniencia", "shop_conveniencia.png")]:
         im = load(f)
         if im:
             layers[n] = to_arr(im)
+    for n, f, mode in [("sand", "tex_sand.png", 0), ("water", "tex_water.png", 0), ("brick_raw", "tex_brick_raw.png", 1),
+                       ("foliage", "tex_foliage.png", 1), ("bark", "tex_bark.png", 1), ("grass", "tex_grass.png", 1),
+                       ("wall_paint", "tex_stucco.png", 1), ("concrete", "tex_concrete.png", 1), ("asphalt_cracked", "tex_asphalt.png", 0)]:
+        im = load(f)
+        if im:
+            layers[n] = to_arr(seamless_blend(im) if mode == 0 else seamless_mirror(im))
+    if "wall_paint" in layers:
+        # clean painted plaster: keep the grain but flatten the stains of the generated source
+        a = layers["wall_paint"].astype(np.float32)
+        mean = a[..., :3].mean(axis=(0, 1), keepdims=True)
+        a[..., :3] = mean + (a[..., :3] - mean) * 0.38
+        layers["wall_paint"] = np.clip(a, 0, 255).astype(np.uint8)
     if roofs:
         for i, n in enumerate(["roof_tile", "roof_fiber", "roof_laje", "roof_metal"]):
             layers[n] = to_arr(seamless_blend(cell(roofs, 2, 2, i % 2, i // 2, 12)))
     if shelf:
         layers["shelf"] = to_arr(shelf)
-    seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "reserved0": 8, "reserved1": 9}
+    seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "sand": 8, "water": 9, "foliage": 11, "bark": 12}
     arrs = []
     for i, n in enumerate(MATERIALS):
         if n in layers:
@@ -165,8 +193,123 @@ def build_materials(quality):
         else:
             if n not in seeds:
                 print("  WARNING: missing source for", n)
-            arrs.append(proc_layer(n if n in ("wall_paint", "concrete", "wall_dark", "white", "wood", "metal") else "concrete", seeds.get(n, 10 + i)))
-    nm = gtex.save_texture(os.path.join(OUT, "materials.gtex"), os.path.join(OUT_RGBA, "materials.gtex"), arrs, "color", quality)
+            arrs.append(proc_layer(n if n in ("wall_paint", "concrete", "wall_dark", "white", "wood", "metal", "sand", "water", "foliage", "bark") else "concrete", seeds.get(n, 10 + i)))
+    return arrs
+
+
+# Per-layer surface response for the derived PBR maps: (normal strength, base roughness, roughness variation)
+SURFACE = {
+    "asphalt": (2.2, 0.82, 0.12), "asphalt_cracked": (2.8, 0.84, 0.12), "sidewalk": (2.4, 0.78, 0.12), "pedra_port": (3.2, 0.72, 0.16),
+    "grass": (2.6, 0.95, 0.04), "dirt": (2.6, 0.92, 0.06), "tile_floor": (1.2, 0.32, 0.10), "garage_floor": (1.6, 0.62, 0.20),
+    "roof_tile": (3.0, 0.70, 0.12), "roof_fiber": (2.4, 0.66, 0.10), "roof_laje": (2.0, 0.86, 0.08), "roof_metal": (2.0, 0.42, 0.18),
+    "sand": (1.4, 0.92, 0.05), "water": (0.2, 0.08, 0.02), "foliage": (1.5, 0.75, 0.1), "bark": (2.8, 0.9, 0.08),
+    "wall_paint": (1.6, 0.86, 0.08), "concrete": (2.0, 0.88, 0.08), "wall_dark": (1.6, 0.84, 0.08), "white": (1.0, 0.62, 0.06),
+    "shelf": (1.0, 0.55, 0.10), "wood": (1.8, 0.66, 0.12), "metal": (1.4, 0.38, 0.14),
+}
+
+
+def _voronoi(size, cells, seed):
+    """periodic cellular noise: returns (distance to the nearest feature point, random id) on a size x size grid"""
+    rng = np.random.default_rng(seed)
+    pts = rng.random((cells, cells, 2)).astype(np.float32)
+    ids = rng.random((cells, cells)).astype(np.float32)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / size * cells
+    cy, cx = np.floor(yy).astype(int), np.floor(xx).astype(int)
+    best = np.full((size, size), 9.0, np.float32)
+    bid = np.zeros((size, size), np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            gy, gx = (cy + dy) % cells, (cx + dx) % cells
+            fy = cy + dy + pts[gy, gx, 1]
+            fx = cx + dx + pts[gy, gx, 0]
+            d = np.sqrt((yy - fy) ** 2 + (xx - fx) ** 2)
+            m = d < best
+            best = np.where(m, d, best)
+            bid = np.where(m, ids[gy, gx], bid)
+    return best, bid
+
+
+def micro_height(name, size, seed):
+    """Authored micro relief (periodic) added on top of the height recovered from the albedo: aggregate, stucco grain,
+    corrugation, wood grain, ripples... so each material has real surface structure at close range."""
+    n1 = fbm_tile(size, seed, 4)
+    n2 = fbm_tile(size, seed + 101, 3, 0.7)
+    xx = np.arange(size, dtype=np.float32)[None, :] / size
+    yy = np.arange(size, dtype=np.float32)[:, None] / size
+    if name in ("asphalt", "asphalt_cracked", "garage_floor"):
+        d, i = _voronoi(size, 56, seed)
+        return (np.clip(1.0 - d * 1.7, 0, 1) ** 1.5 * (0.5 + i * 0.7)) * 0.9 + (n2 - 0.5) * 0.3
+    if name in ("sidewalk", "pedra_port", "concrete", "roof_laje"):
+        d, i = _voronoi(size, 90, seed)
+        return (n1 - 0.5) * 0.5 + (np.clip(1.0 - d * 2.0, 0, 1) * 0.25 * i) + (n2 - 0.5) * 0.3
+    if name in ("wall_paint", "wall_dark", "house_periferia_a", "house_periferia_b", "white"):
+        return (n1 - 0.5) * 0.35 + (n2 - 0.5) * 0.35   # fine stucco grain
+    if name in ("roof_tile",):
+        return np.abs(np.sin(np.pi * xx * 10.0 + 0.4 * np.sin(yy * 6.2832 * 2))) ** 0.6 * 0.9 + (n2 - 0.5) * 0.2
+    if name in ("roof_metal", "roof_fiber"):
+        return (0.5 + 0.5 * np.sin(2 * np.pi * xx * 14.0)) * 0.9 + (n2 - 0.5) * 0.1
+    if name == "metal":
+        return np.sin(2 * np.pi * yy * 80.0 + n1 * 3.0) * 0.12 + (n2 - 0.5) * 0.1   # brushed
+    if name in ("wood", "shelf"):
+        return (0.5 + 0.5 * np.sin(2 * np.pi * (yy * 18.0 + n1 * 1.6))) * 0.5 + (n2 - 0.5) * 0.15
+    if name == "sand":
+        return (0.5 + 0.5 * np.sin(2 * np.pi * (yy * 9.0 + n1 * 0.8))) * 0.25 + (n2 - 0.5) * 0.35
+    if name in ("grass",):
+        g = fbm_tile(size, seed + 7, 5, 0.8)
+        return (g - 0.5) * 0.9
+    if name in ("bark",):
+        return np.abs(np.sin(2 * np.pi * (xx * 14.0 + n1 * 1.5))) * 0.7
+    if name in ("dirt",):
+        d, i = _voronoi(size, 70, seed)
+        return np.clip(1.0 - d * 1.5, 0, 1) * 0.5 + (n1 - 0.5) * 0.6
+    if name in ("brick_raw", "house_brick"):
+        return (n2 - 0.5) * 0.5
+    return None
+
+
+# metalness of the layers that are bare metal (the world shader reads the same table)
+METAL_LAYERS = {"metal": 0.25, "roof_metal": 0.75}
+
+
+def derive_normal_rough(arr, name, size=512):
+    """Height from luminance (high-passed so baked lighting does not become slopes) -> tangent-space normal,
+    roughness from base + local detail, cavity from the height high-pass. Declared as derived, not scanned."""
+    from scipy import ndimage
+    strength, rbase, rvar = SURFACE.get(name, (1.4, 0.80, 0.10))   # facades / shop fronts default
+    im = Image.fromarray(arr).convert("RGB").resize((size, size), Image.LANCZOS)
+    f = np.asarray(im).astype(np.float32) / 255.0
+    lum = f[..., 0] * 0.299 + f[..., 1] * 0.587 + f[..., 2] * 0.114
+    low = ndimage.gaussian_filter(lum, 18, mode="wrap")
+    h = ndimage.gaussian_filter(lum - low, 0.8, mode="wrap")
+    mh = micro_height(name, size, 1000 + sum(ord(c) for c in name))
+    if mh is not None:
+        hs = float(np.std(h)) + 1e-4
+        h = h + (mh - mh.mean()) * hs * 1.1
+    dx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * strength * (size / 64.0)
+    dy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * strength * (size / 64.0)
+    nz = 1.0 / np.sqrt(dx * dx + dy * dy + 1.0)
+    nx, ny = -dx * nz, dy * nz
+    detail = ndimage.gaussian_filter(np.abs(lum - ndimage.gaussian_filter(lum, 3, mode="wrap")), 2, mode="wrap")
+    detail = detail / max(1e-4, float(np.percentile(detail, 98)))
+    rough = np.clip(rbase + rvar * (np.clip(detail, 0, 1) - 0.5) * 2.0 - 0.10 * (lum - lum.mean()), 0.08, 1.0)
+    cav = np.clip(1.0 + (h / max(1e-4, float(np.percentile(np.abs(h), 97)))) * 0.35, 0.45, 1.0)
+    out = np.stack([nx * 0.5 + 0.5, ny * 0.5 + 0.5, rough, cav], axis=-1)
+    return (np.clip(out, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+
+
+def build_normals(quality, arrs=None):
+    arrs = arrs if arrs is not None else material_layers()
+    print("materials_n ->", len(arrs), "layers (derived normal/roughness/cavity)")
+    nr = [derive_normal_rough(a, MATERIALS[i]) for i, a in enumerate(arrs)]
+    nm = gtex.save_texture(os.path.join(OUT, "materials_n.gtex"), os.path.join(OUT_RGBA, "materials_n.gtex"), nr, "linear", quality, srgb=False)
+    print("  materials_n.gtex mips:", nm)
+
+
+def build_materials(quality):
+    print("materials ->", len(MATERIALS), "layers")
+    arrs = material_layers()
+    build_normals(quality, arrs)
+    nm = gtex.save_texture(os.path.join(OUT, "materials.gtex"), os.path.join(OUT_RGBA, "materials.gtex"), arrs, "color", quality, block=8)  # 8x8: ~2 bpp keeps the APK small
     print("  materials.gtex mips:", nm)
     # C++ ids header
     with open(os.path.join(ROOT, "src/game/material_ids.h"), "w") as f:
@@ -174,6 +317,11 @@ def build_materials(quality):
         for i, n in enumerate(MATERIALS):
             f.write(f"constexpr int {n} = {i};\n")
         f.write(f"constexpr int kCount = {len(MATERIALS)};\n}}  // namespace mat\n}}  // namespace gtabr\n")
+    # same ids for the shaders (special-cased surfaces: water, sand, foliage)
+    with open(os.path.join(ROOT, "shaders/material_ids.glsl"), "w") as f:
+        f.write("// generated by tools/build_assets.py\n")
+        for i, n in enumerate(MATERIALS):
+            f.write(f"#define MAT_{n.upper()} {i}\n")
 
 
 def build_sprites(quality):
@@ -332,6 +480,26 @@ def build_icons(quality):
     # store (market), shopping cart
     im, d = new(); poly(d, [(12, 20), (32, 20), (44, 80), (100, 80), (112, 34), (38, 34)]); circ(d, (52, 100), 9); circ(d, (92, 100), 9); fin("cart", im)
 
+    # ---- weapons (side silhouettes, muzzle to the right)
+    im, d = new(); rrect(d, (10, 58, 54, 74), 6); poly(d, [(54, 56), (112, 62), (118, 66), (54, 76)]); rrect(d, (50, 52, 58, 80), 2); fin("knife", im)
+    im, d = new(); rrect(d, (8, 58, 120, 72), 7); rrect(d, (26, 72, 38, 104), 5); rrect(d, (8, 56, 30, 74), 5); fin("baton", im)
+    im, d = new(); line(d, (14, 100), (104, 22), 9); d.arc([P(92, 6), P(124, 40)], 200, 20, fill=W, width=9 * SS); line(d, (14, 100), (6, 112), 7); fin("crowbar", im)
+    im, d = new(); poly(d, [(8, 92), (16, 84), (100, 26), (118, 22), (122, 34), (114, 42), (22, 104), (12, 104)]); circ(d, (12, 100), 7); fin("bat", im)
+    im, d = new(); rrect(d, (16, 36, 112, 58), 5); poly(d, [(24, 56), (52, 56), (48, 104), (22, 104), (18, 96)]); d.arc([P(48, 52), P(76, 80)], 0, 180, fill=W, width=5 * SS); fin("pistol", im)
+    im, d = new(); rrect(d, (52, 42, 120, 54), 4); rrect(d, (36, 36, 70, 68), 10); poly(d, [(36, 62), (54, 62), (40, 108), (16, 104)]); d.arc([P(50, 58), P(74, 82)], 0, 180, fill=W, width=5 * SS); fin("revolver", im)
+    im, d = new(); rrect(d, (26, 38, 104, 60), 5); rrect(d, (104, 44, 124, 52), 3); rrect(d, (58, 58, 72, 108), 4); rrect(d, (34, 58, 48, 84), 4); rrect(d, (4, 42, 28, 54), 3); fin("smg", im)
+    im, d = new(); rrect(d, (40, 44, 124, 54), 4); rrect(d, (40, 54, 104, 62), 3); rrect(d, (66, 52, 96, 66), 4); poly(d, [(42, 44), (42, 62), (8, 80), (4, 68), (20, 48)]); fin("shotgun", im)
+    # wanted star and ammo
+    im, d = new()
+    pts = []
+    for k in range(10):
+        r = 56 if k % 2 == 0 else 24; a = k * math.pi / 5
+        pts.append((64 + math.sin(a) * r, 66 - math.cos(a) * r))
+    poly(d, pts); fin("star", im)
+    im, d = new(); rrect(d, (50, 36, 78, 112), 4); poly(d, [(50, 38), (64, 10), (78, 38)]); fin("ammo", im)
+    im, d = new(); circ(d, (64, 64), 50); circ(d, (64, 64), 38, (0, 0, 0, 0)); line(d, (64, 4), (64, 40), 7); line(d, (64, 88), (64, 124), 7); line(d, (4, 64), (40, 64), 7); line(d, (88, 64), (124, 64), 7); circ(d, (64, 64), 6); fin("crosshair", im)
+    im, d = new(); line(d, (40, 30), (40, 100), 10); line(d, (40, 100), (100, 100), 10); d.arc([P(40, 30), P(110, 100)], 270, 360, fill=W, width=10 * SS); poly(d, [(104, 56), (122, 74), (88, 74)]); fin("reload", im)
+
     cols = 8
     rows = (len(imgs) + cols - 1) // cols
     atlas = Image.new("RGBA", (cols * S, rows * S), (0, 0, 0, 0))
@@ -384,7 +552,7 @@ if __name__ == "__main__":
     ap.add_argument("--only", default="")
     ap.add_argument("--quality", default="medium")
     args = ap.parse_args()
-    steps = {"materials": lambda: build_materials(args.quality), "sprites": lambda: build_sprites("fast" if args.quality == "medium" else args.quality),
+    steps = {"materials": lambda: build_materials(args.quality), "normals": lambda: build_normals(args.quality), "sprites": lambda: build_sprites("fast" if args.quality == "medium" else args.quality),
              "fonts": build_fonts, "icons": lambda: build_icons(args.quality), "art": lambda: build_ui_art(args.quality)}
     for k, fn in steps.items():
         if not args.only or args.only == k:

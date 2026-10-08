@@ -12,7 +12,7 @@ void InputSystem::reset() {
   wheelId_ = -1;
   pendingLook_ = {};
   pendingZoom_ = 0;
-  for (int i = 0; i < 6; ++i) pressedBtn_[i] = heldBtn_[i] = false;
+  for (int i = 0; i < kBtn; ++i) pressedBtn_[i] = heldBtn_[i] = false;
 }
 
 void InputSystem::onTouch(int id, TouchAction a, float x, float y) {
@@ -26,9 +26,8 @@ void InputSystem::onTouch(int id, TouchAction a, float x, float y) {
     const InputLayout& L = lastLayout_;
     if (L.modal) t.role = Role::Ui;
     else {
-      HudButton* btns[6] = {const_cast<HudButton*>(&L.run), const_cast<HudButton*>(&L.interact), const_cast<HudButton*>(&L.enterExit),
-                            const_cast<HudButton*>(&L.camera), const_cast<HudButton*>(&L.wheel), const_cast<HudButton*>(&L.pause)};
-      for (int i = 0; i < 6; ++i) {
+      const HudButton* btns[kBtn] = {&L.run, &L.interact, &L.enterExit, &L.camera, &L.wheel, &L.pause, &L.attack, &L.reload, &L.jump};
+      for (int i = 0; i < kBtn; ++i) {
         const HudButton& b = *btns[i];
         if (!b.visible) continue;
         float dx = p.x - b.c.x, dy = p.y - b.c.y;
@@ -113,6 +112,7 @@ InputFrame InputSystem::poll(const InputLayout& layout) {
   // buttons
   f.interactPressed = pressedBtn_[1]; f.enterExitPressed = pressedBtn_[2]; f.cameraPressed = pressedBtn_[3]; f.pausePressed = pressedBtn_[5];
   f.runHeld = heldBtn_[0];
+  f.attackPressed = pressedBtn_[6]; f.attackHeld = heldBtn_[6]; f.reloadPressed = pressedBtn_[7]; f.jumpPressed = pressedBtn_[8];
   f.interactHeld = heldBtn_[1]; f.enterExitHeld = heldBtn_[2]; f.cameraHeld = heldBtn_[3]; f.pauseHeld = heldBtn_[5];
   f.wheelPressed = wheelPressed_;
   f.wheelReleased = wheelReleased_;
@@ -135,7 +135,7 @@ InputFrame InputSystem::poll(const InputLayout& layout) {
   for (const Touch& t : ended_)
     if (t.role == Role::Ui || layout.modal) uiFrom(t, false, true);
   // clear edges
-  for (int i = 0; i < 6; ++i) pressedBtn_[i] = false;
+  for (int i = 0; i < kBtn; ++i) pressedBtn_[i] = false;
   wheelPressed_ = false;
   wheelReleased_ = false;
   ended_.clear();

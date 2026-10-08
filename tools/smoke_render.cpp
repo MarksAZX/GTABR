@@ -48,7 +48,7 @@ int main() {
   TexHandle mat = r.createTextureRGBA(2, 2, px, true, false, SamplerKind::Repeat);
 
   FrameData fd;
-  fd.materialArray = mat;
+  fd.worldMaterial = r.createWorldMaterial({}, {});
   Vec3 eye{14, 11, 16}, tgt{0, 1, 0};
   Mat4 view = Mat4::lookAt(eye, tgt, {0, 1, 0});
   Mat4 proj = Mat4::perspective(50 * kDeg2Rad, 1280.0f / 576.0f, 0.3f, 400.0f);
@@ -57,7 +57,9 @@ int main() {
   Mat4 lproj = Mat4::ortho(-40, 40, -40, 40, 1, 140);
   GlobalsUBO& g = fd.globals;
   g.view = view; g.viewProj = proj * view;
-  g.lightViewProj = lproj * lview;
+  g.lightViewProj[0] = g.lightViewProj[1] = lproj * lview;
+  g.cascade = {0, 1, 0.05f, 0};
+  g.sky0 = {0.12f, 0.28f, 0.74f, 0.4f}; g.sky1 = {0.62f, 0.72f, 0.86f, 1.0f};
   Mat4 inv = view; (void)inv;
   g.camPos = {eye.x, eye.y, eye.z, 0};
   g.camRight = {1, 0, 0, 0}; g.camUp = {0, 1, 0, 0}; g.camFwd = {0, 0, -1, 0};

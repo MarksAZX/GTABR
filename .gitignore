@@ -13,3 +13,6 @@ __pycache__/
 # generated, large, reproducible with tools/build_assets.sh
 assets/generated_rgba/
 tools/work/
+android/app/.cxx/
+*.apk
+entrega/

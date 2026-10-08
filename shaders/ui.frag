@@ -76,6 +76,9 @@ void main() {
   } else if (kind == 5) {  // vertical gradient
     vec4 gcol = mix(vColor, vColor2, clamp(vT.y, 0.0, 1.0));
     outColor = vec4(gcol.rgb, gcol.a * cover);
+  } else if (kind == 7) {  // horizontal gradient
+    vec4 gcol = mix(vColor, vColor2, clamp(vT.x, 0.0, 1.0));
+    outColor = vec4(gcol.rgb, gcol.a * cover);
   } else {  // 6: soft shadow around a rounded rect; p0 = blur px
     float bl = max(vParams.y, 1.0);
     float a = 1.0 - smoothstep(-bl * 0.35, bl, d);

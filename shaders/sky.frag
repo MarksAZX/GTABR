@@ -3,20 +3,51 @@
 #include "globals.glsl"
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
+
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; ++i) { s += a * noise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
+  return s;
+}
+
 void main() {
   vec2 ndc = vUV * 2.0 - 1.0;
   vec4 a = g.invViewProj * vec4(ndc, 0.0, 1.0);
   vec4 b = g.invViewProj * vec4(ndc, 1.0, 1.0);
   vec3 dir = normalize(b.xyz / b.w - a.xyz / a.w);
-  float h = clamp(dir.y, -0.2, 1.0);
-  vec3 horizon = g.fog.rgb * 1.15;
-  vec3 zenith = g.ambSky.rgb * vec3(0.55, 0.80, 1.55) + vec3(0.02, 0.07, 0.16);
-  vec3 col = mix(horizon, zenith, pow(clamp(h, 0.0, 1.0), 0.55));
-  float sd = max(dot(dir, g.sunDir.xyz), 0.0);
-  col += g.sunColor.rgb * (pow(sd, 400.0) * 3.0 + pow(sd, 12.0) * 0.18);
-  // soft procedural clouds
-  vec2 cp = dir.xz / max(dir.y + 0.35, 0.12) * 1.3 + vec2(g.camPos.w * 0.004, 0.0);
-  float n = sin(cp.x * 2.1) * sin(cp.y * 2.7 + 1.3) + 0.5 * sin(cp.x * 5.3 + 2.0) * sin(cp.y * 4.1);
-  col = mix(col, vec3(1.0, 0.93, 0.85) * 1.1, smoothstep(0.35, 1.1, n) * 0.35 * smoothstep(0.0, 0.25, dir.y));
-  outColor = vec4(encodeDisplay(col), 1.0);
+  vec3 col = skyRadiance(dir, 1.0);
+  float night = g.params.z;
+  // stars
+  if (night > 0.01 && dir.y > 0.0) {
+    vec2 sp = dir.xz / (dir.y + 0.15) * 180.0;
+    float st = step(0.9975, hash(floor(sp))) * hash(floor(sp) + 3.1);
+    col += vec3(0.8, 0.85, 1.0) * st * night * 0.6 * smoothstep(0.0, 0.25, dir.y);
+  }
+  // moon: soft disc with a halo, opposite to the sun's day arc (sunDir already points at the moon during the night)
+  if (night > 0.2) {
+    float sdm = dot(dir, g.sunDir.xyz);
+    float disc = smoothstep(0.99935, 0.99975, sdm);
+    float halo = pow(max(sdm, 0.0), 220.0) * 0.35 + pow(max(sdm, 0.0), 24.0) * 0.05;
+    float craters = 0.82 + 0.18 * noise(dir.xz * 380.0 + dir.y * 220.0);
+    col += vec3(0.86, 0.92, 1.0) * (disc * 3.2 * craters + halo) * night;
+  }
+  // clouds: a single scrolling layer projected on a plane
+  if (dir.y > 0.0) {
+    vec2 cp = dir.xz / (dir.y + 0.08) * 0.55 + vec2(g.camPos.w * 0.006, g.camPos.w * 0.002);
+    float n = fbm(cp * 1.4);
+    float cov = g.sky0.w;
+    float c = smoothstep(1.0 - cov, 1.0 - cov + 0.32, n);
+    float shade = 0.55 + 0.45 * smoothstep(0.3, 0.9, fbm(cp * 1.4 + g.sunDir.xz * 0.12));
+    vec3 cloudCol = (g.ambSky.rgb * 0.9 + g.sunColor.rgb * 0.33 * shade) * g.sky1.w;
+    float sd = max(dot(dir, g.sunDir.xyz), 0.0);
+    cloudCol += g.sunColor.rgb * pow(sd, 10.0) * 0.4;
+    col = mix(col, cloudCol, c * smoothstep(0.0, 0.18, dir.y) * 0.92);
+  }
+  outColor = vec4(col, 1.0);
 }

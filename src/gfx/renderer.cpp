@@ -8,6 +8,7 @@ namespace gfx {
 
 namespace {
 constexpr VkDeviceSize kArenaSize = 6 * 1024 * 1024;
+constexpr VkDeviceSize kLightBufSize = sizeof(LightUBO) * kMaxLights + 4 * kTilesX * kTilesY * (1 + kTileCap);
 
 VkShaderModule loadShader(VkCtx& ctx, const char* name, std::vector<VkShaderModule>& keep) {
   const uint32_t* code = nullptr;
@@ -23,7 +24,9 @@ VkShaderModule loadShader(VkCtx& ctx, const char* name, std::vector<VkShaderModu
 
 size_t texelBytes(TexFormat f, uint32_t w, uint32_t h) {
   switch (f) {
-    case TexFormat::ASTC6x6_SRGB: return (size_t)((w + 5) / 6) * ((h + 5) / 6) * 16;
+    case TexFormat::ASTC6x6_SRGB:
+    case TexFormat::ASTC6x6_UNORM: return (size_t)((w + 5) / 6) * ((h + 5) / 6) * 16;
+    case TexFormat::ASTC8x8_SRGB: return (size_t)((w + 7) / 8) * ((h + 7) / 8) * 16;
     case TexFormat::R8_UNORM: return (size_t)w * h;
     default: return (size_t)w * h * 4;
   }
@@ -48,13 +51,23 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
                                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
                       ? VK_FORMAT_D32_SFLOAT
                       : VK_FORMAT_D16_UNORM;
+  // HDR scene target: packed float if renderable + filterable, else half float, else LDR fallback
+  const VkFormatFeatureFlags hdrFeat = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+                                       VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  if (fmtOk(VK_FORMAT_B10G11R11_UFLOAT_PACK32, hdrFeat)) hdrFormat_ = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+  else if (fmtOk(VK_FORMAT_R16G16B16A16_SFLOAT, hdrFeat)) hdrFormat_ = VK_FORMAT_R16G16B16A16_SFLOAT;
+  else hdrFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
+  LOGI("Scene colour format %d", (int)hdrFormat_);
 
   // descriptor pool
-  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 512}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16}};
+  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
+                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8},
+                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8}};
   VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  dpi.maxSets = 320;
-  dpi.poolSizeCount = 2;
+  dpi.maxSets = 480;
+  dpi.poolSizeCount = 4;
   dpi.pPoolSizes = ps;
   VK_CHECK(vkCreateDescriptorPool(dev, &dpi, nullptr, &pool_));
 
@@ -70,11 +83,21 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
   layoutGlobalsA_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr}});
   layoutGlobalsB_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr},
-                              {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+                              {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                              {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                              {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutEmpty_ = mkLayout({});
   layoutTex_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutTex2_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
                           {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutTex3_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutTex4_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutBones_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}});
 
   auto mkPl = [&](std::vector<VkDescriptorSetLayout> sets, uint32_t pcSize, VkShaderStageFlags pcStages) {
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -86,11 +109,14 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VK_CHECK(vkCreatePipelineLayout(dev, &pi, nullptr, &l));
     return l;
   };
-  plWorld_ = mkPl({layoutGlobalsB_, layoutTex_}, 0, 0);
-  plShadow_ = mkPl({layoutGlobalsA_}, 0, 0);
+  plWorld_ = mkPl({layoutGlobalsB_, layoutTex2_}, 0, 0);
+  plSprite_ = mkPl({layoutGlobalsB_, layoutTex_}, 0, 0);
+  plShadow_ = mkPl({layoutGlobalsA_, layoutBones_}, 80, VK_SHADER_STAGE_VERTEX_BIT);
+  plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutEmpty_, layoutTex4_}, 128, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plAo_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
   VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -116,15 +142,27 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VK_CHECK(vkCreateSemaphore(dev, &sci, nullptr, &f.imageAvailable));
     f.arena = ctx_.createBuffer(kArenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
-    VkDescriptorSetLayout ls[2] = {layoutGlobalsA_, layoutGlobalsB_};
+    f.lightBuf = ctx_.createBuffer(kLightBufSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    std::memset(f.lightBuf.map, 0, (size_t)kLightBufSize);
+    VkDescriptorSetLayout ls[3] = {layoutGlobalsA_, layoutGlobalsB_, layoutBones_};
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     ai.descriptorPool = pool_;
-    ai.descriptorSetCount = 2;
+    ai.descriptorSetCount = 3;
     ai.pSetLayouts = ls;
-    VkDescriptorSet sets[2];
+    VkDescriptorSet sets[3];
     VK_CHECK(vkAllocateDescriptorSets(dev, &ai, sets));
     f.globalsA = sets[0];
     f.globalsB = sets[1];
+    f.bones = sets[2];
+    {
+      VkDescriptorBufferInfo bb{f.arena.buf, 0, sizeof(Mat4) * kMaxBones};
+      VkWriteDescriptorSet wb{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      wb.dstSet = f.bones;
+      wb.descriptorCount = 1;
+      wb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+      wb.pBufferInfo = &bb;
+      vkUpdateDescriptorSets(dev, 1, &wb, 0, nullptr);
+    }
     VkDescriptorBufferInfo bi{f.arena.buf, 0, sizeof(GlobalsUBO)};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = f.globalsA;
@@ -134,11 +172,33 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
     w.dstSet = f.globalsB;
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+    VkDescriptorBufferInfo lbi{f.lightBuf.buf, 0, kLightBufSize};
+    VkWriteDescriptorSet lw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    lw.dstSet = f.globalsB;
+    lw.dstBinding = 3;
+    lw.descriptorCount = 1;
+    lw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lw.pBufferInfo = &lbi;
+    vkUpdateDescriptorSets(dev, 1, &lw, 0, nullptr);
   }
 
   // 1x1 white dummy texture
   uint8_t white[4] = {255, 255, 255, 255};
   dummyTex_ = createTextureRGBA(1, 1, white, false, false, SamplerKind::ClampLinear);
+  uint8_t flatN[4] = {128, 128, 255, 255};
+  flatNormalTex_ = createTextureRGBA(1, 1, flatN, false, false, SamplerKind::Repeat);
+  uint8_t orm[4] = {255, 200, 0, 255};  // occlusion 1, roughness ~0.78, dielectric
+  defaultOrmTex_ = createTextureRGBA(1, 1, orm, false, false, SamplerKind::Repeat);
+  {
+    // 2-layer arrays so the views are VK_IMAGE_VIEW_TYPE_2D_ARRAY
+    TextureData td;
+    td.format = TexFormat::RGBA8_UNORM;
+    td.width = td.height = 1; td.layers = 2; td.mips = 1;
+    td.bytes = {255, 255, 255, 255, 255, 255, 255, 255};
+    dummyArray_ = createTexture(td, SamplerKind::Repeat);
+    td.bytes = {128, 128, 200, 255, 128, 128, 200, 255};  // flat normal, roughness 0.78, no cavity
+    flatNormalArray_ = createTexture(td, SamplerKind::Repeat);
+  }
 
   if (cfg_.headless) {
     outFormat_ = VK_FORMAT_R8G8B8A8_UNORM;
@@ -159,23 +219,28 @@ void Renderer::shutdown() {
   destroyOffscreenTargets();
   destroyRenderTargets();
   for (auto& m : meshes_) if (m.alive) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
+  for (auto& r : retired_) { ctx_.destroyBuffer(r.vb); ctx_.destroyBuffer(r.ib); }
+  retired_.clear();
   for (auto& t : textures_) if (t.alive) { ctx_.destroyImage(t.img); }
+  for (auto& m : models_) { ctx_.destroyBuffer(m.vb); ctx_.destroyBuffer(m.ib); }
   for (VkSampler s : samplers_) if (s) vkDestroySampler(dev, s, nullptr);
   if (shadowSampler_) vkDestroySampler(dev, shadowSampler_, nullptr);
   for (int i = 0; i < kFrames; ++i) {
     ctx_.destroyBuffer(frames_[i].arena);
+    ctx_.destroyBuffer(frames_[i].lightBuf);
     vkDestroyFence(dev, frames_[i].fence, nullptr);
     vkDestroySemaphore(dev, frames_[i].imageAvailable, nullptr);
   }
   VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                        pipeBlurDown_, pipeBlurUp_, pipeComposite_};
+                        pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                        pipeShadowSkinned_, pipeAo_, pipeAoBlur_};
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
-  VkPipelineLayout pls[] = {plWorld_, plShadow_, plUi_, plBlur_, plComposite_};
+  VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_, plAo_};
   for (auto p : pls) if (p) vkDestroyPipelineLayout(dev, p, nullptr);
-  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_};
+  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_, layoutTex3_, layoutTex4_, layoutBones_};
   for (auto l : dls) if (l) vkDestroyDescriptorSetLayout(dev, l, nullptr);
   for (auto m : shaderModules_) vkDestroyShaderModule(dev, m, nullptr);
-  VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
+  VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_, aoPass_};
   for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
   if (pool_) vkDestroyDescriptorPool(dev, pool_, nullptr);
   ctx_.shutdown();
@@ -217,7 +282,7 @@ bool Renderer::createPasses() {
   // scene: color + depth
   {
     VkAttachmentDescription at[2]{};
-    at[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    at[0].format = hdrFormat_;
     at[0].samples = VK_SAMPLE_COUNT_1_BIT;
     at[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -226,8 +291,8 @@ bool Renderer::createPasses() {
     at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     at[1] = at[0];
     at[1].format = depthFormat_;
-    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;   // sampled by the AO pass
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     VkAttachmentReference cref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference dref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sp{};
@@ -241,19 +306,20 @@ bool Renderer::createPasses() {
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT),
-        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)};
+        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT)};
     VkRenderPassCreateInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     ri.attachmentCount = 2; ri.pAttachments = at; ri.subpassCount = 1; ri.pSubpasses = &sp; ri.dependencyCount = 2; ri.pDependencies = deps;
     VK_CHECK(vkCreateRenderPass(dev, &ri, nullptr, &scenePass_));
   }
   // blur / composite share structure (single colour attachment)
   auto makeColorPass = [&](VkFormat fmt, VkImageLayout finalLayout, VkPipelineStageFlags dstStage, VkAccessFlags dstAccess,
-                           VkRenderPass* out) {
+                           VkRenderPass* out, bool clear = false) {
     VkAttachmentDescription a{};
     a.format = fmt;
     a.samples = VK_SAMPLE_COUNT_1_BIT;
-    a.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     a.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -272,8 +338,10 @@ bool Renderer::createPasses() {
     ri.attachmentCount = 1; ri.pAttachments = &a; ri.subpassCount = 1; ri.pSubpasses = &sp; ri.dependencyCount = 2; ri.pDependencies = deps;
     VK_CHECK(vkCreateRenderPass(dev, &ri, nullptr, out));
   };
-  makeColorPass(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+  makeColorPass(hdrFormat_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                 VK_ACCESS_SHADER_READ_BIT, &blurPass_);
+  makeColorPass(VK_FORMAT_R8G8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT, &aoPass_, true);
   if (cfg_.headless)
     makeColorPass(outFormat_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT,
                   &compositePass_);
@@ -329,6 +397,19 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
       bind = {0, sizeof(WorldVertex), VK_VERTEX_INPUT_RATE_VERTEX};
       A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
       break;
+    case 6:  // model, static
+    case 7:  // model, skinned
+      bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+      A(0, VK_FORMAT_R32G32B32_SFLOAT, 0); A(1, VK_FORMAT_R8G8B8A8_SNORM, 12); A(2, VK_FORMAT_R8G8B8A8_SNORM, 16);
+      A(3, VK_FORMAT_R32G32_SFLOAT, 20);
+      if (vertexKind == 7) { A(4, VK_FORMAT_R8G8B8A8_UINT, 28); A(5, VK_FORMAT_R8G8B8A8_UNORM, 32); }
+      break;
+    case 8:  // model shadow, static
+    case 9:  // model shadow, skinned
+      bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+      A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
+      if (vertexKind == 9) { A(4, VK_FORMAT_R8G8B8A8_UINT, 28); A(5, VK_FORMAT_R8G8B8A8_UNORM, 32); }
+      break;
     default: break;
   }
   if (vertexKind) {
@@ -379,7 +460,7 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
   gi.pViewportState = &vp;
   gi.pRasterizationState = &rs;
   gi.pMultisampleState = &ms;
-  gi.pDepthStencilState = (rp == compositePass_ || rp == blurPass_) ? nullptr : &ds;
+  gi.pDepthStencilState = (rp == compositePass_ || rp == blurPass_ || rp == aoPass_) ? nullptr : &ds;
   gi.pColorBlendState = (fs ? &cb : (const VkPipelineColorBlendStateCreateInfo*)&cb);
   gi.pDynamicState = &dsi;
   gi.layout = layout;
@@ -393,20 +474,29 @@ bool Renderer::createLayoutsAndPipelines() {
   const VkCompareOp LESS = VK_COMPARE_OP_LESS, LEQ = VK_COMPARE_OP_LESS_OR_EQUAL, GRT = VK_COMPARE_OP_GREATER;
   pipeWorld_ = buildPipeline("world.vert.spv", "world.frag.spv", scenePass_, plWorld_, 1, true, true, LESS, false, VK_CULL_MODE_BACK_BIT);
   pipeShadow_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 5, true, true, LESS, false, VK_CULL_MODE_NONE, true);
-  pipeSprite_ = buildPipeline("sprite.vert.spv", "sprite.frag.spv", scenePass_, plWorld_, 2, true, true, LEQ, true, VK_CULL_MODE_NONE,
+  pipeShadowMesh_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 8, true, true, LESS, false, VK_CULL_MODE_NONE, true);
+  pipeShadowSkinned_ = buildPipeline("mesh_shadow_skinned.vert.spv", nullptr, shadowPass_, plShadow_, 9, true, true, LESS, false,
+                                     VK_CULL_MODE_NONE, true);
+  pipeMesh_ = buildPipeline("mesh.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 6, true, true, LESS, false, VK_CULL_MODE_NONE);
+  pipeMeshSkinned_ = buildPipeline("mesh_skinned.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 7, true, true, LESS, false,
+                                   VK_CULL_MODE_BACK_BIT);
+  pipeSprite_ = buildPipeline("sprite.vert.spv", "sprite.frag.spv", scenePass_, plSprite_, 2, true, true, LEQ, true, VK_CULL_MODE_NONE,
                               false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeSilhouette_ = buildPipeline("sprite.vert.spv", "silhouette.frag.spv", scenePass_, plWorld_, 2, true, false, GRT, true,
+  pipeSilhouette_ = buildPipeline("sprite.vert.spv", "silhouette.frag.spv", scenePass_, plSprite_, 2, true, false, GRT, true,
                                   VK_CULL_MODE_NONE, false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeDecal_ = buildPipeline("decal.vert.spv", "decal.frag.spv", scenePass_, plWorld_, 3, true, false, LEQ, true, VK_CULL_MODE_NONE,
+  pipeDecal_ = buildPipeline("decal.vert.spv", "decal.frag.spv", scenePass_, plSprite_, 3, true, false, LEQ, true, VK_CULL_MODE_NONE,
                              false, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
-  pipeSky_ = buildPipeline("fullscreen.vert.spv", "sky.frag.spv", scenePass_, plWorld_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeSky_ = buildPipeline("fullscreen.vert.spv", "sky.frag.spv", scenePass_, plSprite_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeUi_ = buildPipeline("ui.vert.spv", "ui.frag.spv", compositePass_, plUi_, 4, false, false, LEQ, true, VK_CULL_MODE_NONE, false,
                           VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP);
   pipeBlurDown_ = buildPipeline("fullscreen.vert.spv", "blur_down.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeBlurUp_ = buildPipeline("fullscreen.vert.spv", "blur_up.frag.spv", blurPass_, plBlur_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeAo_ = buildPipeline("fullscreen.vert.spv", "ssao.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
+  pipeAoBlur_ = buildPipeline("fullscreen.vert.spv", "ssao_blur.frag.spv", aoPass_, plAo_, 0, false, false, LEQ, false, VK_CULL_MODE_NONE);
   pipeComposite_ = buildPipeline("fullscreen.vert.spv", "composite.frag.spv", compositePass_, plComposite_, 0, false, false, LEQ, false,
                                  VK_CULL_MODE_NONE);
-  return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_;
+  return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_ && pipeMesh_ &&
+         pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_ && pipeAo_ && pipeAoBlur_;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -454,6 +544,14 @@ TexHandle Renderer::createTexture(const TextureData& td, SamplerKind sk) {
     case TexFormat::ASTC6x6_SRGB:
       if (!ctx_.caps.astcLdr) return {};
       fmt = VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
+      break;
+    case TexFormat::ASTC6x6_UNORM:
+      if (!ctx_.caps.astcLdr) return {};
+      fmt = VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+      break;
+    case TexFormat::ASTC8x8_SRGB:
+      if (!ctx_.caps.astcLdr) return {};
+      fmt = VK_FORMAT_ASTC_8x8_SRGB_BLOCK;
       break;
     default: return {};
   }
@@ -544,17 +642,110 @@ void Renderer::destroyMesh(MeshHandle h) {
   meshes_[h.id] = MeshRes();
 }
 
+void Renderer::retireMesh(MeshHandle h) {
+  if (!h.valid() || h.id >= (int)meshes_.size() || !meshes_[h.id].alive) return;
+  retired_.push_back({meshes_[h.id].vb, meshes_[h.id].ib, frameCounter_});
+  meshes_[h.id] = MeshRes();
+}
+
+void Renderer::destroyTexture(TexHandle h) {
+  if (h.id < 0 || h.id >= (int)textures_.size() || !textures_[h.id].alive) return;
+  vkDeviceWaitIdle(ctx_.device);
+  TexRes& t = textures_[h.id];
+  if (t.set) vkFreeDescriptorSets(ctx_.device, pool_, 1, &t.set);
+  ctx_.destroyImage(t.img);
+  t = TexRes();
+}
+
+ModelHandle Renderer::createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
+                                  bool skinned) {
+  ModelRes m;
+  m.vb = ctx_.createBuffer(nv * sizeof(ModelVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+  m.ib = ctx_.createBuffer(ni * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true);
+  std::memcpy(m.vb.map, v, nv * sizeof(ModelVertex));
+  std::memcpy(m.ib.map, idx, ni * sizeof(uint32_t));
+  m.lodCount = std::max(1, std::min(lodCount, 3));
+  for (int i = 0; i < m.lodCount; ++i) m.lods[i] = lods ? lods[i] : ModelLod{0, (uint32_t)ni};
+  m.skinned = skinned;
+  models_.push_back(m);
+  return ModelHandle{(int)models_.size() - 1};
+}
+
+MaterialHandle Renderer::createWorldMaterial(TexHandle albedoArray, TexHandle normalArray) {
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = pool_;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &layoutTex2_;
+  VkDescriptorSet set;
+  VK_CHECK(vkAllocateDescriptorSets(ctx_.device, &ai, &set));
+  const TexRes& a = textures_[albedoArray.valid() ? albedoArray.id : dummyArray_.id];
+  const TexRes& n = textures_[normalArray.valid() ? normalArray.id : flatNormalArray_.id];
+  VkDescriptorImageInfo ii[2] = {{a.sampler, a.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                 {n.sampler, n.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+  VkWriteDescriptorSet w[2]{};
+  for (int i = 0; i < 2; ++i) {
+    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[i].dstSet = set; w[i].dstBinding = (uint32_t)i; w[i].descriptorCount = 1;
+    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[i].pImageInfo = &ii[i];
+  }
+  vkUpdateDescriptorSets(ctx_.device, 2, w, 0, nullptr);
+  materials_.push_back(set);
+  return MaterialHandle{(int)materials_.size() - 1};
+}
+
+MaterialHandle Renderer::createModelMaterial(TexHandle albedo, TexHandle normal, TexHandle orm) {
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = pool_;
+  ai.descriptorSetCount = 1;
+  ai.pSetLayouts = &layoutTex3_;
+  VkDescriptorSet set;
+  VK_CHECK(vkAllocateDescriptorSets(ctx_.device, &ai, &set));
+  const TexRes* t[3] = {&textures_[albedo.valid() ? albedo.id : dummyTex_.id], &textures_[normal.valid() ? normal.id : flatNormalTex_.id],
+                        &textures_[orm.valid() ? orm.id : defaultOrmTex_.id]};
+  VkDescriptorImageInfo ii[3];
+  VkWriteDescriptorSet w[3]{};
+  for (int i = 0; i < 3; ++i) {
+    ii[i] = {t[i]->sampler, t[i]->img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[i].dstSet = set; w[i].dstBinding = (uint32_t)i; w[i].descriptorCount = 1;
+    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[i].pImageInfo = &ii[i];
+  }
+  vkUpdateDescriptorSets(ctx_.device, 3, w, 0, nullptr);
+  materials_.push_back(set);
+  return MaterialHandle{(int)materials_.size() - 1};
+}
+
+void Renderer::setShadowMapSize(int size) {
+  size = clamp(size, 512, 4096);
+  if (size == cfg_.shadowMapSize) return;
+  cfg_.shadowMapSize = size;
+  if (compositePass_ && outW_) createRenderTargets();
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 void Renderer::destroyRenderTargets() {
   VkDevice dev = ctx_.device;
   if (!dev) return;
   vkDeviceWaitIdle(dev);
-  if (shadowFb_) vkDestroyFramebuffer(dev, shadowFb_, nullptr);
+  for (int i = 0; i < 2; ++i) {
+    if (shadowFbs_[i]) vkDestroyFramebuffer(dev, shadowFbs_[i], nullptr);
+    if (shadowLayerViews_[i]) vkDestroyImageView(dev, shadowLayerViews_[i], nullptr);
+    shadowFbs_[i] = VK_NULL_HANDLE;
+    shadowLayerViews_[i] = VK_NULL_HANDLE;
+  }
   if (sceneFb_) vkDestroyFramebuffer(dev, sceneFb_, nullptr);
-  shadowFb_ = sceneFb_ = VK_NULL_HANDLE;
+  sceneFb_ = VK_NULL_HANDLE;
   ctx_.destroyImage(shadowMap_);
   ctx_.destroyImage(sceneColor_);
   ctx_.destroyImage(sceneDepth_);
+  if (aoFbA_) vkDestroyFramebuffer(dev, aoFbA_, nullptr);
+  if (aoFbB_) vkDestroyFramebuffer(dev, aoFbB_, nullptr);
+  aoFbA_ = aoFbB_ = VK_NULL_HANDLE;
+  if (aoDepthSet_) vkFreeDescriptorSets(dev, pool_, 1, &aoDepthSet_);
+  if (aoBlurSet_) vkFreeDescriptorSets(dev, pool_, 1, &aoBlurSet_);
+  aoDepthSet_ = aoBlurSet_ = VK_NULL_HANDLE;
+  ctx_.destroyImage(aoA_);
+  ctx_.destroyImage(aoB_);
   for (auto* v : {&blurDown_, &blurUp_}) {
     for (auto& b : *v) {
       if (b.fb) vkDestroyFramebuffer(dev, b.fb, nullptr);
@@ -575,15 +766,24 @@ void Renderer::createRenderTargets() {
   sceneH_ = std::max(64u, (uint32_t)(outH_ * cfg_.renderScale + 0.5f));
 
   uint32_t sm = (uint32_t)cfg_.shadowMapSize;
-  shadowMap_ = ctx_.createImage(sm, sm, 1, 1, shadowFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+  // two cascades in one depth array; one framebuffer per layer
+  shadowMap_ = ctx_.createImage(sm, sm, 2, 1, shadowFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                 VK_IMAGE_ASPECT_DEPTH_BIT);
   VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-  fi.renderPass = shadowPass_;
-  fi.attachmentCount = 1;
-  fi.pAttachments = &shadowMap_.view;
-  fi.width = fi.height = sm;
-  fi.layers = 1;
-  VK_CHECK(vkCreateFramebuffer(dev, &fi, nullptr, &shadowFb_));
+  for (int c = 0; c < 2; ++c) {
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = shadowMap_.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = shadowFormat_;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, (uint32_t)c, 1};
+    VK_CHECK(vkCreateImageView(dev, &vi, nullptr, &shadowLayerViews_[c]));
+    fi.renderPass = shadowPass_;
+    fi.attachmentCount = 1;
+    fi.pAttachments = &shadowLayerViews_[c];
+    fi.width = fi.height = sm;
+    fi.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(dev, &fi, nullptr, &shadowFbs_[c]));
+  }
   // bind the shadow map to both frames' globalsB sets
   for (int i = 0; i < kFrames; ++i) {
     VkDescriptorImageInfo ii{shadowSampler_, shadowMap_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
@@ -595,10 +795,13 @@ void Renderer::createRenderTargets() {
     w.pImageInfo = &ii;
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
   }
+  bindProbeSets();
 
-  sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+  sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+  aoSupported_ = depthFormat_ == VK_FORMAT_D32_SFLOAT;
+  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_,
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (aoSupported_ ? VK_IMAGE_USAGE_SAMPLED_BIT : 0),
                                  depthFormat_ == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_ASPECT_DEPTH_BIT
                                                                        : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
   VkImageView atts[2] = {sceneColor_.view, sceneDepth_.view};
@@ -616,7 +819,7 @@ void Renderer::createRenderTargets() {
   auto mkLevel = [&](uint32_t w, uint32_t h) {
     BlurLevel b;
     b.w = std::max(1u, w); b.h = std::max(1u, h);
-    b.img = ctx_.createImage(b.w, b.h, 1, 1, VK_FORMAT_R8G8B8A8_UNORM,
+    b.img = ctx_.createImage(b.w, b.h, 1, 1, hdrFormat_,
                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
     VkFramebufferCreateInfo bf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     bf.renderPass = blurPass_;
@@ -630,24 +833,73 @@ void Renderer::createRenderTargets() {
   for (int i = 1; i <= 4; ++i) blurDown_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));
   for (int i = 3; i >= 1; --i) blurUp_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));  // sizes of down[2], down[1], down[0]
 
-  // composite set: scene + final blurred level
-  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-  ai.descriptorPool = pool_;
-  ai.descriptorSetCount = 1;
-  ai.pSetLayouts = &layoutTex2_;
-  VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &compositeSet_));
-  VkDescriptorImageInfo ii[2] = {{lin, sceneColor_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                 {lin, blurUp_.back().img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-  VkWriteDescriptorSet w[2]{};
-  for (int i = 0; i < 2; ++i) {
-    w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w[i].dstSet = compositeSet_;
-    w[i].dstBinding = (uint32_t)i;
-    w[i].descriptorCount = 1;
-    w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w[i].pImageInfo = &ii[i];
+  // half-resolution AO targets (depth -> raw AO -> depth-aware blur); the composite samples the blurred one
+  aoW_ = std::max(1u, sceneW_ / 2); aoH_ = std::max(1u, sceneH_ / 2);
+  auto mkAo = [&](Image& img, VkFramebuffer& fb) {
+    img = ctx_.createImage(aoW_, aoH_, 1, 1, VK_FORMAT_R8G8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT);
+    VkFramebufferCreateInfo bf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    bf.renderPass = aoPass_;
+    bf.attachmentCount = 1;
+    bf.pAttachments = &img.view;
+    bf.width = aoW_; bf.height = aoH_; bf.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(dev, &bf, nullptr, &fb));
+  };
+  mkAo(aoA_, aoFbA_);
+  mkAo(aoB_, aoFbB_);
+  VkSampler nearS = getSampler(SamplerKind::ClampNearest);
+  auto allocSet = [&](VkDescriptorSetLayout l, std::initializer_list<VkDescriptorImageInfo> infos) {
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    ai.descriptorPool = pool_;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &l;
+    VkDescriptorSet set;
+    VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &set));
+    std::vector<VkDescriptorImageInfo> ii(infos);
+    std::vector<VkWriteDescriptorSet> w(ii.size());
+    for (size_t i = 0; i < ii.size(); ++i) {
+      w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      w[i].dstSet = set;
+      w[i].dstBinding = (uint32_t)i;
+      w[i].descriptorCount = 1;
+      w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      w[i].pImageInfo = &ii[i];
+    }
+    vkUpdateDescriptorSets(dev, (uint32_t)w.size(), w.data(), 0, nullptr);
+    return set;
+  };
+  const VkImageLayout RO = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  if (aoSupported_) {
+    VkDescriptorImageInfo depthInfo{nearS, sceneDepth_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    aoDepthSet_ = allocSet(layoutTex2_, {depthInfo, depthInfo});
+    aoBlurSet_ = allocSet(layoutTex2_, {depthInfo, VkDescriptorImageInfo{lin, aoA_.view, RO}});
   }
-  vkUpdateDescriptorSets(dev, 2, w, 0, nullptr);
+  // composite set: scene + final blurred level + AO / sky mask
+  VkDescriptorImageInfo depthSample = aoSupported_ ? VkDescriptorImageInfo{nearS, sceneDepth_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}
+                                                   : VkDescriptorImageInfo{lin, aoB_.view, RO};
+  compositeSet_ = allocSet(layoutTex4_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
+                                         VkDescriptorImageInfo{lin, aoB_.view, RO}, depthSample});
+}
+
+void Renderer::bindProbeSets() {
+  if (!dummyArray_.valid()) return;
+  const TexRes& t = textures_[probeTex_.valid() ? probeTex_.id : dummyArray_.id];
+  for (int i = 0; i < kFrames; ++i) {
+    VkDescriptorImageInfo ii{t.sampler, t.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = frames_[i].globalsB;
+    w.dstBinding = 2;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(ctx_.device, 1, &w, 0, nullptr);
+  }
+}
+
+void Renderer::setProbeGrid(TexHandle t) {
+  vkDeviceWaitIdle(ctx_.device);   // the previous grid may still be in flight
+  probeTex_ = t;
+  bindProbeSets();
 }
 
 void Renderer::setRenderScale(float s) {
@@ -742,12 +994,13 @@ bool Renderer::createSwapchain(uint32_t w, uint32_t h) {
 
   if (formatChanged) {
     // (Re)build passes and pipelines for the chosen output format.
-    VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
+    VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_, aoPass_};
     VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                          pipeBlurDown_, pipeBlurUp_, pipeComposite_};
+                          pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                          pipeShadowSkinned_, pipeAo_, pipeAoBlur_};
     for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
     for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
-    shadowPass_ = scenePass_ = blurPass_ = compositePass_ = VK_NULL_HANDLE;
+    shadowPass_ = scenePass_ = blurPass_ = compositePass_ = aoPass_ = VK_NULL_HANDLE;
     if (!createPasses() || !createLayoutsAndPipelines()) return false;
   }
   for (uint32_t i = 0; i < n; ++i) {
@@ -820,6 +1073,55 @@ void Renderer::drawBatches(VkCommandBuffer cb, FrameRes& fr, const std::vector<B
   }
 }
 
+void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade) {
+  if (fd.models.empty()) return;
+  VkPipelineLayout pl = shadow ? plShadow_ : plMesh_;
+  VkPipeline cur = VK_NULL_HANDLE;
+  int curMat = -1;
+  bool globalsBound = false;
+  for (const ModelDraw& d : fd.models) {
+    if (!d.model.valid() || d.model.id >= (int)models_.size()) continue;
+    if (shadow && !d.castShadow) continue;
+    const ModelRes& m = models_[d.model.id];
+    bool skinned = m.skinned && d.boneOffset >= 0 && boneBase != ~(VkDeviceSize)0;
+    if (m.skinned && !skinned) continue;
+    VkPipeline p = shadow ? (skinned ? pipeShadowSkinned_ : pipeShadowMesh_) : (skinned ? pipeMeshSkinned_ : pipeMesh_);
+    if (p != cur) {
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
+      cur = p;
+      if (!globalsBound) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 1, shadow ? &fr.globalsA : &fr.globalsB, 0, nullptr);
+        globalsBound = true;
+      }
+    }
+    if (skinned) {
+      uint32_t dynOff = (uint32_t)(boneBase + (VkDeviceSize)d.boneOffset * sizeof(Mat4));
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, shadow ? 1 : 2, 1, &fr.bones, 1, &dynOff);
+    }
+    if (!shadow) {
+      int mat = d.material.valid() ? d.material.id : -1;
+      if (mat < 0) continue;
+      if (mat != curMat) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 1, 1, &materials_[mat], 0, nullptr);
+        curMat = mat;
+      }
+      struct { Mat4 model; Vec4 tint, params; } pc{d.transform, d.tint, d.params};
+      vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 96, &pc);
+    } else {
+      struct { Mat4 model; int32_t cascade; int32_t pad[3]; } pc;
+      pc.model = d.transform;
+      pc.cascade = cascade;
+      vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT, 0, 80, &pc);
+    }
+    int lod = clamp(d.lod, 0, m.lodCount - 1);
+    if (shadow) lod = std::min(m.lodCount - 1, lod + 1);  // shadows use a coarser LOD
+    VkDeviceSize o = 0;
+    vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
+    vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdDrawIndexed(cb, m.lods[lod].indexCount, 1, m.lods[lod].firstIndex, 0, 0);
+  }
+}
+
 bool Renderer::renderFrame(const FrameData& fd) {
   if (!hasSwapchain()) return false;
   VkDevice dev = ctx_.device;
@@ -835,6 +1137,16 @@ bool Renderer::renderFrame(const FrameData& fd) {
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) return false;
   }
   VK_CHECK(vkResetFences(dev, 1, &fr.fence));
+  // release meshes retired at least kFrames+1 frames ago (no in-flight frame can still use them)
+  for (size_t i = 0; i < retired_.size();) {
+    if (retired_[i].frame + kFrames + 1 <= frameCounter_) {
+      ctx_.destroyBuffer(retired_[i].vb);
+      ctx_.destroyBuffer(retired_[i].ib);
+      retired_[i] = retired_.back();
+      retired_.pop_back();
+    } else ++i;
+  }
+  ++frameCounter_;
   VkCommandBuffer cb = fr.cmd;
   VK_CHECK(vkResetCommandBuffer(cb, 0));
   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -842,23 +1154,66 @@ bool Renderer::renderFrame(const FrameData& fd) {
   VK_CHECK(vkBeginCommandBuffer(cb, &bi));
   fr.arenaOffset = 0;
 
+  GlobalsUBO gu = fd.globals;
+  // dynamic lights -> storage buffer: [128 x 3 vec4] then one list per screen tile (count + up to kTileCap light indices)
+  {
+    const int nl = std::min<int>((int)fd.lights.size(), kMaxLights);
+    uint8_t* base = (uint8_t*)fr.lightBuf.map;
+    std::memcpy(base, fd.lights.data(), sizeof(LightUBO) * (size_t)nl);
+    uint32_t* tiles = (uint32_t*)(base + sizeof(LightUBO) * kMaxLights);
+    const int stride = 1 + kTileCap;
+    for (int t = 0; t < kTilesX * kTilesY; ++t) tiles[t * stride] = 0;
+    Mat4 vp = fd.globals.viewProj;
+    float sx = std::sqrt(vp.at(0, 0) * vp.at(0, 0) + vp.at(0, 1) * vp.at(0, 1) + vp.at(0, 2) * vp.at(0, 2));
+    float sy = std::sqrt(vp.at(1, 0) * vp.at(1, 0) + vp.at(1, 1) * vp.at(1, 1) + vp.at(1, 2) * vp.at(1, 2));
+    for (int i = 0; i < nl; ++i) {
+      const LightUBO& L = fd.lights[i];
+      float x = L.posRadius.x, y = L.posRadius.y, z = L.posRadius.z, r = L.posRadius.w;
+      float cx = vp.at(0, 0) * x + vp.at(0, 1) * y + vp.at(0, 2) * z + vp.at(0, 3);
+      float cy = vp.at(1, 0) * x + vp.at(1, 1) * y + vp.at(1, 2) * z + vp.at(1, 3);
+      float cw = vp.at(3, 0) * x + vp.at(3, 1) * y + vp.at(3, 2) * z + vp.at(3, 3);
+      int tx0 = 0, tx1 = kTilesX - 1, ty0 = 0, ty1 = kTilesY - 1;
+      if (cw < -r) continue;                      // behind the camera
+      if (cw > r) {                               // otherwise the camera is inside the sphere: every tile
+        float ndx = cx / cw, ndy = cy / cw, rx = r * sx / cw * 1.15f, ry = r * sy / cw * 1.15f;
+        tx0 = std::max(0, (int)std::floor((ndx - rx) * 0.5f * kTilesX + kTilesX * 0.5f));
+        tx1 = std::min(kTilesX - 1, (int)std::floor((ndx + rx) * 0.5f * kTilesX + kTilesX * 0.5f));
+        ty0 = std::max(0, (int)std::floor((ndy - ry) * 0.5f * kTilesY + kTilesY * 0.5f));
+        ty1 = std::min(kTilesY - 1, (int)std::floor((ndy + ry) * 0.5f * kTilesY + kTilesY * 0.5f));
+      }
+      for (int ty = ty0; ty <= ty1; ++ty)
+        for (int tx = tx0; tx <= tx1; ++tx) {
+          uint32_t* tl = tiles + (ty * kTilesX + tx) * stride;
+          if (tl[0] < (uint32_t)kTileCap) { tl[1 + tl[0]] = (uint32_t)i; ++tl[0]; }   // lights come sorted by importance, so a full tile drops the least important
+        }
+    }
+    gu.lightGrid = {(float)nl, (float)kTilesX / (float)sceneW_, (float)kTilesY / (float)sceneH_, (float)kTilesX};
+  }
   VkDeviceSize goff;
   void* gdst = arenaAlloc(fr, sizeof(GlobalsUBO), &goff);  // offset 0
-  std::memcpy(gdst, &fd.globals, sizeof(GlobalsUBO));
+  std::memcpy(gdst, &gu, sizeof(GlobalsUBO));
+  // skinning palettes (kMaxBones matrices per skinned draw, each block 256-byte aligned by the arena)
+  VkDeviceSize boneBase = 0;
+  if (!fd.bones.empty()) {
+    void* bdst = arenaAlloc(fr, fd.bones.size() * sizeof(Mat4) + sizeof(Mat4) * kMaxBones, &boneBase);
+    if (bdst) std::memcpy(bdst, fd.bones.data(), fd.bones.size() * sizeof(Mat4));
+    else boneBase = ~(VkDeviceSize)0;
+  }
 
-  // ---- shadow pass
-  {
+  // ---- shadow pass (one render pass per cascade layer)
+  const int cascades = clamp(fd.shadowCascades, 1, 2);
+  for (int c = 0; c < 2; ++c) {
     uint32_t sm = (uint32_t)cfg_.shadowMapSize;
     VkClearValue cv{};
     cv.depthStencil = {1.0f, 0};
     VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rb.renderPass = shadowPass_;
-    rb.framebuffer = shadowFb_;
+    rb.framebuffer = shadowFbs_[c];
     rb.renderArea = {{0, 0}, {sm, sm}};
     rb.clearValueCount = 1;
     rb.pClearValues = &cv;
     vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
-    if (fd.drawShadows && shadowsEnabled_) {
+    if (fd.drawShadows && shadowsEnabled_ && c < cascades) {
       VkViewport vp{0, 0, (float)sm, (float)sm, 0, 1};
       VkRect2D sc{{0, 0}, {sm, sm}};
       vkCmdSetViewport(cb, 0, 1, &vp);
@@ -866,6 +1221,9 @@ bool Renderer::renderFrame(const FrameData& fd) {
       vkCmdSetDepthBias(cb, 1.5f, 0.0f, 2.0f);
       vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeShadow_);
       vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plShadow_, 0, 1, &fr.globalsA, 0, nullptr);
+      struct { Mat4 model; int32_t cascade; int32_t pad[3]; } spc;
+      spc.cascade = c;
+      vkCmdPushConstants(cb, plShadow_, VK_SHADER_STAGE_VERTEX_BIT, 0, 80, &spc);
       for (int id : fd.shadowMeshes) {
         MeshRes& m = meshes_[id];
         if (!m.alive) continue;
@@ -874,6 +1232,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
         vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
       }
+      drawModels(cb, fr, fd, boneBase, true, c);
     }
     vkCmdEndRenderPass(cb);
   }
@@ -894,24 +1253,28 @@ bool Renderer::renderFrame(const FrameData& fd) {
     VkRect2D sc{{0, 0}, {sceneW_, sceneH_}};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
-    int mat = fd.materialArray.valid() ? fd.materialArray.id : dummyTex_.id;
 
     // sky
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeSky_);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 0, 1, &fr.globalsB, 0, nullptr);
-    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 1, 1, &textures_[mat].set, 0, nullptr);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
     vkCmdDraw(cb, 3, 1, 0, 0);
 
     // world
-    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeWorld_);
-    for (int id : fd.worldMeshes) {
-      MeshRes& m = meshes_[id];
-      if (!m.alive) continue;
-      VkDeviceSize o = 0;
-      vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
-      vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
-      vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
+    if (fd.worldMaterial.valid()) {
+      vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeWorld_);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 0, 1, &fr.globalsB, 0, nullptr);
+      vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plWorld_, 1, 1, &materials_[fd.worldMaterial.id], 0, nullptr);
+      for (int id : fd.worldMeshes) {
+        MeshRes& m = meshes_[id];
+        if (!m.alive) continue;
+        VkDeviceSize o = 0;
+        vkCmdBindVertexBuffers(cb, 0, 1, &m.vb.buf, &o);
+        vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cb, m.indexCount, 1, 0, 0, 0);
+      }
     }
+    // 3D models (vehicles, characters, props)
+    drawModels(cb, fr, fd, boneBase, false, 0);
 
     // ground shadows / decals
     if (!fd.decals.empty()) {
@@ -920,20 +1283,57 @@ bool Renderer::renderFrame(const FrameData& fd) {
       if (dst) {
         std::memcpy(dst, fd.decals.data(), fd.decals.size() * sizeof(DecalInst));
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeDecal_);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
         vkCmdBindVertexBuffers(cb, 0, 1, &fr.arena.buf, &off);
         vkCmdDraw(cb, 4, (uint32_t)fd.decals.size(), 0, 0);
       }
     }
     // billboards (sorted far -> near by the game)
-    drawBatches(cb, fr, fd.spriteBatches, fd.sprites.data(), sizeof(SpriteInst), pipeSprite_, plWorld_, 4, 1);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plSprite_, 0, 1, &fr.globalsB, 0, nullptr);
+    drawBatches(cb, fr, fd.spriteBatches, fd.sprites.data(), sizeof(SpriteInst), pipeSprite_, plSprite_, 4, 1);
     // occluded-silhouette pass
-    drawBatches(cb, fr, fd.silhouetteBatches, fd.silhouettes.data(), sizeof(SpriteInst), pipeSilhouette_, plWorld_, 4, 1);
+    drawBatches(cb, fr, fd.silhouetteBatches, fd.silhouettes.data(), sizeof(SpriteInst), pipeSilhouette_, plSprite_, 4, 1);
     vkCmdEndRenderPass(cb);
+  }
+
+  // ---- ambient occlusion + sky mask (half resolution). When off the target is only cleared to "fully visible".
+  const bool doAo = aoSupported_ && (fd.aoStrength > 0.001f || fd.shaftIntensity > 0.001f);
+  {
+    auto aoPass = [&](VkFramebuffer fb, VkPipeline pipe, VkDescriptorSet set, bool draw) {
+      VkClearValue cv{};
+      cv.color = {{1.0f, 0.0f, 0.0f, 1.0f}};
+      VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+      rb.renderPass = aoPass_;
+      rb.framebuffer = fb;
+      rb.renderArea = {{0, 0}, {aoW_, aoH_}};
+      rb.clearValueCount = 1;
+      rb.pClearValues = &cv;
+      vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+      if (draw) {
+        VkViewport vp{0, 0, (float)aoW_, (float)aoH_, 0, 1};
+        VkRect2D sc{{0, 0}, {aoW_, aoH_}};
+        vkCmdSetViewport(cb, 0, 1, &vp);
+        vkCmdSetScissor(cb, 0, 1, &sc);
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plAo_, 1, 1, &set, 0, nullptr);
+        float pc[8] = {fd.nearZ, fd.farZ, fd.tanHalfX, fd.tanHalfY, fd.aoRadius, std::max(fd.aoStrength, 0.0f) * 1.6f + 0.4f, 1.0f / aoW_, 1.0f / aoH_};
+        vkCmdPushConstants(cb, plAo_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pc);
+        vkCmdDraw(cb, 3, 1, 0, 0);
+      }
+      vkCmdEndRenderPass(cb);
+    };
+    if (doAo) {
+      aoPass(aoFbA_, pipeAo_, aoDepthSet_, true);
+      aoPass(aoFbB_, pipeAoBlur_, aoBlurSet_, true);
+    } else {
+      aoPass(aoFbB_, VK_NULL_HANDLE, VK_NULL_HANDLE, false);
+    }
   }
 
   // ---- blur chain (Dual Kawase) only when needed
   bool doBlur = fd.blur > 0.01f;
-  if (doBlur) {
+  bool doBloom = fd.bloom > 0.001f;
+  if (doBlur || doBloom) {
     auto pass = [&](BlurLevel& dstL, VkDescriptorSet src, float srcW, float srcH, VkPipeline pipe, float offset) {
       VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
       rb.renderPass = blurPass_;
@@ -951,7 +1351,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
       vkCmdDraw(cb, 3, 1, 0, 0);
       vkCmdEndRenderPass(cb);
     };
-    float off = 1.6f;
+    float off = doBlur ? 1.6f : 1.0f;
     pass(blurDown_[0], sceneSampleSet_, (float)sceneW_, (float)sceneH_, pipeBlurDown_, off);
     for (int i = 1; i < 4; ++i)
       pass(blurDown_[i], blurDown_[i - 1].set, (float)blurDown_[i - 1].w, (float)blurDown_[i - 1].h, pipeBlurDown_, off);
@@ -973,8 +1373,15 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
-    float pcv[8] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f, fd.globals.camPos.w, fd.grade, fd.dim, 0};
-    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32, pcv);
+    float pcv[32] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
+                     fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,
+                     fd.globals.camPos.w,
+                     fd.lift.x, fd.lift.y, fd.lift.z, fd.lift.w, fd.gain.x, fd.gain.y, fd.gain.z, fd.gain.w,
+                     doAo ? fd.aoStrength : 0.0f, doAo ? fd.shaftIntensity : 0.0f, fd.sunUV.x, fd.sunUV.y,
+                     fd.shaftColor.x, fd.shaftColor.y, fd.shaftColor.z, 0.0f,
+                     fd.nearZ, fd.farZ, fd.tanHalfX, fd.tanHalfY,
+                     fd.upView.x, fd.upView.y, fd.upView.z, aoSupported_ ? fd.wetness : 0.0f};
+    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128, pcv);
     vkCmdDraw(cb, 3, 1, 0, 0);
     if (!fd.uiBatches.empty()) {
       float upc[4] = {(float)outW_, (float)outH_, outIsSrgb_ ? 1.0f : 0.0f, 0};

@@ -6,24 +6,25 @@ then data for each mip (largest first), each layer in order.
 import struct
 import numpy as np
 
-FMT_RGBA8_SRGB, FMT_ASTC6, FMT_RGBA8_UNORM, FMT_R8 = 0, 1, 2, 3
+FMT_RGBA8_SRGB, FMT_ASTC6, FMT_RGBA8_UNORM, FMT_R8, FMT_ASTC6_UNORM, FMT_ASTC8 = 0, 1, 2, 3, 4, 5
 _ctx_cache = {}
 
 
-def _astc_ctx(quality):
+def _astc_ctx(quality, srgb=True, block=6):
     import astc_encoder as a
-    if quality not in _ctx_cache:
+    key = (quality, srgb, block)
+    if key not in _ctx_cache:
         q = {"fast": a.ASTCQualityPreset.FAST, "medium": a.ASTCQualityPreset.MEDIUM, "thorough": a.ASTCQualityPreset.THOROUGH}[quality]
-        cfg = a.ASTCConfig(a.ASTCProfile.LDR_SRGB, 6, 6, 1, q)
-        _ctx_cache[quality] = a.ASTCContext(cfg, threads=4)
-    return _ctx_cache[quality]
+        cfg = a.ASTCConfig(a.ASTCProfile.LDR_SRGB if srgb else a.ASTCProfile.LDR, block, block, 1, q)
+        _ctx_cache[key] = a.ASTCContext(cfg, threads=4)
+    return _ctx_cache[key]
 
 
-def astc_compress(rgba_u8, quality="medium"):
+def astc_compress(rgba_u8, quality="medium", srgb=True, block=6):
     import astc_encoder as a
     h, w = rgba_u8.shape[:2]
     img = a.ASTCImage(a.ASTCType.U8, w, h, 1, np.ascontiguousarray(rgba_u8).tobytes())
-    return _astc_ctx(quality).compress(img, a.ASTCSwizzle.from_str("rgba"))
+    return _astc_ctx(quality, srgb, block).compress(img, a.ASTCSwizzle.from_str("rgba"))
 
 
 def srgb_to_lin(x):
@@ -59,6 +60,12 @@ def downsample_color(rgba):
     return (np.clip(out, 0, 1) * 255.0 + 0.5).astype(np.uint8)
 
 
+def downsample_linear(a):
+    """Plain box filter for non-colour data (normal maps, roughness)."""
+    p = _gather4(a.astype(np.float32))
+    return np.clip((p[0] + p[1] + p[2] + p[3]) * 0.25 + 0.5, 0, 255).astype(np.uint8)
+
+
 def downsample_gray(a):
     p = _gather4(a.astype(np.float32))
     return ((p[0] + p[1] + p[2] + p[3]) * 0.25 + 0.5).astype(np.uint8)
@@ -81,7 +88,12 @@ def bleed_colors(rgba):
 def mip_chain(rgba, kind="color", max_levels=16):
     levels = [rgba]
     while max(levels[-1].shape[0], levels[-1].shape[1]) > 1 and len(levels) < max_levels:
-        levels.append(downsample_gray(levels[-1]) if kind == "gray" else downsample_color(levels[-1]))
+        if kind == "gray":
+            levels.append(downsample_gray(levels[-1]))
+        elif kind == "linear":
+            levels.append(downsample_linear(levels[-1]))
+        else:
+            levels.append(downsample_color(levels[-1]))
     return levels
 
 
@@ -95,7 +107,7 @@ def write_gtex(path, fmt, w, h, layers, mip_layers, mip_bytes_fn):
                 f.write(mip_bytes_fn(mip_layers[m][l]))
 
 
-def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium", astc=True, rgba_dir=True, srgb=True):
+def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium", astc=True, rgba_dir=True, srgb=True, block=6):
     """layers_rgba: list of HxWx4 uint8 arrays (same size). Writes the ASTC and raw RGBA variants."""
     h, w = layers_rgba[0].shape[:2]
     chains = [mip_chain(l, kind) for l in layers_rgba]
@@ -105,7 +117,8 @@ def save_texture(out_astc, out_rgba, layers_rgba, kind="color", quality="medium"
     if rgba_dir:
         write_gtex(out_rgba, FMT_RGBA8_SRGB if srgb else FMT_RGBA8_UNORM, w, h, L, mips, lambda a: np.ascontiguousarray(a).tobytes())
     if astc:
-        write_gtex(out_astc, FMT_ASTC6, w, h, L, mips, lambda a: astc_compress(a, quality))
+        fmt = (FMT_ASTC6 if srgb else FMT_ASTC6_UNORM) if block == 6 else FMT_ASTC8
+        write_gtex(out_astc, fmt, w, h, L, mips, lambda a: astc_compress(a, quality, srgb, block))
     return nmips
 
 

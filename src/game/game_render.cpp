@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "game.h"
+#include "timeofday.h"
 
 namespace gtabr {
 
@@ -70,7 +71,8 @@ int Game::dirIndex(float objYaw, int n) const {
   return ((idx % n) + n) % n;
 }
 
-void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary) {
+void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary,
+                     float emissive) {
   if (!d || !d->valid || alpha < 0.01f) return;
   gfx::SpriteInst s{};
   s.pos[0] = pos.x; s.pos[1] = pos.y; s.pos[2] = pos.z;
@@ -79,6 +81,7 @@ void Game::addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, boo
   s.uv[0] = mirror ? d->u1 : d->u0; s.uv[1] = d->v0; s.uv[2] = mirror ? d->u0 : d->u1; s.uv[3] = d->v1;
   uint32_t a = (uint32_t)clamp(alpha * 255.0f, 0.0f, 255.0f);
   s.tint = (rgb & 0x00FFFFFFu) | (a << 24);
+  s.extra = emissive;
   int key = d->tex.id + (secondary ? 100000 : 0);
   (silhouette ? silBuckets_ : spriteBuckets_)[key].push_back(s);
 }
@@ -125,32 +128,93 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   g.camUp = {cam_.up().x, cam_.up().y, cam_.up().z, 0};
   g.camFwd = {cam_.forward().x, cam_.forward().y, cam_.forward().z, 0};
 
-  // sun + shadow matrix (orthographic, texel snapped, centred on the focus)
-  Vec3 L = sunDir_.normalized();
-  const float R = 62.0f;
-  Vec3 focus = cam_.focus();
-  Vec3 lightRight = Vec3{0, 1, 0}.cross(L).normalized();   // direction vectors of the light's view plane
-  Vec3 lightUp = L.cross(lightRight).normalized();
-  float texel = 2.0f * R / 2048.0f;
-  float a = focus.dot(lightRight), b = focus.dot(lightUp);
-  Vec3 snapped = focus + lightRight * (std::floor(a / texel) * texel - a) + lightUp * (std::floor(b / texel) * texel - b);
-  Mat4 lview = Mat4::lookAt(snapped + L * 150.0f, snapped, {0, 1, 0});
-  Mat4 lproj = Mat4::ortho(-R, R, -R, R, 20.0f, 320.0f);
-  g.lightViewProj = lproj * lview;
+  // ---- time of day
+  day_ = computeDayLighting(timeOfDay_, cloudCover_);
+  applyWeatherToLighting(day_);
+  sunDir_ = day_.sunDir;
+  const QualityPreset& qp = preset();
   float ind = indoorBlend_;
-  g.sunDir = {L.x, L.y, L.z, (settings_.shadows && settings_.quality != 1) ? 0.92f : 0.0f};
-  g.sunColor = {3.05f, 2.55f, 1.95f, 0};
-  g.ambSky = {0.46f, 0.58f, 0.82f, 0};
-  g.ambGround = {0.27f, 0.25f, 0.23f, 0};
-  g.fog = {0.70f, 0.80f, 0.92f, lerp(0.0042f, 0.0f, ind)};
-  g.params = {0.60f, 1.35f / 2048.0f, 0.0f, ind};
-  fd.drawShadows = (settings_.shadows && settings_.quality != 1) && ind < 0.5f;
-  fd.vignette = 0.30f;
-  fd.grade = 1.0f;
+
+  // ---- cascaded sun shadows: a tight cascade around the focus, a wide one pushed ahead of the camera.
+  // Both are orthographic and texel snapped so they do not shimmer while moving.
+  Vec3 L = sunDir_.normalized();
+  Vec3 lightRight = Vec3{0, 1, 0}.cross(L).normalized();
+  Vec3 lightUp = L.cross(lightRight).normalized();
+  Vec3 focus = cam_.focus();
+  Vec3 fwdFlat = Vec3{cam_.forward().x, 0, cam_.forward().z};
+  if (fwdFlat.lengthSq() < 1e-4f) fwdFlat = Vec3{std::sin(cam_.yaw()), 0, -std::cos(cam_.yaw())};
+  fwdFlat = fwdFlat.normalized();
+  const float smSize = (float)qp.shadowMapSize;
+  auto cascadeMatrix = [&](Vec3 centre, float R) {
+    float texel = 2.0f * R / smSize;
+    float a = centre.dot(lightRight), b = centre.dot(lightUp);
+    Vec3 snapped = centre + lightRight * (std::floor(a / texel) * texel - a) + lightUp * (std::floor(b / texel) * texel - b);
+    Mat4 lview = Mat4::lookAt(snapped + L * 150.0f, snapped, {0, 1, 0});
+    Mat4 lproj = Mat4::ortho(-R, R, -R, R, 20.0f, 320.0f);
+    return lproj * lview;
+  };
+  const float r0 = lerp(26.0f, 16.0f, cam_.blend());
+  const float r1 = 72.0f;
+  g.lightViewProj[0] = cascadeMatrix(focus + fwdFlat * (r0 * 0.25f), r0);
+  g.lightViewProj[1] = cascadeMatrix(focus + fwdFlat * (r1 * 0.55f), r1);
+  shadowFocus_ = focus + fwdFlat * (r1 * 0.55f);
+  shadowRadius_ = r1;
+
+  const bool shadowsOn = settings_.shadows && qp.shadowCascades > 0;
+  g.sunDir = {L.x, L.y, L.z, shadowsOn ? day_.shadowStrength * (1.0f - ind) : 0.0f};
+  g.sunColor = {day_.sunColor.x, day_.sunColor.y, day_.sunColor.z, day_.sunDisk};
+  g.ambSky = {day_.ambSky.x, day_.ambSky.y, day_.ambSky.z, 0};
+  g.ambGround = {day_.ambGround.x, day_.ambGround.y, day_.ambGround.z, 0};
+  g.fog = {day_.fog.x, day_.fog.y, day_.fog.z, lerp(day_.fogDensity, 0.0f, ind) * lerp(1.0f, 0.2f, cam_.isoAmount())};
+  g.params = {day_.exposure, 1.25f / smSize, day_.night, ind};
+  g.sky0 = {day_.zenith.x, day_.zenith.y, day_.zenith.z, day_.cloudCover};
+  g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};
+  g.cascade = {0.0f, (float)std::max(1, qp.shadowCascades), 0.045f, wetness_};
+  g.lightInfo = {0, 0, 0, 0};
+  {
+    const ProbeGrid& pg = world_.probes;
+    bool on = probeTex_.valid() && pg.valid();
+    g.probeRect = on ? Vec4{pg.x0 - pg.cell * 0.5f, pg.z0 - pg.cell * 0.5f, 1.0f / (pg.w * pg.cell), 1.0f / (pg.h * pg.cell)} : Vec4{0, 0, 1, 1};
+    g.probeInfo = {on ? 1.0f : 0.0f, pg.groundY, pg.upperY, 0.0f};
+  }
+  fd.drawShadows = shadowsOn && ind < 0.5f && day_.shadowStrength > 0.01f;
+  fd.shadowCascades = std::max(1, qp.shadowCascades);
+  fd.vignette = 0.26f;
   fd.fade = fadeAlpha_;
   fd.blur = blur_;
   fd.dim = blur_ * 0.5f;
-  (void)aspect;
+  // indoors: neutral lamp exposure
+  fd.exposure = lerp(day_.exposure, 1.05f, ind) * settings_.brightness;
+  fd.bloom = (qp.bloom && settings_.bloom) ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
+  fd.bloomThreshold = lerp(1.1f, 0.55f, day_.night);
+  fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
+  fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};
+  fd.worldMaterial = worldMaterial_;
+  // SSAO + volumetric light shafts (need the scene depth; both skipped on the low presets)
+  fd.nearZ = cam_.nearZ(); fd.farZ = cam_.farZ();
+  fd.tanHalfY = std::tan(cam_.fov() * 0.5f);
+  fd.tanHalfX = fd.tanHalfY * aspect;
+  fd.aoStrength = qp.ao * (1.0f - 0.5f * ind);
+  fd.aoRadius = 0.9f;
+  fd.wetness = (settings_.reflections && qp.ao > 0.0f) ? wetness_ * (1.0f - ind) : 0.0f;
+  {
+    Vec3 U{0, 1, 0};
+    fd.upView = {U.dot(cam_.right()), -U.dot(cam_.up()), U.dot(cam_.forward())};
+  }
+  {
+    // the sun on screen: project a far point along the sun direction
+    Vec3 sp = cam_.eye() + L * 2000.0f;
+    const Mat4& vp = cam_.viewProj();
+    float cx = vp.at(0, 0) * sp.x + vp.at(0, 1) * sp.y + vp.at(0, 2) * sp.z + vp.at(0, 3);
+    float cy = vp.at(1, 0) * sp.x + vp.at(1, 1) * sp.y + vp.at(1, 2) * sp.z + vp.at(1, 3);
+    float cw = vp.at(3, 0) * sp.x + vp.at(3, 1) * sp.y + vp.at(3, 2) * sp.z + vp.at(3, 3);
+    float front = cw > 0.01f ? 1.0f : 0.0f;
+    fd.sunUV = cw > 0.01f ? Vec2{cx / cw * 0.5f + 0.5f, cy / cw * 0.5f + 0.5f} : Vec2{0.5f, -2.0f};
+    float up = clamp(L.y * 3.0f, 0.0f, 1.0f);                    // sun above the horizon
+    float clear = (1.0f - day_.cloudCover * 0.8f) * (1.0f - clamp(rain_ * 1.5f, 0.0f, 1.0f));
+    fd.shaftIntensity = qp.shafts * 0.55f * front * up * clear * (1.0f - day_.night) * (1.0f - ind);
+    fd.shaftColor = day_.sunColor * 0.16f;
+  }
 }
 
 void Game::emitWorld(gfx::FrameData& fd) {
@@ -159,17 +223,21 @@ void Game::emitWorld(gfx::FrameData& fd) {
   Vec3 focus = cam_.focus();
   stats_.drawnChunks = 0;
   for (const World::Chunk& c : world_.chunks) {
-    if (!c.handle.valid()) continue;
-    bool interior = c.cx * World::kChunk > 250.0f;
-    if (interior != indoors) continue;
-    if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(c.handle.id); stats_.drawnChunks++; }
+    if (c.interior != indoors) continue;
+    const bool full = c.handle.valid();
+    if (!full && !c.lodHandle.valid()) continue;
     Vec3 ctr = c.bounds.center();
-    float dx = ctr.x - focus.x, dz = ctr.z - focus.z;
+    // HLOD: far (or not yet resident) chunks draw their merged low-detail mesh (one box per building, flat ground, tree silhouettes)
+    float camD = std::sqrt((ctr.x - focus.x) * (ctr.x - focus.x) + (ctr.z - focus.z) * (ctr.z - focus.z));
+    bool useLod = !full || (c.lodHandle.valid() && camD > lodDistance_);
+    if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(useLod ? c.lodHandle.id : c.handle.id); stats_.drawnChunks++; }
+    if (!full) continue;
+    float dx = ctr.x - shadowFocus_.x, dz = ctr.z - shadowFocus_.z;
     float ext = (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
-    if (std::sqrt(dx * dx + dz * dz) < 62.0f + ext + 6.0f) fd.shadowMeshes.push_back(c.handle.id);
+    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(c.handle.id);
   }
-  if (indoors && world_.marketCeilingHandle.valid() && cam_.blend() > 0.45f && cam_.eye().y < world_.market.height - 0.1f)
-    fd.worldMeshes.push_back(world_.marketCeilingHandle.id);
+  if (indoors && world_.interiorCeilingHandle.valid() && cam_.blend() > 0.45f && cam_.eye().y < 3.1f)
+    fd.worldMeshes.push_back(world_.interiorCeilingHandle.id);
 }
 
 void Game::projectToScreen(const Vec3& p, Vec2& out, bool& visible) const {
@@ -217,16 +285,21 @@ void Game::emitSprites(gfx::FrameData& fd) {
     if (player_.entering) alpha = 1.0f - smoothstep(player_.transition * 1.4f);
     if (player_.exiting) alpha = smoothstep(player_.transition * 3.0f);
     Vec3 pos{player_.pos.x, player_.y, player_.pos.y};
-    emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, false);
-    emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, true);
-    addDecalEllipse({pos.x + shadowDir.x * 0.5f, pos.y, pos.z + shadowDir.y * 0.5f}, 0.5f, 0.38f, 0.5f * alpha, std::atan2(shadowDir.x, -shadowDir.y) , 0);
+    if (!modelsReady_) {
+      emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, false);
+      addDecalEllipse({pos.x + shadowDir.x * 0.5f, pos.y, pos.z + shadowDir.y * 0.5f}, 0.5f, 0.38f, 0.5f * alpha, std::atan2(shadowDir.x, -shadowDir.y) , 0);
+    } else {
+      addDecalEllipse(pos, 0.32f, 0.32f, 0.35f, 0, 0);   // contact occlusion under the real shadow
+    }
+    if (!modelsReady_) emit(cs.s[0][an][frame][d], cs.s[1][an][frame][d], pos, 1.0f, alpha, false, 0xFFFFFFFFu, true);
   }
 
   // ---- NPCs
   for (const Npc& n : npcs_) {
-    if (n.interior != indoors) continue;
+    if (n.interior != indoors || n.despawn) continue;
     Vec3 pos{n.pos.x, n.y, n.pos.y};
     if (!visible(pos, 1.6f)) continue;
+    if (modelsReady_) { addDecalEllipse(pos, 0.3f, 0.3f, 0.3f, 0, 0); continue; }
     int a = archIndex(n.archetype);
     const CharSprites& cs = charSpr_[a];
     int an = n.speed < 0.25f ? 0 : 1;
@@ -238,7 +311,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
 
   // ---- vehicles (drivable + parked scenery)
   auto vehicleSprite = [&](int model, int color, float yaw, Vec3 pos, float alpha, bool sil) {
-    const VehSprites& vs = vehSpr_[model][color];
+    const VehSprites& vs = vehSpr_[std::min(model, 2)][color];
     int dl = dirIndex(yaw, 16), dh = dirIndex(yaw, 32);
     emit(vs.s[0][dl], vs.s[1][dh], pos, 1.0f, alpha, false, 0xFFFFFFFFu, sil);
   };
@@ -250,17 +323,18 @@ void Game::emitSprites(gfx::FrameData& fd) {
   };
   if (!indoors) {
     for (const Vehicle& v : vehicles_) {
+      if (v.despawn) continue;
       Vec3 pos{v.pos.x, world_.heightAt(v.pos.x, v.pos.y), v.pos.y};
       if (!visible(pos, 4.0f)) continue;
-      vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, false);
-      vehicleShadow(v.model, pos, v.yaw);
+      if (!carsReady_) { vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, false); vehicleShadow(v.model, pos, v.yaw); }
+      else addDecalEllipse(pos, vehicleDef(v.model).width * 0.5f, vehicleDef(v.model).length * 0.5f, 0.35f, v.yaw, 1);
       if (player_.vehicle == v.id) vehicleSprite(v.model, v.color, v.yaw, pos, 1.0f, true);
     }
     for (const ParkedCarDef& p : world_.parked) {
       Vec3 pos{p.pos.x, world_.heightAt(p.pos.x, p.pos.z), p.pos.z};
       if (!visible(pos, 4.0f)) continue;
-      vehicleSprite(p.model, p.color, p.yaw, pos, 1.0f, false);
-      vehicleShadow(p.model, pos, p.yaw);
+      if (!carsReady_) { vehicleSprite(p.model, p.color, p.yaw, pos, 1.0f, false); vehicleShadow(p.model, pos, p.yaw); }
+      else addDecalEllipse(pos, vehicleDef(p.model).width * 0.5f, vehicleDef(p.model).length * 0.5f, 0.35f, p.yaw, 1);
     }
     // ---- trees and props
     for (size_t i = 0; i < world_.decor.size(); ++i) {
@@ -280,6 +354,27 @@ void Game::emitSprites(gfx::FrameData& fd) {
       }
     }
   }
+  // surface decals of the city (cracks, oil, manholes, drains, tyre marks, graffiti, grime, posters), faded with distance
+  {
+    Vec3 fc = cam_.focus();
+    const float far2 = 62.0f * 62.0f;
+    int cap = 260;
+    for (const SurfaceDecal& sd : world_.decals) {
+      float dx = sd.pos.x - fc.x, dz = sd.pos.z - fc.z;
+      float d2 = dx * dx + dz * dz;
+      if (d2 > far2) continue;
+      if (indoors) break;
+      float fade = 1.0f - smoothstep((std::sqrt(d2) - 40.0f) / 22.0f);
+      if (!visible(sd.pos, std::max(sd.hx, sd.hz))) continue;
+      gfx::DecalInst d{};
+      d.pos[0] = sd.pos.x; d.pos[1] = sd.pos.y + (sd.vertical ? 0.0f : 0.012f); d.pos[2] = sd.pos.z;
+      d.yaw = sd.yaw; d.half[0] = sd.hx; d.half[1] = sd.hz; d.alpha = sd.alpha * fade;
+      d.kind = (float)(sd.kind + (sd.vertical ? 20 : 0));
+      decals_.push_back(d);
+      if (--cap <= 0) break;
+    }
+  }
+  emitRain();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");
   if (dot.valid) {
@@ -320,6 +415,8 @@ void Game::flushSprites(gfx::FrameData& fd) {
 void Game::buildScene(gfx::FrameData& fd) {
   emitWorld(fd);
   emitSprites(fd);
+  emitModels(fd, lastDt_);
+  emitCombatVisuals(fd);
   flushSprites(fd);
 }
 

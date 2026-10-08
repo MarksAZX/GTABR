@@ -97,6 +97,7 @@ void Game::startFueling(int vi, int pumpId, int amountCents) {
   if (liters < 0.05f || cost <= 0) { toast("Saldo insuficiente", "coin", rgba(1.0f, 0.5f, 0.45f)); return; }
   moneyCents_ -= cost;
   moneyShow_ = 4.0f;
+  markProgress(kPgFueled);
   fueling_.active = true;
   fueling_.vehicle = vi;
   fueling_.litersLeft = liters;
@@ -123,40 +124,89 @@ void Game::applyItemEffects(const ItemDef& d) {
   toast(msg, d.icon);
 }
 
-void Game::buyItem(int item, bool fromShelf) {
-  const ItemDef& d = itemDef(item);
-  if (moneyCents_ < d.priceCents) { toast("Dinheiro insuficiente para " + std::string(d.name), "coin", rgba(1.0f, 0.5f, 0.45f)); return; }
-  moneyCents_ -= d.priceCents;
-  inventory_[item]++;
-  moneyShow_ = 4.0f;
-  toast(std::string("Comprou: ") + d.name + " • -" + fmtMoney(d.priceCents) + (fromShelf ? "" : ""), "bag");
+int Game::shopPriceCents(int shopId, int item) const {
+  if (shopId >= 0 && shopId < (int)world_.shops.size())
+    for (const ShopStock& st : world_.shops[shopId].stock)
+      if (st.kind == 0 && st.id == item) return st.priceCents;
+  return itemDef(item).priceCents;
 }
 
-void Game::openShopPanel(const char* portrait) {
+void Game::buyItem(int item, bool fromShelf, int priceCents) {
+  const ItemDef& d = itemDef(item);
+  int price = priceCents >= 0 ? priceCents : d.priceCents;
+  if (moneyCents_ < price) { toast("Dinheiro insuficiente para " + std::string(d.name), "coin", rgba(1.0f, 0.5f, 0.45f)); return; }
+  moneyCents_ -= price;
+  inventory_[item]++;
+  moneyShow_ = 4.0f;
+  markProgress(kPgBought);
+  toast(std::string("Comprou: ") + d.name + " • -" + fmtMoney(price) + (fromShelf ? "" : ""), "bag");
+}
+
+bool Game::buyWeapon(int weapon, int priceCents) {
+  const WeaponDef& w = weaponDef(weapon);
+  if (player_.owned[weapon]) { toast(std::string("Você já tem: ") + w.name, "bag", rgba(1.0f, 0.75f, 0.5f)); return false; }
+  if (moneyCents_ < priceCents) { toast("Dinheiro insuficiente para " + std::string(w.name), "coin", rgba(1.0f, 0.5f, 0.45f)); return false; }
+  moneyCents_ -= priceCents;
+  giveWeapon(weapon, 0);
+  moneyShow_ = 4.0f;
+  markProgress(kPgBought);
+  toast(std::string("Comprou: ") + w.name + " • -" + fmtMoney(priceCents), w.icon);
+  return true;
+}
+
+void Game::buyStock(int shopId, int idx) {
+  if (shopId < 0 || shopId >= (int)world_.shops.size()) return;
+  const ShopDef& sh = world_.shops[shopId];
+  if (idx < 0 || idx >= (int)sh.stock.size()) return;
+  const ShopStock& st = sh.stock[idx];
+  if (st.kind == 1) buyWeapon(st.id, st.priceCents);
+  else buyItem(st.id, false, st.priceCents);
+}
+
+static const char* portraitFor(ShopKind k) {
+  switch (k) {
+    case ShopKind::Ferragens: return "mecanico";
+    case ShopKind::Padaria: return "atendente";
+    default: return "atendente";
+  }
+}
+
+// The shop window: this shop's own stock and prices. Buying deducts the money and puts the item in the inventory (weapons are
+// handed over directly); the list refreshes in place so the player can keep shopping.
+void Game::openShopPanel(int shopId) {
+  if (shopId < 0 || shopId >= (int)world_.shops.size()) return;
+  const ShopDef& sh = world_.shops[shopId];
   Panel p;
-  p.title = "Mercado do Zé";
-  p.portrait = portrait;
-  p.text = "O que vai levar hoje?";
-  for (int i = 1; i < kItemCount; ++i) {
-    const ItemDef& d = itemDef(i);
-    if (!d.sold) continue;
+  p.title = sh.name;
+  p.portrait = portraitFor(sh.kind);
+  p.text = sh.kind == ShopKind::Ferragens ? "Ferramenta boa dura a vida toda. O que vai levar?" : "O que vai levar hoje?";
+  p.footer = "Saldo " + fmtMoney(moneyCents_);
+  for (size_t i = 0; i < sh.stock.size(); ++i) {
+    const ShopStock& st = sh.stock[i];
     PanelOption o;
-    o.label = d.name;
-    o.sub = fmtMoney(d.priceCents) + (inventory_[i] > 0 ? "  •  você tem " + std::to_string(inventory_[i]) : "");
-    o.art = d.art ? d.art : "";
-    o.enabled = moneyCents_ >= d.priceCents;
+    if (st.kind == 1) {
+      const WeaponDef& w = weaponDef(st.id);
+      o.label = w.name;
+      o.icon = w.icon;
+      bool owned = player_.owned[st.id];
+      o.sub = owned ? "Você já tem" : fmtMoney(st.priceCents);
+      o.enabled = !owned && moneyCents_ >= st.priceCents;
+    } else {
+      const ItemDef& d = itemDef(st.id);
+      o.label = d.name;
+      o.art = d.art ? d.art : "";
+      o.icon = d.icon;
+      o.sub = fmtMoney(st.priceCents) + (inventory_[st.id] > 0 ? "  •  você tem " + std::to_string(inventory_[st.id]) : "");
+      o.enabled = moneyCents_ >= st.priceCents;
+    }
     o.closes = false;
-    int item = i;
-    o.action = [this, item]() {
-      buyItem(item, false);
-      // refresh the sub-labels/enabled flags in place
-      for (size_t k = 0; k < panel_.options.size(); ++k) {
-        int id = (int)k + 1;
-        if (id >= kItemCount || panel_.options[k].label == "Fechar") continue;
-        const ItemDef& dd = itemDef(id);
-        panel_.options[k].enabled = moneyCents_ >= dd.priceCents;
-        panel_.options[k].sub = fmtMoney(dd.priceCents) + (inventory_[id] > 0 ? "  •  você tem " + std::to_string(inventory_[id]) : "");
-      }
+    int sid = shopId, idx = (int)i;
+    o.action = [this, sid, idx]() {
+      int sc = panel_.scroll;
+      buyStock(sid, idx);
+      openShopPanel(sid);
+      panel_.scroll = sc;
+      panel_.anim = 1.0f;
     };
     p.options.push_back(o);
   }
@@ -164,18 +214,29 @@ void Game::openShopPanel(const char* portrait) {
   openPanel(p);
 }
 
-void Game::openAttendantPanel() {
+void Game::openAttendantPanel(int shopId) {
+  if (shopId < 0 || shopId >= (int)world_.shops.size()) return;
+  const ShopDef& sh = world_.shops[shopId];
   Panel p;
-  p.title = "Atendente";
-  p.portrait = "atendente";
-  p.text = "Olá! Bem-vindo ao Mercado do Zé. Posso ajudar?";
-  p.options.push_back({"Ver produtos", "Água, lanches, kit de primeiros socorros...", "cart", "", true, false, [this]() { openShopPanel("atendente"); }});
+  p.title = sh.kind == ShopKind::Ferragens ? "Seu Joaquim" : (sh.kind == ShopKind::Padaria ? "Padeira" : "Atendente");
+  p.portrait = portraitFor(sh.kind);
+  p.text = "Olá! Bem-vindo à " + sh.name + ". Posso ajudar?";
+  const char* what = sh.kind == ShopKind::Ferragens ? "Facas, bastões, pé de cabra, taco e kit de primeiros socorros"
+                     : (sh.kind == ShopKind::Padaria ? "Pão quentinho, café e lanches" : "Água, lanches, café e kit de primeiros socorros");
+  int sid = shopId;
+  p.options.push_back({"Ver produtos", what, "cart", "", true, false, [this, sid]() { openShopPanel(sid); }});
   p.options.back().closes = false;
-  p.options.push_back({"Conversar", "", "chat", "", true, false, [this]() {
+  p.options.push_back({"Conversar", "", "chat", "", true, false, [this, sid]() {
     Panel q;
-    q.title = "Atendente";
-    q.portrait = "atendente";
-    q.text = "O pão sai quentinho às cinco da tarde. E se precisar de mecânico, a Oficina Silva fica no quarteirão da praça.";
+    const ShopDef& s2 = world_.shops[sid];
+    q.title = s2.kind == ShopKind::Ferragens ? "Seu Joaquim" : (s2.kind == ShopKind::Padaria ? "Padeira" : "Atendente");
+    q.portrait = portraitFor(s2.kind);
+    switch (s2.kind) {
+      case ShopKind::Ferragens: q.text = "Aqui o freguês leva o que precisa e volta sempre. Se for pra se defender, leva o bastão. Mas pensa duas vezes."; break;
+      case ShopKind::Padaria: q.text = "O pão sai quentinho às cinco da tarde. Fica por perto que já já sai uma fornada!"; break;
+      case ShopKind::Conveniencia: q.text = "A gente fica aberto a noite toda. Se precisar de combustível, a bomba é logo ali fora."; break;
+      default: q.text = "O pão sai quentinho às cinco da tarde. E se precisar de mecânico, a Oficina Silva fica no quarteirão."; break;
+    }
     q.options.push_back({"Valeu!", "", nullptr, "", true, true, nullptr});
     openPanel(q);
   }});
@@ -193,6 +254,7 @@ void Game::repairVehicle(int vi) {
   moneyCents_ -= cost;
   moneyShow_ = 4.0f;
   v.health = 100.0f;
+  markProgress(kPgRepaired);
   toast("Reparo concluído • -" + fmtMoney(cost), "wrench");
 }
 
@@ -268,7 +330,7 @@ void Game::openNpcPanel(int idx) {
     }
   };
   switch (n.role) {
-    case 4: closePanel(); openAttendantPanel(); return;
+    case 4: closePanel(); openAttendantPanel(n.shop); return;
     case 1: {
       p.title = "Frentista";
       p.portrait = "frentista";
@@ -301,9 +363,41 @@ void Game::openNpcPanel(int idx) {
     }
     default: {
       p.title = "Morador";
-      p.text = chatLine(n);
+      // contextual dialogue: armed / wanted player, mood of the person, otherwise small talk with variety
+      if (player_.weapon != kWpnFists) {
+        p.text = npcLine(n, 4);
+        n.fear = std::min(1.0f, n.fear + 0.3f);
+      } else if (wanted_ > 0) p.text = npcLine(n, 11);
+      else if (n.mood == Mood::Angry) p.text = npcLine(n, 10);
+      else p.text = npcLine(n, rng_.chance(0.4f) ? 0 : 1);
       n.bubble = "";
-      whereOptions(p);
+      if (player_.weapon == kWpnFists && wanted_ == 0) {
+        PanelOption more;
+        more.label = "Puxar mais papo";
+        more.icon = "chat";
+        more.closes = false;
+        more.action = [this, idx]() { panel_.text = npcLine(npcs_[idx], rng_.chance(0.5f) ? 1 : 9); };
+        p.options.push_back(more);
+        whereOptions(p);
+      }
+      {
+        PanelOption push;
+        push.label = "Empurrar";
+        push.icon = "fist";
+        push.action = [this, idx]() {
+          Npc& m = npcs_[idx];
+          m.knockVel += (m.pos - player_.pos).normalized() * 2.5f;
+          emitEvent(EventKind::Assault, m.pos, 8.0f, {ActorKind::Player, 0}, {ActorKind::Npc, idx}, 0.2f);
+          if (m.temper > 0.45f || m.bravery > 0.7f) {
+            m.state = NpcState::Fight; m.target = {ActorKind::Player, 0}; m.stateTimer = 15.0f;
+            npcSay(m, npcLine(m, 10));
+          } else {
+            npcSay(m, npcLine(m, 2));
+            npcStartFlee(m, player_.pos, 6.0f);
+          }
+        };
+        p.options.push_back(push);
+      }
       p.options.push_back({"Tchau", "", nullptr, "", true, true, nullptr});
       break;
     }
