@@ -110,6 +110,7 @@ struct World {
   // chunk meshes (CPU) -> GPU handles are created by the game after generation
   struct Chunk { int cx, cz; MeshData mesh; MeshData lod; gfx::MeshHandle handle, lodHandle; AABB bounds; bool interior = false; };
   std::vector<Chunk> chunks;
+  MeshData oceanBackdrop;gfx::MeshHandle oceanBackdropHandle;
   MeshData interiorCeiling;
   gfx::MeshHandle interiorCeilingHandle;
   std::vector<Vec3> lampLights;    // street lamp heads (night lights)

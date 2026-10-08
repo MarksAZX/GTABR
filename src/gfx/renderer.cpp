@@ -390,6 +390,7 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
     case 9:  // model shadow, skinned
       bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
       A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
+      if (vertexKind == 8) A(1, VK_FORMAT_R8G8B8A8_SNORM, 12);
       if (vertexKind == 9) { A(4, VK_FORMAT_R8G8B8A8_UINT, 28); A(5, VK_FORMAT_R8G8B8A8_UNORM, 32); }
       break;
     default: break;
@@ -462,7 +463,7 @@ bool Renderer::createLayoutsAndPipelines() {
   const VkCompareOp LESS = VK_COMPARE_OP_LESS, LEQ = VK_COMPARE_OP_LESS_OR_EQUAL, GRT = VK_COMPARE_OP_GREATER;
   pipeWorld_ = buildPipeline("world.vert.spv", "world.frag.spv", scenePass_, plWorld_, 1, true, true, LESS, false, VK_CULL_MODE_BACK_BIT);
   pipeShadow_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 5, true, true, LESS, false, VK_CULL_MODE_NONE, true);
-  pipeShadowMesh_ = buildPipeline("shadow.vert.spv", nullptr, shadowPass_, plShadow_, 8, true, true, LESS, false, VK_CULL_MODE_NONE, true);
+  pipeShadowMesh_ = buildPipeline("mesh_shadow.vert.spv", nullptr, shadowPass_, plShadow_, 8, true, true, LESS, false, VK_CULL_MODE_NONE, true);
   pipeShadowSkinned_ = buildPipeline("mesh_shadow_skinned.vert.spv", nullptr, shadowPass_, plShadow_, 9, true, true, LESS, false,
                                      VK_CULL_MODE_NONE, true);
   pipeMesh_ = buildPipeline("mesh.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 6, true, true, LESS, false, VK_CULL_MODE_NONE);

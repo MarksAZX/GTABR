@@ -184,6 +184,12 @@ def material_layers():
         atlas = Image.open(coast_path).convert("RGB")
         for name, col, row in [("water", 0, 0), ("sand", 1, 0), ("foam", 0, 1), ("sand_wet", 1, 1)]:
             layers[name] = to_arr(seamless_blend(cell(atlas, 2, 2, col, row, inset=2)))
+    urban_path = os.path.join(ROOT, "assets/source/gpt_image/urban_atlas.png")
+    if os.path.exists(urban_path):
+        atlas = Image.open(urban_path).convert("RGB")
+        for name,col,row in [("asphalt",0,0),("asphalt_cracked",0,0),("sidewalk",1,0),("concrete",1,0),("grass",0,1),("foliage",1,1)]:
+            layers[name] = to_arr(seamless_blend(cell(atlas,2,2,col,row,inset=2)))
+        layers["asphalt_cracked"][:,:,:3] = (layers["asphalt_cracked"][:,:,:3]*0.88).astype("uint8")
     seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "sand": 8, "water": 9, "foliage": 11}
     arrs = []
     for i, n in enumerate(MATERIALS):

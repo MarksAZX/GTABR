@@ -68,6 +68,7 @@ struct Vehicle {
   float y = 0;
   float wheelSpin = 0;
   // police / AI driving
+  bool ambientTraffic = false;
   bool police = false;
   bool siren = false;
   int driver = -1;          // npc index driving it (police), -1 none
@@ -206,6 +207,7 @@ struct Npc {
   float animReqSpeed = 1;
   bool animReqUpper = false, animReqHold = false;
   // ---- police
+  bool ambientTraffic = false;
   bool police = false;
   int unit = -1;            // police car index (vehicles_) this officer arrived with
   Vec2 lastKnown;           // last known suspect position

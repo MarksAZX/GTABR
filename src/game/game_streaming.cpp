@@ -5,6 +5,7 @@ void Game::releaseWorld() {
   if(!worldInstalled_) return;
   for(auto& c:world_.chunks) {r_->destroyMesh(c.handle);r_->destroyMesh(c.lodHandle);}
   r_->destroyMesh(world_.interiorCeilingHandle);
+  r_->destroyMesh(world_.oceanBackdropHandle);
   r_->destroyTexture(mapTex_); mapTex_={};
   worldInstalled_=false;
 }

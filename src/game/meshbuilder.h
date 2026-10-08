@@ -35,6 +35,8 @@ class MeshBuilder {
   void gableRoof(float x0, float z0, float x1, float z1, float y, float rise, bool ridgeAlongX, int layer, float tile, float overhang);
   void ceiling(float x0, float z0, float x1, float z1, float y, int layer, float tile);  // downward facing
 
+  void tube(Vec3 a,Vec3 b,float radius,int sides,int layer);
+
   MeshData* mesh() { return m_; }
 
  private:

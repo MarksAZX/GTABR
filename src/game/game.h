@@ -22,6 +22,7 @@
 #include "decor_models.h"
 #include "weapons.h"
 #include "timeofday.h"
+#include "weather.h"
 #include "world.h"
 
 namespace gtabr {
@@ -43,6 +44,8 @@ struct Settings {
   int fpsLimit = 30;
   float controlScale = 1.0f, controlOpacity = 0.8f;
   bool fixedJoystick = false, leftHanded = false;
+  int weatherMode=0; // automatic / clear / rain
+  bool ambientOcclusion=true;
   bool subtitles = true, soundCaptions = false, highContrast = false, reducedMotion = false;
   int reflections = 1; // 0 off, 1 analytic sky, 2 coastal screen-space reflections
   Vec2 controlPos[9] = {{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1}};
@@ -73,6 +76,7 @@ inline const QualityPreset& qualityPreset(int q) {
 
 struct Toast { std::string text; float t = 0; float dur = 2.6f; uint32_t color = 0xFFFFFFFFu; const char* icon = nullptr; };
 
+struct WaterRing {Vec3 pos;float age=0,life=1.8f,strength=0.4f;};
 struct Particle { Vec3 pos, vel; float life = 0, maxLife = 1, size = 1; uint32_t color = 0xFFFFFFFFu; float gravity = 0; };
 
 enum class IKind { Npc, Vehicle, Door, Product, FuelPump, Workshop };
@@ -194,6 +198,7 @@ class Game {
   int pumpNearVehicle(const Vehicle& v) const;
   Settings& settings() { return settings_; }
   float elapsed() const { return time_; }
+  const WeatherState& weather() const {return weather_;}
   void setDebugOverlay(bool b) { settings_.showFps = b; }
 
  private:
@@ -208,6 +213,10 @@ class Game {
   void updateVehicles(float dt, const InputFrame& in);
   void updateInteractions(const InputFrame& in);
   void updateParticles(float dt);
+  void spawnTraffic();
+  void updateTraffic(float dt);
+  void updateWeather(float dt);
+  void emitWeather();
   void updateAdaptiveQuality(float dt);
   void applySettings();
   void collectInteractables();
@@ -398,6 +407,10 @@ class Game {
   float dayRate_ = 1.0f / 60.0f; // game hours per real second (a full day in 24 minutes)
   float cloudCover_ = 0.42f;
   float wetness_ = 0.0f;
+  WeatherState weather_;
+  Pool<WaterRing> waterRings_{48};
+  bool waterContact_=false;
+  float waterStep_=0;
   DayLighting day_;
   Vec3 shadowFocus_;
   float shadowRadius_ = 70.0f;

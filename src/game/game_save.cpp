@@ -25,6 +25,7 @@ bool Game::saveGame() {
   o << "wanted=" << wanted_ << "\nheat=" << wantedHeat_ << "\npurchases=" << purchases_ << "\ntutorial=" << tutorialStep_ << "\n";
   o << "seen=" << sinceSeen_ << "\nlastKnownX=" << wantedLastKnown_.x << "\nlastKnownZ=" << wantedLastKnown_.y << "\n";
 
+  o << "weather_clock="<<weather_.clock<<"\nweather_rain="<<weather_.rain<<"\nweather_wet="<<weather_.wet<<"\n";
   o << "money=" << moneyCents_ << "\n";
   o << "playerX=" << player_.pos.x << "\nplayerZ=" << player_.pos.y << "\nplayerYaw=" << player_.yaw << "\n";
   o << "indoors=" << (player_.indoors ? 1 : 0) << "\n";
@@ -32,7 +33,7 @@ bool Game::saveGame() {
   // only the persistent cars (police units are temporary and respawn with the wanted level)
   o << "currentVehicle=" << (player_.vehicle >= 0 && player_.vehicle < (int)vehicles_.size() && !vehicles_[player_.vehicle].police ? player_.vehicle : -1) << "\n";
   for (const Vehicle& v : vehicles_) {
-    if (v.police || v.despawn) continue;
+    if (v.police || v.despawn || v.ambientTraffic) continue;
     o << "veh" << v.id << "=" << v.pos.x << "," << v.pos.y << "," << v.yaw << "," << v.fuel << "," << v.health << "\n";
   }
   for (int w = 1; w < kWeaponCount; ++w)
@@ -69,6 +70,8 @@ bool Game::loadGame() {
     char* end = nullptr; float value = std::strtof(it->second.c_str(), &end);
     return end == it->second.c_str() || *end || !std::isfinite(value) ? def : value;
   };
+  weather_.clock=std::max(0.0f,num("weather_clock",0));weather_.rain=clamp(num("weather_rain",0),0.0f,1.0f);weather_.wet=clamp(num("weather_wet",0),0.0f,1.0f);
+  weather_.update(0,worldSeed_,settings_.weatherMode);cloudCover_=weather_.cloud;wetness_=weather_.wet;
   moneyCents_ = (int)clamp(num("money", 40000), 0.0f, 100000000.0f);
   wanted_ = clamp((int)num("wanted", 0), 0, 3); wantedHeat_ = clamp(num("heat", 0), 0.0f, 100.0f);
   sinceSeen_ = num("seen", 100000); wantedLastKnown_ = {num("lastKnownX", 0), num("lastKnownZ", 0)};
@@ -96,7 +99,7 @@ bool Game::loadGame() {
     if (it == kv.end()) continue;
     float x, z, yaw, fuel, hp;
     if (std::sscanf(it->second.c_str(), "%f,%f,%f,%f,%f", &x, &z, &yaw, &fuel, &hp) == 5 && std::isfinite(x) && std::isfinite(z) && std::isfinite(yaw) && std::isfinite(fuel) && std::isfinite(hp) && world_.playArea.contains(x, z)) {
-      v.pos = {x, z}; v.yaw = yaw;
+      v.ambientTraffic=false;v.pos = {x, z}; v.yaw = yaw;
       v.fuel = clamp(fuel, 0.0f, vehicleDef(v.model).fuelCap);
       v.health = clamp(hp, 0.0f, 100.0f);
       v.vel = {}; v.speed = 0;

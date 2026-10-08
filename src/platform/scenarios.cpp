@@ -144,6 +144,26 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if(name=="visual"){
+    b.render=false;g.settings().dynamicRes=false;g.settings().dayCycle=false;g.settings().weatherMode=1;
+    g.setTimeOfDay(16,0);b.idle(60);b.render=true;b.idle(35);b.shot("01_urban_day");if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();b.idle(35);b.shot("02_urban_street");
+    if(g.settings().quality>0){auto reference=fd;std::vector<uint8_t> off,on;uint32_t width=0,height=0;reference.globals.effectsInfo.x=0;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(off,width,height),"AO disabled readback");reference.globals.effectsInfo.x=0.55f;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(on,width,height),"AO enabled readback");int changed=0;for(size_t i=0;i<off.size()&&i<on.size();i+=4)if(std::abs(int(off[i])-int(on[i]))+std::abs(int(off[i+1])-int(on[i+1]))+std::abs(int(off[i+2])-int(on[i+2]))>3)++changed;CHECK(changed>5,"ambient occlusion affects real geometry pixels");LOGI("AO frozen-frame changed pixels: %d",changed);}
+
+    CHECK(g.world().npcs.size()>45,"city has a larger deterministic population");
+    CHECK(g.vehicles().size()>3,"seed creates real ambient vehicles");
+    int moving=0;std::vector<Vec2> positions;for(auto& v:g.vehicles())positions.push_back(v.pos);
+    b.render=false;b.idle(300);for(size_t i=3;i<positions.size();++i)if((g.vehicles()[i].pos-positions[i]).length()>2)++moving;CHECK(moving>0,"ambient vehicles travel using existing physics");
+    g.settings().weatherMode=2;b.idle(1500);CHECK(g.weather().rain>0.9f&&g.weather().wet>0.8f,"rain really wets the ground");
+    b.render=true;b.idle(8);b.shot("03_urban_rain");g.setTimeOfDay(21,0);b.idle(8);b.shot("04_urban_night_rain");
+    float clock=g.weather().clock,wet=g.weather().wet;CHECK(g.saveGame(),"weather session saves");b.render=false;b.idle(180);CHECK(g.loadGame(),"weather session reloads");CHECK(std::fabs(g.weather().clock-clock)<0.01f&&std::fabs(g.weather().wet-wet)<0.001f,"rain timeline and wetness restore exactly");
+    if(g.world().coastSide>=0){const auto& w=g.world();g.settings().weatherMode=1;b.idle(400);g.setTimeOfDay(16,0);g.teleportPlayer({w.poiBeach.x,w.poiBeach.z},w.coastSide*kPi*0.5f);b.idle(45);b.render=true;b.idle(45);b.shot("05_beach");
+      Vec2 water{w.poiBeach.x,w.poiBeach.z};if(w.coastSide==0)water.y=-w.shoreline-3;if(w.coastSide==1)water.x=w.shoreline+3;if(w.coastSide==2)water.y=w.shoreline+3;if(w.coastSide==3)water.x=-w.shoreline-3;
+      g.teleportPlayer(water,w.coastSide*kPi*0.5f);b.idle(12);b.shot("06_shallow_water");bool ring=false;for(auto& d:fd.decals)if(d.kind==2)ring=true;CHECK(ring,"water contact creates real ripple decals");
+      if(w.coastSide==0)water.y-=12;if(w.coastSide==1)water.x+=12;if(w.coastSide==2)water.y+=12;if(w.coastSide==3)water.x-=12;g.teleportPlayer(water,w.coastSide*kPi*0.5f);b.idle(18);b.shot("07_swimming");CHECK(g.player().swimming,"deep water preserves swimming");
+    }
+    if(g.vehicles().size()>3){b.render=false;int id=3;auto& v=g.vehicles()[id];v.vel={};v.speed=0;g.player().vehicle=-1;g.teleportPlayer(v.pos,0);InputFrame enter;enter.enterExitPressed=true;b.step(enter);b.idle(28);CHECK(g.player().vehicle==id&&!g.vehicles()[id].ambientTraffic,"ambient vehicle can be taken over through real interaction");CHECK(g.saveGame(),"taken vehicle saves");g.vehicles()[id].pos={0,0};CHECK(g.loadGame()&&g.player().vehicle==id&&!g.vehicles()[id].ambientTraffic,"taken vehicle restores without AI control");InputFrame leave;leave.enterExitPressed=true;b.step(leave);b.idle(28);}
+    g.player().vehicle=-1;g.teleportPlayer({g.world().spawnPlayer.x,g.world().spawnPlayer.z},0);b.render=false;b.idle(10);CHECK(g.saveGame(),"visual scenario leaves a valid slot");LOGI("VISUAL checks failures: %d",g_failures);return g_failures?1:0;
+  }
   if (name == "resume") {
     std::string text;
     CHECK(save_store::read(fileio::saveDir()+"/slot_"+std::to_string(g.activeSlot())+".sav",text),"fresh process finds persisted slot");

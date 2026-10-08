@@ -48,6 +48,7 @@ void Game::finishLoading() {
     world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
                                                   world_.interiorCeiling.idx.size());
   }
+  if(!world_.oceanBackdrop.empty())world_.oceanBackdropHandle=r_->createMesh(world_.oceanBackdrop.v.data(),world_.oceanBackdrop.v.size(),world_.oceanBackdrop.idx.data(),world_.oceanBackdrop.idx.size());
   materials_ = assets_.materials;
   if (initialLoading_) { finishModels(); buildWeaponMeshes(*r_, weaponMeshes_); buildDecorModels(*r_, decorModels_); }
   // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
@@ -125,6 +126,8 @@ void Game::resetEntities(bool fresh) {
     v.health = health[i];
     vehicles_.push_back(v);
   }
+  spawnTraffic();
+  weather_={};waterRings_.reserve(48);particles_.reserve(particles_.capacity());waterContact_=false;waterStep_=0;
   time_ = 0; autosave_ = 0; timeScale_ = 1;
   wanted_ = 0; wantedHeat_ = 0; sinceSeen_ = 1e9f; evadeT_ = 0; deathT_ = 0;
   policeSpawnT_ = 0; tutorialStep_ = 0; purchases_ = 0;
@@ -305,6 +308,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateWanted(dt);
   updatePolice(dt);
   updateParticles(dt);
+  updateWeather(dt);
 
   // fuelling
   if (fueling_.active) {
@@ -438,6 +442,8 @@ void Game::tryEnterExit() {
   int vi = nearestVehicleTo(player_.pos, 2.4f);
   if (vi < 0) { toast("Nenhum veículo por perto", "car"); return; }
   if (vehicles_[vi].occupant >= 0) return;
+  if(std::fabs(vehicles_[vi].speed)>1.0f){toast("Espere o veículo parar", "car");return;}
+  vehicles_[vi].ambientTraffic=false;vehicles_[vi].vel={};vehicles_[vi].speed=0;vehicles_[vi].engineOn=false;
   player_.entering = true;
   player_.transition = 0;
   player_.transitionVehicle = vi;
@@ -563,12 +569,13 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
 
 // ------------------------------------------------------------------------------------------------ vehicles
 void Game::updateVehicles(float dt, const InputFrame& in) {
+  updateTraffic(dt);
   // sub-step for stability at low frame rates
   int steps = std::max(1, (int)std::ceil(dt / (1.0f / 60.0f)));
   float h = dt / steps;
   for (int s = 0; s < steps; ++s) {
     for (Vehicle& v : vehicles_) {
-      if (v.despawn || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
+      if (v.despawn || v.ambientTraffic || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
       VehicleInput vi;
       bool driven = (player_.vehicle == v.id && !player_.exiting);
       if (driven) {

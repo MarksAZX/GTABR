@@ -116,8 +116,8 @@ const ModelAsset* Game::modelForArchetype(const std::string& a, int id) const {
   else if (a == "frentista") pick = "frentista";
   else if (a == "atendente") pick = "atendente";
   else if (a == "mecanico") pick = "mecanico";
-  else if (a == "mulher_rosa" || a == "mulher_vestido") pick = "pedestre_mulher";
-  else if (a == "vizinho" || a == "homem_polo" || a == "jovem_moletom" || a == "corredor") pick = "pedestre_homem";
+  else if (a == "mulher_rosa" || a == "mulher_vestido") pick = id%3==0?"atendente":"pedestre_mulher";
+  else if (a == "vizinho" || a == "homem_polo" || a == "jovem_moletom" || a == "corredor") { static const char* bodies[]={"pedestre_homem","frentista","mecanico"};pick=bodies[id%3]; }
   const ModelAsset* m = pick ? charModel(pick) : nullptr;
   if (m) return m;
   // fall back to the available bodies (never the protagonist for a pedestrian if anything else exists)
@@ -409,7 +409,8 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       if (n.state != NpcState::Chat && a.action == kActChat) animator_.stop(a);
       a.aimTarget = (n.police && isFirearm(n.weapon) && n.state == NpcState::Fight) ? 1.0f : 0.0f;
       a.crouchTarget = n.state == NpcState::Cower ? 0.9f : 0.0f;
-      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, {0, 0, 0, 0}, ai);
+      static const Vec4 wardrobe[]={{0.23f,0.32f,0.36f,-1},{0.44f,0.28f,0.22f,-1},{0.31f,0.36f,0.24f,-1},{0.39f,0.31f,0.40f,-1},{0.58f,0.52f,0.39f,-1},{0.25f,0.26f,0.28f,-1}};
+      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, n.role==0&&!n.police?wardrobe[n.id%6]:Vec4{0,0,0,0}, ai);
       npcModelDrawn_[n.id] = true;
     }
   }

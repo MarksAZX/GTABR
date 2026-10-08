@@ -115,6 +115,7 @@ void Game::readSettings() {
   settings_.fixedJoystick=number(kv,"fixedJoystick",0)!=0;settings_.leftHanded=number(kv,"leftHanded",0)!=0;
   settings_.subtitles=number(kv,"subtitles",1)!=0;settings_.soundCaptions=number(kv,"soundCaptions",0)!=0;
   settings_.highContrast=number(kv,"highContrast",0)!=0;settings_.reducedMotion=number(kv,"reducedMotion",0)!=0;
+  settings_.weatherMode=clamp((int)number(kv,"weatherMode",0),0,2);settings_.ambientOcclusion=number(kv,"ambientOcclusion",1)>0.5f;
   settings_.reflections=clamp((int)number(kv,"reflections",1),0,2);
   for(int i=0;i<9;++i){std::string x="ctrl"+std::to_string(i)+"X",y="ctrl"+std::to_string(i)+"Y";
     settings_.controlPos[i]={clamp(number(kv,x.c_str(),-1),-1.0f,0.95f),clamp(number(kv,y.c_str(),-1),-1.0f,0.94f)};}
@@ -127,6 +128,7 @@ bool Game::writeSettings() {
     <<"\nfpsLimit="<<settings_.fpsLimit<<"\neffects="<<settings_.effects<<"\ndayCycle="<<settings_.dayCycle<<"\n";
   s<<"controlScale="<<settings_.controlScale<<"\ncontrolOpacity="<<settings_.controlOpacity<<"\nfixedJoystick="<<settings_.fixedJoystick
    <<"\nleftHanded="<<settings_.leftHanded<<"\nsubtitles="<<settings_.subtitles<<"\nsoundCaptions="<<settings_.soundCaptions
+   <<"\nweatherMode="<<settings_.weatherMode<<"\nambientOcclusion="<<settings_.ambientOcclusion
    <<"\nhighContrast="<<settings_.highContrast<<"\nreducedMotion="<<settings_.reducedMotion<<"\nreflections="<<settings_.reflections<<"\n";
   for(int i=0;i<9;++i)s<<"ctrl"<<i<<"X="<<settings_.controlPos[i].x<<"\nctrl"<<i<<"Y="<<settings_.controlPos[i].y<<"\n";
   auto text=s.str();return fileio::writeFileAtomic(fileio::saveDir()+"/settings.txt",text.data(),text.size());

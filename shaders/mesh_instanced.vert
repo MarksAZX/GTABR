@@ -17,6 +17,7 @@ layout(location = 3) out vec2 vUV;
 void main() {
   mat4 model = mat4(iModel0,iModel1,iModel2,iModel3);
   vec4 wp = model * vec4(aPos, 1.0);
+  wp.xyz+=foliageWind(wp.xyz,max(aNormal.w,0.0),aPos.y);
   vWorld = wp.xyz;
   mat3 m = mat3(model);
   vNormal = m * aNormal.xyz;

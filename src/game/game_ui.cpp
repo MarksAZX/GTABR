@@ -652,12 +652,12 @@ void Game::drawMenus(float dt) {
         button(std::string("Sombras: ")+(settings_.shadows?"ativadas":"desativadas"),301);button("Vegetação: "+std::to_string((int)(settings_.vegetation*100))+"%",711);
         button("Distância: "+std::to_string((int)(settings_.renderDistance*100))+"%",712);button(std::string("Efeitos: ")+(settings_.effects?"ativados":"desativados"),713);
         button(std::string("Resolução dinâmica: ")+(settings_.dynamicRes?"ativada":"desativada"),305);button("Limite de FPS: "+std::to_string(settings_.fpsLimit),718);
-        const char* modes[]={"desligados","céu","costa / cena visível"};button(std::string("Reflexos: ")+modes[settings_.reflections],719);
+        const char* modes[]={"desligados","céu","costa / cena visível"};button(std::string("Reflexos: ")+modes[settings_.reflections],719);button(std::string("Oclusão ambiente: ")+(settings_.ambientOcclusion?"ativada":"desativada"),730);
       }else if(settingsTab_==1){button("Volume: "+std::to_string((int)(settings_.volume*100))+"%",714);button(std::string("Legendas de sons: ")+(settings_.soundCaptions?"sim":"não"),724);}
       else if(settingsTab_==2){button("Sensibilidade: "+fmtFloat(settings_.sensitivity,1)+"x",715);button(std::string("Inverter Y: ")+(settings_.invertY?"sim":"não"),300);
         button("Tamanho dos controles: "+std::to_string((int)(settings_.controlScale*100))+"%",720);button("Opacidade: "+std::to_string((int)(settings_.controlOpacity*100))+"%",721);
         button(std::string("Joystick: ")+(settings_.fixedJoystick?"fixo":"flutuante"),726);button(std::string("Layout canhoto: ")+(settings_.leftHanded?"sim":"não"),727);button("POSICIONAR CONTROLES",728);}
-      else if(settingsTab_==3)button(std::string("Ciclo dia / noite: ")+(settings_.dayCycle?"ativo":"congelado"),716);
+      else if(settingsTab_==3){button(std::string("Ciclo dia / noite: ")+(settings_.dayCycle?"ativo":"congelado"),716);const char* weather[]={"automático","limpo","chuva"};button(std::string("Clima: ")+weather[settings_.weatherMode],729);}
       else {button("Escala da interface: "+std::to_string((int)(settings_.hudScale*100))+"%",717);button(std::string("Alto contraste: ")+(settings_.highContrast?"sim":"não"),722);
         button(std::string("Legendas de diálogo: ")+(settings_.subtitles?"sim":"não"),723);button(std::string("Movimento reduzido: ")+(settings_.reducedMotion?"sim":"não"),725);button(std::string("Mostrar FPS: ")+(settings_.showFps?"sim":"não"),302);}
       button("Voltar",304);break;
@@ -736,6 +736,8 @@ void Game::menuAction(int id) {
     if(id==715)settings_.sensitivity=settings_.sensitivity<1.99f?settings_.sensitivity+0.2f:0.4f;
     if(id==716)settings_.dayCycle=!settings_.dayCycle;
     if(id==718)settings_.fpsLimit=settings_.fpsLimit==30?60:30;
+    if(id==729)settings_.weatherMode=(settings_.weatherMode+1)%3;
+    if(id==730)settings_.ambientOcclusion=!settings_.ambientOcclusion;
     if(id==719)settings_.reflections=(settings_.reflections+1)%3;
     if(id==720)settings_.controlScale=settings_.controlScale<1.39f?settings_.controlScale+0.1f:0.7f;
     if(id==721)settings_.controlOpacity=settings_.controlOpacity<0.99f?settings_.controlOpacity+0.1f:0.3f;

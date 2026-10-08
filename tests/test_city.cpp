@@ -12,8 +12,10 @@ int main(){bool sides[5]={};uint64_t prev=0;
     if(ha!=hb||ha==prev||a.shops.size()!=4||a.interiors.size()!=4||a.roads.empty()||!a.playArea.contains(a.spawnPlayer.x,a.spawnPlayer.z))return 1;
     prev=ha;sides[a.coastSide+1]=true;
     for(const auto& sh:a.shops){if(sh.stock.empty()||sh.interior<0||sh.interior>=4||a.interiorAt(sh.clerk.x,sh.clerk.z)!=sh.interior)return 2;}
+    if(a.coastSide>=0){if(a.oceanBackdrop.empty())return 8;for(const auto& v:a.oceanBackdrop.v)if(v.layer!=31||v.n[1]<0)return 9;}
     for(const auto& c:a.chunks){
       bool sea=false,seaLod=false,wet=false,wetLod=false;
+      if(a.coastSide>=0)for(size_t i=0;i+3<c.mesh.v.size();i+=4){const auto& v=c.mesh.v[i];if(v.layer!=4)continue;float x0=1e9f,x1=-1e9f,z0=1e9f,z1=-1e9f;for(int k=0;k<4;++k){x0=std::min(x0,c.mesh.v[i+k].p[0]);x1=std::max(x1,c.mesh.v[i+k].p[0]);z0=std::min(z0,c.mesh.v[i+k].p[2]);z1=std::max(z1,c.mesh.v[i+k].p[2]);}if(a.poiBeach.x>x0&&a.poiBeach.x<x1&&a.poiBeach.z>z0&&a.poiBeach.z<z1)return 10;}
       for(const auto& v:c.mesh.v){for(float p:v.p)if(!std::isfinite(p))return 3;if(v.layer==41)wet=true;if(v.layer==31&&v.n[1]<0)return 4;if(v.layer==31&&a.coastSide>=0&&a.sea.contains(v.p[0],v.p[2]))sea=true;}
       for(const auto& v:c.lod.v){if(v.layer==31)seaLod=true;if(v.layer==41)wetLod=true;}
       if(sea&&!seaLod)return 6;

@@ -23,9 +23,16 @@ void main() {
     vec3 repaint = pc.tint.rgb * (0.35 + 1.3 * lum);
     albedo = mix(albedo, repaint, paintMask * pc.tint.a);
   }
+  if(pc.tint.a<-0.5){
+    float lum=dot(albedo,vec3(0.299,0.587,0.114));
+    bool skin=albedo.r>albedo.g*1.12&&albedo.g>albedo.b*1.05;
+    if(!skin&&lum>0.07)albedo=mix(albedo,pc.tint.rgb*(0.35+lum*1.1),0.38);
+  }
   vec3 orm = texture(uORM, vUV).rgb;
   float rough = clamp(orm.g * pc.params.z, 0.05, 1.0);
   float metal = orm.b;
+  float wet=g.cascade.w*(1-g.params.w)*0.6;
+  if(pc.tint.a>0)rough=mix(rough,0.13,wet);
   vec3 Nn = dot(vNormal,vNormal) > 0.00001 ? normalize(vNormal) : vec3(0,1,0);
   vec3 tangent = vTangent.xyz - Nn * dot(Nn, vTangent.xyz);
   if (dot(tangent,tangent)<0.00001) tangent=cross(Nn,abs(Nn.y)>0.9?vec3(0,0,1):vec3(0,1,0));

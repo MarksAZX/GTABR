@@ -8,6 +8,7 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
 }
 void main() {
   float m;
+  if(vAK.y>1.5){float r=length(vP);float ring=exp(-pow((r-0.75)*16,2))*smoothstep(1.0,0.8,r);outColor=vec4(vAK.y>2.5?vec3(0.50,0.58,0.63):vec3(0.72,0.91,0.9),ring*vAK.x);return;}
   if (vAK.y < 0.5) {
     m = 1.0 - smoothstep(0.1, 1.0, length(vP));
     m *= m;
