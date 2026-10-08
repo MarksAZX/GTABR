@@ -275,6 +275,7 @@ void Game::resetEntities(bool fresh) {
   player_.y = world_.heightAt(player_.pos.x, player_.pos.y);
   moneyCents_ = 40000;
   moneyDisplay_ = (float)moneyCents_;
+  lastMoney_ = moneyCents_;
   for (int& c : inventory_) c = 0;
   inventory_[1] = 1;  // a water bottle to start with
   wheel_.slots[0] = {0};
@@ -539,6 +540,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (player_.stamina < 99.5f || player_.running) staminaShow_ = 2.5f;
   else staminaShow_ = std::max(0.0f, staminaShow_ - dtReal);
   moneyShow_ = std::max(0.0f, moneyShow_ - dtReal);
+  moneyDeltaT_ = std::max(0.0f, moneyDeltaT_ - dtReal);
   moneyDisplay_ += ((float)moneyCents_ - moneyDisplay_) * expDecay(7.0f, dtReal);
   if (std::fabs(moneyDisplay_ - moneyCents_) < 1.0f) moneyDisplay_ = (float)moneyCents_;
   neighbourCooldown_ = std::max(0.0f, neighbourCooldown_ - dtReal);

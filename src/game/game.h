@@ -116,6 +116,8 @@ struct Panel {
   bool open = false;
   float anim = 0;
   std::string title, text, portrait;
+  std::string role;                 // small tag under the name (Frentista, Mecânico...)
+  float reveal = 0;                 // typewriter progress in characters
   std::vector<PanelOption> options;
   std::string footer;
   float vehicleHealth = -1, vehicleFuel = -1, vehicleCap = 0;   // optional gauges
@@ -223,6 +225,10 @@ class Game {
   void buyStock(int shopId, int stockIdx);
   int shopPriceCents(int shopId, int item) const;
   void openShopPanel(int shopId);
+  void debugOpenNpcPanel(int idx) { openNpcPanel(idx); }   // tests / tooling
+  void debugClosePanel() { closePanel(); }
+  void setWaypointDebug(const std::string& name) { waypoint_.active = true; waypoint_.name = name; waypoint_.pos = world_.poiWorkshop; }
+  void addMoneyDebug(int cents) { moneyCents_ += cents; }
   void openAttendantPanel(int shopId);
   void repairVehicle(int vehicleIdx);
   void useItem(int item);
@@ -347,6 +353,10 @@ class Game {
   std::vector<Npc> npcs_;
   int moneyCents_ = 40000;
   int inventory_[kItemCount] = {};
+  std::string locShown_;           // street / district banner under the minimap
+  float locT_ = 0;
+  int lastMoney_ = 0, moneyDelta_ = 0;   // floating +/- money feedback
+  float moneyDeltaT_ = 0;
   float moneyShow_ = 0;           // seconds the money widget stays visible
   float moneyDisplay_ = 40000;    // animated value
   Rng rng_{12345};

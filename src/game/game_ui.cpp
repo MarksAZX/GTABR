@@ -117,7 +117,8 @@ void Game::drawTouchControls(const InputFrame& in) {
   }
   glassButton(ui_, L.run.c, L.run.r, in.runHeld, false, driving ? "target" : "run", kAccent, a, 0.72f);
   if (L.jump.visible) glassButton(ui_, L.jump.c, L.jump.r, in.jumpPressed, false, "arrow", kAccent, a, 0.62f);
-  ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r * 0.5f, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
+  const bool captions = settings_.hints && time_ < 90.0f;   // button captions only while learning the controls
+  if (captions) ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r + 4 * S, 14 * S, C(1, 1, 1, 0.65f * a), Align::Center);
   // primary action: attack with the current weapon (fist / melee / firearm)
   if (L.attack.visible) {
     const WeaponDef& w = weaponDef(player_.weapon);
@@ -143,8 +144,10 @@ void Game::drawTouchControls(const InputFrame& in) {
   if (L.enterExit.visible) glassButton(ui_, L.enterExit.c, L.enterExit.r, in.enterExitHeld, true, driving ? "door" : "car", kMint, a);
   glassButton(ui_, L.camera.c, L.camera.r, in.cameraHeld, false, "camera", kAccent, a);
   glassButton(ui_, L.wheel.c, L.wheel.r, in.wheelBtnHeld, wheel_.open, "wheel", kAccent, 1.0f - 0.0f * wheel_.anim);
-  ui_.text(false, "ARMAS", L.wheel.c.x, L.wheel.c.y + L.wheel.r + 6 * S, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
-  ui_.text(false, cam_.mode() == CamMode::TopDown ? "TOP DOWN" : "3ª PESSOA", L.camera.c.x, L.camera.c.y + L.camera.r + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
+  if (captions) {
+    ui_.text(false, "ARMAS", L.wheel.c.x, L.wheel.c.y + L.wheel.r + 4 * S, 14 * S, C(1, 1, 1, 0.65f * a), Align::Center);
+    ui_.text(false, cam_.mode() == CamMode::TopDown ? "TOP DOWN" : "3ª PESSOA", L.camera.c.x, L.camera.c.y + L.camera.r + 4 * S, 14 * S, C(1, 1, 1, 0.65f * a), Align::Center);
+  }
   glassButton(ui_, L.pause.c, L.pause.r, in.pauseHeld, false, "pause", kAccent, a, 0.62f);
 }
 
@@ -216,39 +219,68 @@ void Game::drawMinimap() {
   }
 }
 
+// Status card (top left): vitals, stamina, clock and wallet in one quiet glass block.
 void Game::drawBars() {
   float S = uiScale();
-  float a = 1.0f - 0.85f * wheel_.anim;
-  float x = 40 * S, y = 40 * S;
-  float hAlpha = healthShow_ > 0.0f ? 1.0f : 0.40f;
+  float a = (1.0f - 0.85f * wheel_.anim) * (0.55f + 0.45f * settings_.hudOpacity);
+  float x = 36 * S, y = 34 * S, w = 300 * S;
+  bool showSta = staminaShow_ > 0.0f;
+  float h = (showSta ? 124 : 104) * S;
+  ui_.glow(x, y + 5 * S, w, h, 22 * S, 16 * S, C(0, 0, 0, 0.30f * a));
+  ui_.rect(x, y, w, h, withAlpha(kGlass, a), 22 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
+  // row 1: clock + weather word on the left, wallet on the right
+  int minutes = (int)(timeOfDay_ * 60.0f) % (24 * 60);
+  char clk[16];
+  std::snprintf(clk, sizeof(clk), "%02d:%02d", minutes / 60, minutes % 60);
+  ui_.text(true, clk, x + 22 * S, y + 12 * S, 30 * S, C(1, 1, 1, a), Align::Left);
+  std::string money = fmtMoney((int)std::lround(moneyDisplay_));
+  ui_.text(true, money, x + w - 20 * S, y + 12 * S, 30 * S, withAlpha(moneyDeltaT_ > 0 ? (moneyDelta_ >= 0 ? kMint : kRed) : kWhite, a), Align::Right);
+  // row 2: health
   float hv = clamp(player_.health / 100.0f, 0.0f, 1.0f);
-  Color hc = hv > 0.35f ? mixColor(kRed, kMint, 0.0f) : kRed;
-  ui_.icon("heart", x + 10 * S, y + 10 * S, 22 * S, withAlpha(kRed, hAlpha * a));
-  ui_.rect(x + 28 * S, y + 6 * S, 230 * S, 8 * S, C(1, 1, 1, 0.14f * a * hAlpha), 4 * S);
-  ui_.rect(x + 28 * S, y + 6 * S, 230 * S * hv, 8 * S, withAlpha(hc, hAlpha * a), 4 * S);
-  if (staminaShow_ > 0.0f) {
+  bool critical = hv < 0.30f;
+  float pulse = critical ? 0.65f + 0.35f * std::sin(realTime_ * 6.0f) : 1.0f;
+  Color hc = hv > 0.55f ? kMint : (hv > 0.30f ? theme::kWarn : kRed);
+  float by = y + 58 * S;
+  ui_.icon("heart", x + 32 * S, by + 5 * S, 22 * S, withAlpha(critical ? kRed : kMuted, a * pulse));
+  ui_.rect(x + 54 * S, by, w - 78 * S, 10 * S, C(1, 1, 1, 0.12f * a), 5 * S);
+  ui_.rect(x + 54 * S, by, (w - 78 * S) * hv, 10 * S, withAlpha(hc, a * pulse), 5 * S);
+  if (showSta) {
     float sa = std::min(1.0f, staminaShow_) * a;
     float sv = clamp(player_.stamina / 100.0f, 0.0f, 1.0f);
-    ui_.icon("bolt", x + 10 * S, y + 34 * S, 22 * S, withAlpha(kSky, sa));
-    ui_.rect(x + 28 * S, y + 30 * S, 190 * S, 6 * S, C(1, 1, 1, 0.14f * sa), 3 * S);
-    ui_.rect(x + 28 * S, y + 30 * S, 190 * S * sv, 6 * S, withAlpha(player_.runBoost > 0 ? kAccent : kSky, sa), 3 * S);
+    float sy = by + 28 * S;
+    ui_.icon("bolt", x + 32 * S, sy + 4 * S, 20 * S, withAlpha(kSky, sa));
+    ui_.rect(x + 54 * S, sy, w - 78 * S, 8 * S, C(1, 1, 1, 0.12f * sa), 4 * S);
+    ui_.rect(x + 54 * S, sy, (w - 78 * S) * sv, 8 * S, withAlpha(player_.runBoost > 0 ? kAccent : kSky, sa), 4 * S);
+  }
+  // floating wallet change
+  if (moneyDeltaT_ > 0) {
+    float k = clamp(moneyDeltaT_ / 2.2f, 0.0f, 1.0f);
+    std::string d = (moneyDelta_ >= 0 ? "+" : "-") + fmtMoney(std::abs(moneyDelta_));
+    ui_.text(true, d, x + w - 20 * S, y + h + (6 + (1.0f - k) * 8) * S, 24 * S, withAlpha(moneyDelta_ >= 0 ? kMint : kRed, a * std::min(1.0f, k * 2.0f)), Align::Right);
   }
 }
 
+// Objective tracker + street banner (the wallet now lives in the status card).
 void Game::drawMoney() {
   float S = uiScale();
-  float a = (1.0f - 0.85f * wheel_.anim) * clamp(moneyShow_ * 2.5f, 0.0f, 1.0f);
-  if (a < 0.01f) return;
-  float size = 236 * S;
-  float mx = screenW_ - 64 * S * 2 - 18 * S - size - 8 * S;
-  std::string txt = fmtMoney((int)std::lround(moneyDisplay_));
-  float tw = ui_.textWidth(true, txt, 34 * S);
-  float w = tw + 78 * S, h = 56 * S;
-  float x = mx + size - w, y = 30 * S + size + 14 * S + (1.0f - clamp(moneyShow_ * 2.5f, 0.0f, 1.0f)) * -12.0f * S;
-  ui_.glow(x, y + 4, w, h, 18 * S, 12 * S, C(0, 0, 0, 0.35f * a));
-  ui_.rect(x, y, w, h, withAlpha(kGlass, a), h / 2, 1.5f * S, C(1, 1, 1, 0.20f * a));
-  ui_.icon("coin", x + 30 * S, y + h / 2, 30 * S, withAlpha(kAccent, a));
-  ui_.text(true, txt, x + 54 * S, y + 8 * S, 34 * S, C(1, 1, 1, a), Align::Left);
+  float a = (1.0f - 0.85f * wheel_.anim);
+  // wallet delta bookkeeping
+  if (moneyCents_ != lastMoney_) { moneyDelta_ = moneyCents_ - lastMoney_; lastMoney_ = moneyCents_; moneyDeltaT_ = 2.2f; }
+  // objective card under the status block
+  if (waypoint_.active) {
+    float d = (player_.pos - Vec2{waypoint_.pos.x, waypoint_.pos.z}).length();
+    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 14 * S + (moneyDeltaT_ > 0 ? 32 * S : 0);
+    std::string dist = d >= 1000 ? fmtFloat(d / 1000.0f, 1) + " km" : std::to_string((int)d) + " m";
+    float nameW = ui_.textWidth(true, waypoint_.name, 24 * S), distW = ui_.textWidth(false, dist, 22 * S);
+    float w = 62 * S + std::max(nameW + 22 * S + distW, 150 * S) + 18 * S, h = 66 * S;
+    ui_.glow(x, y + 4 * S, w, h, 18 * S, 12 * S, C(0, 0, 0, 0.26f * a));
+    ui_.rect(x, y, w, h, withAlpha(kGlass, a), 18 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
+    ui_.rect(x, y + 14 * S, 4 * S, h - 28 * S, withAlpha(kRed, a), 2 * S);
+    ui_.icon("pin", x + 36 * S, y + h / 2, 26 * S, withAlpha(kRed, a));
+    ui_.text(false, "OBJETIVO", x + 62 * S, y + 9 * S, 15 * S, withAlpha(kMuted, a), Align::Left);
+    ui_.text(true, waypoint_.name, x + 62 * S, y + 27 * S, 24 * S, C(1, 1, 1, a), Align::Left);
+    ui_.text(false, dist, x + w - 18 * S, y + 27 * S, 22 * S, withAlpha(kAccent, a), Align::Right);
+  }
 }
 
 void Game::drawFuelGauge() {
@@ -304,24 +336,51 @@ void Game::drawPrompt() {
   ui_.text(false, sub, tx, y + 49 * S, 23 * S, withAlpha(kMuted, a), Align::Left);
 }
 
+// Notifications: slim cards stacked at the top centre, newest first. "Title|detail" gives a second line; the accent comes from
+// the toast colour (white = neutral silver, reddish = warning, greenish = success).
 void Game::drawToasts(float dt) {
   float S = uiScale();
   for (Toast& t : toasts_) t.t += dt;
   while (!toasts_.empty() && toasts_.front().t > toasts_.front().dur + 0.5f) toasts_.pop_front();
   float a0 = 1.0f - 0.85f * wheel_.anim;
-  float x = 40 * S, y = 104 * S;
-  for (const Toast& t : toasts_) {
-    float in = clamp(t.t / 0.25f, 0.0f, 1.0f), out = clamp((t.dur + 0.4f - t.t) / 0.4f, 0.0f, 1.0f);
-    float a = std::min(in, out) * a0;
+  float cx = screenW_ * 0.5f;
+  float y = 28 * S;
+  const float maxW = std::min(700.0f * S, screenW_ * 0.46f);
+  int idx = 0;
+  for (auto it = toasts_.rbegin(); it != toasts_.rend(); ++it, ++idx) {
+    const Toast& t = *it;
+    if (idx >= 3) break;   // at most three cards on screen
+    float in = clamp(t.t / 0.28f, 0.0f, 1.0f), out = clamp((t.dur + 0.45f - t.t) / 0.45f, 0.0f, 1.0f);
+    float a = std::min(in, out) * a0 * (idx == 0 ? 1.0f : 0.82f);
     if (a <= 0.01f) continue;
-    float tw = ui_.textWidth(false, t.text, 26 * S);
-    float h = 46 * S, w = tw + (t.icon ? 82 : 44) * S;
-    float xx = x - (1.0f - smoothstep(in)) * 30 * S;
-    ui_.glow(xx, y + 3, w, h, h / 2, 10 * S, C(0, 0, 0, 0.28f * a));
-    ui_.rect(xx, y, w, h, withAlpha(kGlass, a), h / 2, 1.2f * S, C(1, 1, 1, 0.16f * a));
-    float tx = xx + 22 * S;
-    if (t.icon) { ui_.icon(t.icon, xx + 28 * S, y + h / 2, 26 * S, withAlpha(kAccent, a)); tx = xx + 52 * S; }
-    ui_.text(false, t.text, tx, y + 8 * S, 26 * S, withAlpha(t.color, a), Align::Left);
+    std::string title = t.text, sub;
+    size_t bar = title.find('|');
+    if (bar != std::string::npos) { sub = title.substr(bar + 1); title = title.substr(0, bar); }
+    float textMax = maxW - (t.icon ? 92.0f : 44.0f) * S;
+    auto lines = wrapText(ui_, title, textMax, 25 * S, true);
+    if (lines.size() > 2) lines.resize(2);
+    float tw = 0;
+    for (const std::string& l : lines) tw = std::max(tw, ui_.textWidth(true, l, 25 * S));
+    if (!sub.empty()) tw = std::max(tw, ui_.textWidth(false, sub, 20 * S));
+    float lineH = 31 * S;
+    float h = (lines.size() * lineH + (sub.empty() ? 0 : 26 * S) + 22 * S);
+    h = std::max(h, 58 * S);
+    float w = tw + (t.icon ? 92.0f : 48.0f) * S;
+    Color accent = (t.color == 0xFFFFFFFFu) ? kAccent : t.color;
+    float ease = 1.0f - std::pow(1.0f - in, 3.0f);
+    float xx = cx - w / 2, yy = y - (1.0f - ease) * 26 * S;
+    ui_.glow(xx, yy + 4 * S, w, h, 18 * S, 14 * S, C(0, 0, 0, 0.30f * a));
+    ui_.rect(xx, yy, w, h, withAlpha(kGlassHi, a), 18 * S, 1.2f * S, C(1, 1, 1, 0.15f * a));
+    ui_.rect(xx + 9 * S, yy + 12 * S, 3.5f * S, h - 24 * S, withAlpha(accent, a), 2 * S);
+    float tx = xx + 26 * S;
+    if (t.icon) {
+      ui_.circle(xx + 52 * S, yy + h / 2, 20 * S, withAlpha(accent, 0.16f * a), 1.5f * S, withAlpha(accent, 0.6f * a));
+      ui_.icon(t.icon, xx + 52 * S, yy + h / 2, 22 * S, withAlpha(accent, a));
+      tx = xx + 84 * S;
+    }
+    float ty = yy + (h - (lines.size() * lineH + (sub.empty() ? 0 : 26 * S))) / 2 - 1 * S;
+    for (const std::string& l : lines) { ui_.text(true, l, tx, ty, 25 * S, C(1, 1, 1, a), Align::Left); ty += lineH; }
+    if (!sub.empty()) ui_.text(false, sub, tx, ty - 2 * S, 20 * S, withAlpha(kMuted, a), Align::Left);
     y += h + 8 * S;
   }
 }
@@ -343,7 +402,7 @@ void Game::drawHud(float dt, const InputFrame& in) {
     if (wanted_ > 0 || wantedHeat_ > 0.01f) {
       float a = 1.0f - 0.85f * wheel_.anim;
       float sz = 34 * S;
-      float x0 = screenW_ - 64 * S * 2 - 18 * S - 8 * S - sz * 3.4f, y0 = 30 * S + 236 * S + 14 * S;
+      float x0 = screenW_ - 64 * S * 2 - 18 * S - 8 * S - sz * 3.4f, y0 = 30 * S + 236 * S + 56 * S;
       bool seenNow = sinceSeen_ < 0.5f;
       bool blink = seenNow && std::fmod(realTime_ * 3.0f, 1.0f) < 0.5f;
       for (int i = 0; i < 3; ++i) {
@@ -354,19 +413,24 @@ void Game::drawHud(float dt, const InputFrame& in) {
       if (wanted_ > 0 && !seenNow && sinceSeen_ > 2.0f)
         ui_.text(false, "Polícia procurando...", x0 + sz * 1.7f, y0 + sz + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
     }
-    // waypoint pill
+    // arrival at the waypoint
     if (waypoint_.active) {
       float d = dist2(player_.pos, {waypoint_.pos.x, waypoint_.pos.z});
-      if (d < 7.0f && !player_.indoors) { waypoint_.active = false; toast("Você chegou: " + waypoint_.name, "pin"); }
-      else {
-        std::string t = waypoint_.name + " • " + std::to_string((int)d) + " m";
-        float tw = ui_.textWidth(false, t, 24 * S);
-        float w = tw + 70 * S, h = 44 * S, x = screenW_ * 0.5f - w / 2 - 120 * S, y = 32 * S;
-        float a = 1.0f - 0.85f * wheel_.anim;
-        ui_.rect(x, y, w, h, withAlpha(kGlass, a), h / 2, 1.2f * S, C(1, 1, 1, 0.16f * a));
-        ui_.icon("pin", x + 26 * S, y + h / 2, 26 * S, withAlpha(kRed, a));
-        ui_.text(false, t, x + 48 * S, y + 8 * S, 24 * S, C(1, 1, 1, a), Align::Left);
-      }
+      if (d < 7.0f && !player_.indoors) { waypoint_.active = false; toast("Você chegou|" + waypoint_.name, "pin", theme::kOk); }
+    }
+    // street / district banner under the minimap
+    if (settings_.showMinimap) {
+      std::string loc = locationName(vehicles_.empty() || player_.vehicle < 0 ? player_.pos : vehicles_[player_.vehicle].pos, player_.indoors);
+      if (loc != locShown_) { locShown_ = loc; locT_ = 4.0f; }
+      locT_ = std::max(0.0f, locT_ - dt);
+      float a = (1.0f - 0.85f * wheel_.anim) * (0.55f + 0.45f * std::min(1.0f, locT_));
+      float size = 236 * S;
+      float mx = screenW_ - 64 * S * 2 - 18 * S - size - 8 * S;
+      float tw = ui_.textWidth(false, locShown_, 21 * S);
+      float w = std::min(size, tw + 44 * S), h = 38 * S, x = mx + size - w, y = 30 * S + size + 10 * S;
+      ui_.rect(x, y, w, h, withAlpha(kGlass, a), h / 2, 1.0f * S, C(1, 1, 1, 0.14f * a));
+      ui_.icon("pin", x + 20 * S, y + h / 2, 18 * S, withAlpha(kMuted, a));
+      ui_.text(false, locShown_, x + 36 * S, y + 7 * S, 21 * S, C(1, 1, 1, 0.92f * a), Align::Left);
     }
     // fuelling progress
     if (fueling_.active) {
@@ -384,88 +448,170 @@ void Game::drawHud(float dt, const InputFrame& in) {
       projectToScreen({n.pos.x, n.y + 1.95f, n.pos.y}, sp, vis);
       if (!vis || sp.x < 0 || sp.x > screenW_ || sp.y < 0 || sp.y > screenH_) continue;
       float a = clamp(n.bubbleTimer, 0.0f, 0.4f) / 0.4f;
-      float tw = ui_.textWidth(true, n.bubble, 24 * S);
-      float w = tw + 30 * S, h = 40 * S;
-      ui_.rect(sp.x - w / 2, sp.y - h - 8 * S, w, h, C(1, 1, 1, 0.92f * a), h / 2);
-      ui_.text(true, n.bubble, sp.x, sp.y - h - 2 * S, 24 * S, C(0.08f, 0.09f, 0.12f, a), Align::Center);
+      float tw = ui_.textWidth(false, n.bubble, 23 * S);
+      float w = tw + 34 * S, h = 42 * S;
+      float bx = sp.x - w / 2, by = sp.y - h - 14 * S;
+      ui_.glow(bx, by + 3 * S, w, h, h / 2, 10 * S, C(0, 0, 0, 0.30f * a));
+      ui_.rect(bx, by, w, h, withAlpha(kGlassHi, a), h / 2, 1.2f * S, C(1, 1, 1, 0.20f * a));
+      ui_.circle(sp.x, sp.y - 8 * S, 4 * S, withAlpha(kGlassHi, a), 1.0f * S, C(1, 1, 1, 0.20f * a));
+      ui_.text(false, n.bubble, sp.x, by + 8 * S, 23 * S, C(1, 1, 1, 0.96f * a), Align::Center);
     }
   }
 }
 
 // ------------------------------------------------------------------------------------------------ panel
+// Dialogue / shop panel, drawn from scratch: a cinematic bottom sheet. The speaker's portrait sits in a ring that overlaps the
+// top edge, the line is typed out (tap to skip), and the answers appear as quiet pills (talk) or product cards (shops).
+static size_t utf8Prefix(const std::string& s, size_t chars) {
+  size_t i = 0, n = 0;
+  while (i < s.size() && n < chars) {
+    unsigned char c = (unsigned char)s[i];
+    i += c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : 4;
+    ++n;
+  }
+  return std::min(i, s.size());
+}
+static size_t utf8Count(const std::string& s) {
+  size_t n = 0;
+  for (unsigned char c : s) if ((c & 0xC0) != 0x80) ++n;
+  return n;
+}
+
 void Game::drawPanel(float dt) {
-  panel_.anim += (1.0f - panel_.anim) * expDecay(14.0f, dt);
+  panel_.anim += (1.0f - panel_.anim) * expDecay(13.0f, dt);
   float S = uiScale();
   float a = panel_.anim;
   uiRects_.clear();
-  ui_.rect(0, 0, screenW_, screenH_, C(0, 0, 0, 0.30f * a));
-  float cardW = std::min(1040.0f * S, screenW_ - 60.0f * S);
-  float pad = 34 * S;
-  bool portrait = !panel_.portrait.empty();
-  float portSize = portrait ? 188 * S : 0;
-  float textX = pad + (portrait ? portSize + 28 * S : 0);
+  ui_.rect(0, 0, screenW_, screenH_, C(0, 0, 0, 0.34f * a));
+  const bool hc = settings_.highContrast;
+  bool cards = false;   // shop-like: any option with product art or a price line
+  for (const PanelOption& o : panel_.options) if (!o.art.empty() || (!o.sub.empty() && o.icon)) cards = true;
+  const bool hasPortrait = !panel_.portrait.empty();
+  const bool speaker = hasPortrait || (!cards && !panel_.title.empty() && panel_.vehicleFuel < 0 && panel_.vehicleHealth < 0);   // a letter avatar stands in for anonymous pedestrians
+  float cardW = std::min((cards ? 1180.0f : 1000.0f) * S, screenW_ - 56.0f * S);
+  float pad = 30 * S;
+  float ring = speaker ? 150 * S : 0;
+  float textX = pad + (speaker ? ring + 26 * S : 0);
   float textW = cardW - textX - pad;
-  auto lines = wrapText(ui_, panel_.text, textW, 28 * S, false);
-  float titleH = 52 * S, lineH = 36 * S;
-  float headerH = std::max(portSize, titleH + lines.size() * lineH + 8 * S);
-  float gaugeH = (panel_.vehicleFuel >= 0 || panel_.vehicleHealth >= 0 || !panel_.footer.empty()) ? 54 * S : 0;
+  // typewriter (only for spoken lines; gauges / shop headers show at once)
+  size_t total = utf8Count(panel_.text);
+  if (speaker && !cards && panel_.vehicleFuel < 0) panel_.reveal += dt * std::max(70.0f, total / 1.4f);
+  else panel_.reveal = (float)total;
+  bool typing = panel_.reveal < (float)total;
+  std::string shown = panel_.text.substr(0, utf8Prefix(panel_.text, (size_t)panel_.reveal));
+  auto fullLines = wrapText(ui_, panel_.text, textW, 28 * S, false);    // layout from the full text so the card never resizes
+  auto lines = wrapText(ui_, shown, textW, 28 * S, false);
+  float nameH = 48 * S, lineH = 37 * S;
+  float headerH = std::max(speaker ? ring * 0.55f : 0.0f, nameH + fullLines.size() * lineH + 6 * S);
+  float gaugeH = (panel_.vehicleFuel >= 0 || panel_.vehicleHealth >= 0 || !panel_.footer.empty()) ? 52 * S : 0;
   size_t n = panel_.options.size();
-  float rowH = n > 6 ? 70 * S : 90 * S, gap = 10 * S;
-  float total = pad + headerH + 18 * S + gaugeH + n * (rowH + gap) + pad - gap;
-  float maxH = screenH_ - 50 * S;
-  if (total > maxH) { rowH = std::max(50 * S, rowH - (total - maxH) / std::max<size_t>(1, n)); total = pad + headerH + 18 * S + gaugeH + n * (rowH + gap) + pad - gap; }
-  float x = (screenW_ - cardW) / 2, y = screenH_ - total - 28 * S + (1.0f - a) * 90 * S;
-  ui_.glow(x, y + 8, cardW, total, 30 * S, 26 * S, C(0, 0, 0, 0.5f * a));
-  ui_.rect(x, y, cardW, total, withAlpha(settings_.highContrast ? theme::kPanelHc : theme::kGlassHi, a), 26 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
-  if (portrait) {
-    std::string key = "portrait_" + panel_.portrait;
-    ui_.rect(x + pad - 4 * S, y + pad - 4 * S, portSize + 8 * S, portSize + 8 * S, C(1, 1, 1, 0.16f * a), 26 * S);
-    ui_.art(key.c_str(), x + pad, y + pad, portSize, portSize, C(1, 1, 1, a), 22 * S);
+  float rowH = cards ? 92 * S : 64 * S, gap = 10 * S;
+  int cols = cards ? 2 : 1;
+  size_t rowsN = cards ? (n + 1) / 2 : n;
+  // the last option is the "leave" action when it has no art / price: keep it full width under the cards
+  bool leaveRow = cards && n > 0 && panel_.options.back().art.empty() && panel_.options.back().sub.empty();
+  if (leaveRow) rowsN = (n - 1 + 1) / 2 + 1;
+  float optH = rowsN * (rowH + gap) - gap;
+  float total_h = pad + headerH + 18 * S + gaugeH + optH + pad;
+  float maxH = screenH_ - 60 * S;
+  if (total_h > maxH) { rowH = std::max(54 * S, rowH - (total_h - maxH) / std::max<size_t>(1, rowsN)); optH = rowsN * (rowH + gap) - gap; total_h = pad + headerH + 18 * S + gaugeH + optH + pad; }
+  float x = (screenW_ - cardW) / 2, y = screenH_ - total_h - 26 * S + (1.0f - a) * 110 * S;
+  ui_.glow(x, y + 10 * S, cardW, total_h, 30 * S, 30 * S, C(0, 0, 0, 0.55f * a));
+  ui_.rect(x, y, cardW, total_h, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 28 * S, 1.2f * S, C(1, 1, 1, 0.15f * a));
+  // speaker ring overlapping the top edge
+  if (speaker) {
+    float cx = x + pad + ring / 2, cy = y + pad + ring * 0.22f;
+    ui_.circle(cx, cy, ring / 2 + 8 * S, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 2 * S, withAlpha(kAccent, 0.55f * a));
+    if (hasPortrait) ui_.art(("portrait_" + panel_.portrait).c_str(), cx - ring / 2, cy - ring / 2, ring, ring, C(1, 1, 1, a), ring / 2);
+    else {
+      ui_.circle(cx, cy, ring / 2, withAlpha(kAccent, 0.12f * a));
+      std::string letter = panel_.title.substr(0, utf8Prefix(panel_.title, 1));
+      ui_.text(true, letter, cx, cy - 36 * S, 72 * S, withAlpha(kAccent, a), Align::Center);
+    }
   }
-  ui_.text(true, panel_.title, x + textX, y + pad - 4 * S, 44 * S, C(1, 1, 1, a), Align::Left);
-  float ty = y + pad + titleH - 2 * S;
-  for (const std::string& l : lines) { ui_.text(false, l, x + textX, ty, 28 * S, C(1, 1, 1, 0.82f * a), Align::Left); ty += lineH; }
+  float ty = y + pad - 6 * S;
+  ui_.text(true, panel_.title, x + textX, ty, 40 * S, C(1, 1, 1, a), Align::Left);
+  if (!panel_.role.empty()) {
+    float tw = ui_.textWidth(true, panel_.title, 40 * S);
+    float rw = ui_.textWidth(false, panel_.role, 19 * S) + 26 * S;
+    ui_.rect(x + textX + tw + 16 * S, ty + 12 * S, rw, 30 * S, withAlpha(kAccent, 0.14f * a), 15 * S, 1.0f * S, withAlpha(kAccent, 0.5f * a));
+    ui_.text(false, panel_.role, x + textX + tw + 16 * S + rw / 2, ty + 16 * S, 19 * S, withAlpha(kAccent, a), Align::Center);
+  }
+  ty += nameH;
+  for (const std::string& l : lines) { ui_.text(false, l, x + textX, ty, 28 * S, C(1, 1, 1, 0.88f * a), Align::Left); ty += lineH; }
+  if (typing) {
+    // a tap on the text finishes the line; a small caret shows it can be skipped
+    uiRects_.push_back({Vec4(x, y, cardW, pad + headerH), 200});
+    ui_.icon("arrow", x + cardW - pad - 10 * S, y + pad + headerH - 8 * S, 18 * S, withAlpha(kMuted, a * (0.5f + 0.5f * std::sin(realTime_ * 6.0f))));
+  }
   float oy = y + pad + headerH + 18 * S;
   if (gaugeH > 0) {
     float gx = x + pad, gw = cardW - pad * 2;
-    ui_.rect(gx, oy, gw, gaugeH - 8 * S, C(1, 1, 1, 0.07f * a), 16 * S);
+    ui_.rect(gx, oy, gw, gaugeH - 8 * S, C(1, 1, 1, 0.06f * a), 16 * S);
     float pad2 = 20 * S;
-    if (!panel_.footer.empty()) ui_.text(false, panel_.footer, gx + pad2, oy + 10 * S, 25 * S, C(1, 1, 1, 0.85f * a), Align::Left);
+    if (!panel_.footer.empty()) ui_.text(false, panel_.footer, gx + pad2, oy + 9 * S, 25 * S, C(1, 1, 1, 0.85f * a), Align::Left);
     float bw = 260 * S, bx = gx + gw - bw - pad2;
     if (panel_.vehicleFuel >= 0 && panel_.vehicleCap > 0) {
       float live = panel_.vehicleFuel;
       if (fueling_.active && fueling_.vehicle >= 0) live = vehicles_[fueling_.vehicle].fuel;
-      ui_.icon("fuel", bx - 24 * S, oy + 20 * S, 28 * S, withAlpha(kMint, a));
-      ui_.rect(bx, oy + 16 * S, bw, 10 * S, C(1, 1, 1, 0.14f * a), 5 * S);
-      ui_.rect(bx, oy + 16 * S, bw * clamp(live / panel_.vehicleCap, 0.0f, 1.0f), 10 * S, withAlpha(kMint, a), 5 * S);
+      ui_.icon("fuel", bx - 24 * S, oy + 19 * S, 28 * S, withAlpha(kMint, a));
+      ui_.rect(bx, oy + 15 * S, bw, 10 * S, C(1, 1, 1, 0.14f * a), 5 * S);
+      ui_.rect(bx, oy + 15 * S, bw * clamp(live / panel_.vehicleCap, 0.0f, 1.0f), 10 * S, withAlpha(kMint, a), 5 * S);
     }
     if (panel_.vehicleHealth >= 0) {
-      ui_.icon("wrench", bx - 24 * S, oy + 20 * S, 28 * S, withAlpha(kSky, a));
-      ui_.rect(bx, oy + 16 * S, bw, 10 * S, C(1, 1, 1, 0.14f * a), 5 * S);
+      ui_.icon("wrench", bx - 24 * S, oy + 19 * S, 28 * S, withAlpha(kSky, a));
+      ui_.rect(bx, oy + 15 * S, bw, 10 * S, C(1, 1, 1, 0.14f * a), 5 * S);
       float hv = clamp(panel_.vehicleHealth / 100.0f, 0.0f, 1.0f);
-      ui_.rect(bx, oy + 16 * S, bw * hv, 10 * S, withAlpha(hv > 0.5f ? kMint : (hv > 0.25f ? kAccent : kRed), a), 5 * S);
+      ui_.rect(bx, oy + 15 * S, bw * hv, 10 * S, withAlpha(hv > 0.5f ? kMint : (hv > 0.25f ? kAccent : kRed), a), 5 * S);
     }
     oy += gaugeH;
   }
+  // answers fade in once the line is out
+  float oa = typing ? 0.0f : 1.0f;
+  float optA = a * (0.35f + 0.65f * oa);
+  float fullW = cardW - pad * 2;
+  float cw = cards ? (fullW - gap) / 2 : fullW;
   for (size_t i = 0; i < n; ++i) {
     const PanelOption& o = panel_.options[i];
-    float rx = x + pad, rw = cardW - pad * 2;
+    bool leave = leaveRow && i == n - 1;
+    size_t k = leave ? (n - 1) : i;
+    int col = (cards && !leave) ? (int)(k % 2) : 0;
+    size_t row = (cards && !leave) ? k / 2 : (leave ? (n - 1 + 1) / 2 : k);
+    float rx = x + pad + col * (cw + gap);
+    float rw = leave ? fullW : cw;
+    float ry = oy + row * (rowH + gap);
     bool pressed = pressedUi_ == (int)i;
-    float oa = o.enabled ? 1.0f : 0.45f;
-    Color fill = pressed ? C(1, 1, 1, 0.16f * a) : C(1, 1, 1, 0.05f * a);
-    ui_.rect(rx, oy, rw, rowH, fill, 22 * S, 1.2f * S, C(1, 1, 1, 0.12f * a * oa));
-    float ix = rx + 22 * S;
-    float iconBox = rowH - 20 * S;
-    if (!o.art.empty()) { ui_.art(o.art.c_str(), rx + 10 * S, oy + 10 * S, iconBox, iconBox, C(1, 1, 1, a * oa), 14 * S); ix = rx + iconBox + 26 * S; }
-    else if (o.icon) { ui_.icon(o.icon, rx + 20 * S + iconBox * 0.4f, oy + rowH / 2, iconBox * 0.62f, withAlpha(kAccent, a * oa)); ix = rx + iconBox + 22 * S; }
-    float ls = rowH > 80 * S ? 34.0f : 30.0f;
-    if (o.sub.empty()) ui_.text(true, o.label, ix, oy + rowH / 2 - ls * 0.62f * S, ls * S, C(1, 1, 1, a * oa), Align::Left);
-    else {
-      ui_.text(true, o.label, ix, oy + 8 * S, ls * S, C(1, 1, 1, a * oa), Align::Left);
-      ui_.text(false, o.sub, ix, oy + rowH - 36 * S, 23 * S, withAlpha(kMuted, a * oa), Align::Left);
+    float ea = o.enabled ? 1.0f : 0.45f;
+    bool ghost = !cards && i + 1 == n && o.closes && o.sub.empty() && !o.icon && n > 1;   // "Tchau / Fechar": quieter than real answers
+    Color fill = pressed ? C(1, 1, 1, 0.20f * optA) : (ghost ? C(1, 1, 1, 0.025f * optA) : C(1, 1, 1, 0.06f * optA));
+    ui_.rect(rx, ry, rw, rowH, fill, rowH / 2 > 34 * S ? 26 * S : rowH / 2, 1.2f * S, C(1, 1, 1, (ghost ? 0.08f : 0.14f) * optA * ea));
+    float ix = rx + 18 * S;
+    float box = rowH - 18 * S;
+    if (!o.art.empty()) {
+      ui_.art(o.art.c_str(), rx + 9 * S, ry + 9 * S, box, box, C(1, 1, 1, optA * ea), 14 * S);
+      ix = rx + box + 24 * S;
+    } else if (o.icon) {
+      ui_.circle(rx + 18 * S + box * 0.42f, ry + rowH / 2, box * 0.40f, withAlpha(kAccent, 0.14f * optA * ea), 1.2f * S, withAlpha(kAccent, 0.5f * optA * ea));
+      ui_.icon(o.icon, rx + 18 * S + box * 0.42f, ry + rowH / 2, box * 0.48f, withAlpha(kAccent, optA * ea));
+      ix = rx + 18 * S + box * 0.84f + 18 * S;
+    } else if (!ghost && !cards) {
+      char num[8];
+      std::snprintf(num, sizeof(num), "%d", (int)i + 1);
+      ui_.circle(rx + 18 * S + box * 0.42f, ry + rowH / 2, box * 0.34f, withAlpha(kAccent, 0.10f * optA * ea), 1.2f * S, withAlpha(kAccent, 0.4f * optA * ea));
+      ui_.text(true, num, rx + 18 * S + box * 0.42f, ry + rowH / 2 - 14 * S, 24 * S, withAlpha(kAccent, optA * ea), Align::Center);
+      ix = rx + 18 * S + box * 0.84f + 18 * S;
     }
-    uiRects_.push_back({Vec4(rx, oy, rw, rowH), (int)i});
-    oy += rowH + gap;
+    float ls = cards ? 28.0f : 29.0f;
+    if (cards && !o.sub.empty()) {
+      ui_.text(true, o.label, ix, ry + 10 * S, ls * S, C(1, 1, 1, optA * ea), Align::Left);
+      ui_.text(false, o.sub, ix, ry + rowH - 38 * S, 21 * S, withAlpha(kMuted, optA * ea), Align::Left);
+    } else if (!cards && !o.sub.empty()) {
+      ui_.text(true, o.label, ix, ry + rowH / 2 - ls * 0.62f * S, ls * S, C(1, 1, 1, optA * ea), Align::Left);
+      ui_.text(false, o.sub, rx + rw - 22 * S, ry + rowH / 2 - 13 * S, 22 * S, withAlpha(kMuted, optA * ea), Align::Right);
+    } else {
+      ui_.text(true, o.label, leave || ghost ? rx + rw / 2 : ix, ry + rowH / 2 - ls * 0.62f * S, ls * S, withAlpha(ghost ? kMuted : kWhite, optA * ea), (leave || ghost) ? Align::Center : Align::Left);
+    }
+    if (!typing) uiRects_.push_back({Vec4(rx, ry, rw, rowH), (int)i});
   }
 }
 
@@ -567,7 +713,8 @@ void Game::handleUiPointers(const InputFrame& in) {
     if (p.pressed) pressedUi_ = hit(p.pos);
     if (p.released) {
       int id = hit(p.pos);
-      if (id >= 0 && id == pressedUi_ && panel_.open && id < 100) selectPanelOption(id);
+      if (id == 200 && id == pressedUi_ && panel_.open) panel_.reveal = 1e9f;
+      else if (id >= 0 && id == pressedUi_ && panel_.open && id < 100) selectPanelOption(id);
       pressedUi_ = -1;
     }
   }

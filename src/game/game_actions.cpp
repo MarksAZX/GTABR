@@ -45,6 +45,7 @@ void Game::openFuelPanel(int pumpId) {
   Panel p;
   p.title = "Posto Boa Viagem";
   p.portrait = "frentista";
+  p.role = "Frentista";
   if (vi < 0) {
     p.text = "Estacione o veículo perto da bomba para abastecer.";
     p.options.push_back({"Entendi", "", nullptr, "", true, true, nullptr});
@@ -274,6 +275,7 @@ void Game::openWorkshopPanel() {
   Panel p;
   p.title = "Oficina Silva";
   p.portrait = "mecanico";
+  p.role = "Mecânico";
   if (vi < 0 || !zone.contains(vehicles_[vi].pos.x, vehicles_[vi].pos.y)) {
     p.text = "Traz o carro pra dentro da área marcada em frente à oficina que eu dou uma olhada.";
     p.options.push_back({"Beleza", "", nullptr, "", true, true, nullptr});
@@ -334,6 +336,7 @@ void Game::openNpcPanel(int idx) {
     case 1: {
       p.title = "Frentista";
       p.portrait = "frentista";
+      p.role = "Posto";
       p.text = "Boa tarde! Estaciona do lado da bomba e usa o botão de interagir. Gasolina a " + fmtMoney((int)fuelPriceCents()) + " o litro.";
       whereOptions(p);
       p.options.push_back({"Valeu!", "", nullptr, "", true, true, nullptr});
@@ -348,6 +351,7 @@ void Game::openNpcPanel(int idx) {
     case 3: {
       p.title = "Seu Manoel";
       p.portrait = "vizinho";
+      p.role = "Vizinho";
       p.text = "Esse bairro tá bonito, né? Qualquer coisa me chama.";
       whereOptions(p);
       if (moneyCents_ < 2000 && neighbourCooldown_ <= 0.0f) {
@@ -363,6 +367,7 @@ void Game::openNpcPanel(int idx) {
     }
     default: {
       p.title = "Morador";
+      p.role = "Pedestre";
       // contextual dialogue: armed / wanted player, mood of the person, otherwise small talk with variety
       if (player_.weapon != kWpnFists) {
         p.text = npcLine(n, 4);
@@ -376,7 +381,7 @@ void Game::openNpcPanel(int idx) {
         more.label = "Puxar mais papo";
         more.icon = "chat";
         more.closes = false;
-        more.action = [this, idx]() { panel_.text = npcLine(npcs_[idx], rng_.chance(0.5f) ? 1 : 9); };
+        more.action = [this, idx]() { panel_.text = npcLine(npcs_[idx], rng_.chance(0.5f) ? 1 : 9); panel_.reveal = 0; };
         p.options.push_back(more);
         whereOptions(p);
       }

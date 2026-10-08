@@ -993,6 +993,27 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("wetroad_b");
     return 0;
   }
+  if (name == "hud") {
+    // interface review: status card, notifications, objective, location banner, dialogue, shop
+    b.idle(30);
+    g.toast("Você chegou|Posto Boa Viagem", "pin", rgba(0.56f, 0.80f, 0.68f));
+    g.toast("Sem combustível suficiente para chegar lá", "fuel", rgba(0.90f, 0.40f, 0.38f));
+    g.toast("Câmera: Terceira Pessoa", "camera");
+    g.setWaypointDebug("Oficina Silva");
+    g.addMoneyDebug(-1250);
+    b.idle(40);
+    b.shot("hud_ingame");
+    int npc = -1;
+    for (size_t i = 0; i < g.npcs().size(); ++i) if (g.npcs()[i].role == 1) { npc = (int)i; break; }
+    if (npc < 0) npc = 0;
+    g.debugOpenNpcPanel(npc);
+    b.idle(10); b.shot("hud_dialog_typing");
+    b.idle(120); b.shot("hud_dialog");
+    g.debugClosePanel();
+    g.openShopPanel(0);
+    b.idle(60); b.shot("hud_shop");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);
