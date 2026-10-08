@@ -27,6 +27,7 @@ vec3 itm(vec3 c) { return c / max(1e-4, 1.0 - max(max(c.r, c.g), c.b)); }
 void main() {
   vec2 px = pc.a.yz;
   vec3 cur = texture(uCur, vUV).rgb;
+  if (any(isnan(cur)) || any(isinf(cur))) cur = vec3(0.0);
   if (pc.a.x <= 0.0) { outColor = vec4(cur, 1.0); return; }
   // closest depth in a cross: edges reproject with the foreground's motion
   float d = texture(uDepth, vUV).r;
@@ -53,6 +54,7 @@ void main() {
   vec3 lo = m1 - sigma * 1.15, hi = m1 + sigma * 1.15;
   // history (bilinear + light 5-tap sharpen to fight the softening of repeated resampling)
   vec3 h = tm(texture(uHist, prevUV).rgb);
+  bool bad = any(isnan(h)) || any(isinf(h));
   vec3 hn = (tm(texture(uHist, prevUV + vec2(px.x, 0)).rgb) + tm(texture(uHist, prevUV - vec2(px.x, 0)).rgb) +
              tm(texture(uHist, prevUV + vec2(0, px.y)).rgb) + tm(texture(uHist, prevUV - vec2(0, px.y)).rgb)) * 0.25;
   h = max(h + (h - hn) * 0.35, 0.0);
@@ -61,11 +63,14 @@ void main() {
   vec3 dir = hY - m1;
   vec3 ext = max(abs(dir) / max(hi - m1, 1e-4), vec3(1.0));
   hY = m1 + dir / max(max(ext.x, ext.y), ext.z);
-  float w = pc.a.x;
+  float w = bad ? 0.0 : pc.a.x;
+  if (bad) hY = cY;
   if (prevUV.x < 0.0 || prevUV.y < 0.0 || prevUV.x > 1.0 || prevUV.y > 1.0) w = 0.0;
   // fast motion: trust the current frame more
   float motion = length((prevUV - vUV) / px);
   w *= clamp(1.0 - motion * 0.02, 0.6, 1.0);
   vec3 res = fromYCoCg(mix(cY, hY, w));
-  outColor = vec4(itm(clamp(res, 0.0, 0.999)), 1.0);
+  vec3 o = itm(clamp(res, 0.0, 0.999));
+  if (any(isnan(o)) || any(isinf(o))) o = cur;
+  outColor = vec4(o, 1.0);
 }

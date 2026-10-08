@@ -940,8 +940,14 @@ void Renderer::createRenderTargets() {
   if (aoSupported_) {
     VkCommandBuffer ocb = ctx_.beginOneShot();
     for (int i = 0; i < 2; ++i) {
-      taaHist_[i] = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-      ctx_.transitionImage(ocb, taaHist_[i].image, VK_IMAGE_LAYOUT_UNDEFINED, RO, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+      taaHist_[i] = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+      // device memory is not zeroed on real GPUs: garbage (NaN bit patterns) in the history would poison every later frame
+      ctx_.transitionImage(ocb, taaHist_[i].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+      VkClearColorValue zero{};
+      VkImageSubresourceRange rng{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      vkCmdClearColorImage(ocb, taaHist_[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &zero, 1, &rng);
+      ctx_.transitionImage(ocb, taaHist_[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, RO, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
       VkFramebufferCreateInfo tf{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
       tf.renderPass = blurPass_;
       tf.attachmentCount = 1;

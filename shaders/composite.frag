@@ -229,7 +229,9 @@ void main() {
     float halo = pow(clamp(1.0 - dist * 2.6, 0.0, 1.0), 3.0);
     hdr += pc.sunCol.rgb * halo * pc.fx.y * 0.35 * skyHere;
   }
+  if (any(isnan(hdr)) || any(isinf(hdr))) hdr = vec3(0.0);
   vec3 blurred = texture(uBlur, vUV).rgb;
+  if (any(isnan(blurred)) || any(isinf(blurred))) blurred = vec3(0.0);
   vec3 bloom = max(blurred - vec3(pc.b.z), 0.0) * pc.b.y;
   hdr = mix(hdr, blurred, pc.a.x) + bloom;
   vec3 c = aces(hdr * pc.b.x);
