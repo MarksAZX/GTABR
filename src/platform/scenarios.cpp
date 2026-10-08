@@ -194,10 +194,17 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.player().vehicle=0;g.vehicles()[0].health=1;g.vehicles()[0].fuel=0;g.executeCode(6);g.executeCode(7);
     CHECK(g.vehicles()[0].health==100&&g.vehicles()[0].fuel==vehicleDef(0).fuelCap,"vehicle codes repair and fill tank");g.player().vehicle=-1;
     if(g.world().coastSide>=0){auto& w=g.world();Vec2 p{w.poiBeach.x,w.poiBeach.z};int side=w.coastSide;
+      g.teleportPlayer(p,0);b.idle(60);CHECK(!g.player().swimming,"dry beach uses walking state");
+      if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();
+      CameraInput coastCamera;coastCamera.focus={p.x,g.player().y,p.y};coastCamera.headingYaw=side*kPi*0.5f;
+      g.camera().snapTo(coastCamera,w,(float)r.outputWidth()/std::max(1u,r.outputHeight()));
+      b.render=true;b.idle(45);b.shot("beach_shore");b.render=false;
       if(side==0)p.y=-w.shoreline-20;if(side==1)p.x=w.shoreline+20;if(side==2)p.y=w.shoreline+20;if(side==3)p.x=-w.shoreline-20;
       g.teleportPlayer(p,0);b.idle(10);CHECK(g.player().swimming,"deep water switches to swimming");
       CHECK(g.player().y>w.heightAt(p.x,p.y)+0.4f,"swimmer floats above seabed");
-      g.toggleCamera();b.render=true;b.idle(20);b.shot("beach_swimming");b.render=false;
+      b.render=true;b.idle(20);b.shot("beach_swimming");b.render=false;
+      g.teleportPlayer({w.poiBeach.x,w.poiBeach.z},0);b.idle(10);CHECK(!g.player().swimming,"returning to shore restores walking");
+      g.teleportPlayer(p,0);b.idle(10);
     }
     g.money()=123456;g.player().health=67;g.player().mag[kWpnPistol]=7;g.equipWeapon(kWpnPistol);
     Vec2 saved=g.player().pos;int waterCount=g.itemCount(1);CHECK(g.saveGame(),"slot is saved atomically");

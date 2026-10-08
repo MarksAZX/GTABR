@@ -18,10 +18,10 @@ void main() {
   vColor = aColor;
   vEmissive = max(aNormal.w, 0.0);
   if (aLayer > 30.5 && aLayer < 31.5) {
-    float phase = aUV.y * 1.1 - g.camPos.w * 1.7;
-    float amp = smoothstep(0.0, 5.0, aUV.y) * 0.09;
+    float phase = aUV.y * 0.55 - g.camPos.w * 1.1;
+    float amp = smoothstep(0.0, 5.0, aUV.y) * (1.0 - smoothstep(20.0, 45.0, aUV.y)) * 0.09;
     vWorld.y += sin(phase) * amp + sin(aUV.x * 2.0 + g.camPos.w) * amp * 0.4;
-    vNormal = normalize(vec3(0.04 * sin(aUV.x * 2.0 + g.camPos.w), 1.0, 0.09 * cos(phase)));
+    vNormal = vec3(0, 1, 0); // fine water normals are evaluated in world space in the fragment shader
   }
   gl_Position = g.viewProj * vec4(vWorld, 1.0);
 }

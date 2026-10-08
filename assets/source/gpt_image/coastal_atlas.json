@@ -1,0 +1,26 @@
+{
+  "generator": "GPT Image tool available in ChatGPT session",
+  "model_version": "not exposed by tool",
+  "generation_quality_preset": "not exposed by tool; GPT Image 2.5 medium was not selectable",
+  "higgsfield": "installed in catalog but generation tools unavailable; no new Higgsfield generation in this pass",
+  "source_dimensions": [
+    1254,
+    1254
+  ],
+  "source_sha256": "adaf952c17f5444781cd0fa8aca819a82242d133639fd2b3fd9bab2f5d76475c",
+  "layout": {
+    "top_left": "ocean surface",
+    "top_right": "dry sand",
+    "bottom_left": "foam mask",
+    "bottom_right": "wet sand"
+  },
+  "runtime": {
+    "albedo_size": 1024,
+    "normal_roughness_size": 512,
+    "albedo_compression": "ASTC 8x8 sRGB",
+    "normal_roughness_compression": "ASTC 6x6 linear",
+    "encoder_quality": "medium",
+    "material_layers": 42
+  },
+  "normal_roughness": "derived from image luminance; not scanned PBR"
+}

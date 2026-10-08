@@ -134,6 +134,14 @@ Os presets BAIXO, MÉDIO, ALTO e ULTRA mudam:
 
 A resolução dinâmica é opcional.
 
+## Texturas costeiras — 0.2.1
+
+Mar, areia seca, areia úmida e máscara de espuma vêm de um novo atlas GPT Image. O shader consome a textura do mar e a máscara animada de espuma; UVs de material são separados da distância da costa, a cor por profundidade é interpolada e os chunks HLOD preservam a superfície do oceano.
+
+A geração usou o GPT Image disponível na sessão. A versão do modelo e o preset de geração não foram expostos; não se afirma GPT Image 2.5 medium. O Higgsfield estava instalado no catálogo, mas sem ferramentas de geração acessíveis. Os assets Higgsfield existentes foram preservados. Proveniência e reconstrução em `assets/source/gpt_image/README.md`.
+
+`python3 tools/build_coastal_assets.py --quality medium` atualiza somente as quatro camadas costeiras, preservando todos os bytes comprimidos dos outros materiais. `medium` aqui é a qualidade de compressão ASTC. O crescimento dos dois arrays é de 1.016.000 bytes, com mipmaps. O build completo de materiais também reconhece o atlas.
+
 ## Pipeline de assets
 
 | Etapa | Ferramenta |

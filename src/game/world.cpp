@@ -881,7 +881,7 @@ class Gen {
     w_.mapSand.push_back(sand);
     // wet sand band at the water line
     RectF wet = coastR(sA, sandTo - 3.0f, sB, sandTo);
-    ground(wet, 0.065f, mat::sand, 4.0f, {0.72f, 0.68f, 0.62f}, false);
+    ground(wet, 0.065f, mat::sand_wet, 4.0f, {1.0f, 1.0f, 1.0f}, false);
     // beach furniture: umbrellas with chairs, lifeguard tower, kiosks (barracas), volleyball net
     for (float s = sA + 10.0f; s < sB - 10.0f; s += rng_.range(9.0f, 15.0f)) {
       float t = rng_.range(prom + 6.0f, sandTo - 8.0f);
@@ -921,10 +921,18 @@ class Gen {
           };
           MeshBuilder m = mb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f, tintAt(d));
 
-          // quad winding so the normal points up
-          if (w_.coastSide == 2 || w_.coastSide == 3)
-            m.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
-          else m.quad(a, b, c, e, {ss / 6.0f, d}, {ss1 / 6.0f, d}, {ss1 / 6.0f, d1}, {ss / 6.0f, d1}, mat::water);
+          auto emitWater = [&](MeshBuilder& waterMesh) {
+            // Keep the sea in HLOD chunks as well: otherwise mixed shore chunks have holes at distance.
+            if (w_.coastSide == 2 || w_.coastSide == 3)
+              waterMesh.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
+            else waterMesh.quad(a, b, c, e, {ss / 6.0f, d}, {ss1 / 6.0f, d}, {ss1 / 6.0f, d1}, {ss / 6.0f, d1}, mat::water);
+            auto& vertices=waterMesh.mesh()->v;
+            for(size_t vi=vertices.size()-4;vi<vertices.size();++vi){Vec3 col=tintAt(vertices[vi].uv[1]);vertices[vi].color=packRGBA8(col.x,col.y,col.z,1);}
+          };
+          emitWater(m);
+          MeshBuilder distantWater = lodb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f);
+          emitWater(distantWater);
+
         }
         d = d1;
       }

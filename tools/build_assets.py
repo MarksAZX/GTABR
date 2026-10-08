@@ -2,6 +2,7 @@
 """Builds all runtime assets (GTEX textures, sprite index, font atlases, icon atlas) from sources.
 
   assets/source/higgsfield/*.png   AI generated sheets (GPT Image 2.5 via Higgsfield)
+  assets/source/gpt_image/coastal_atlas.png  coastal materials generated with available GPT Image
   tools/work/sprites/*             output of the spritebake tool (procedural 3D -> multi-direction sprites)
 Outputs:
   assets/data/*.gtex               ASTC 6x6 compressed textures (packaged in the APK)
@@ -137,6 +138,7 @@ MATERIALS = [
     "concrete", "wall_dark", "white", "shelf", "wood", "metal", "sand", "water",
     "shop_padaria", "shop_ferragens", "shop_conveniencia", "foliage",
     "house_periferia_a", "house_periferia_b", "brick_raw", "apt_tower",
+    "foam", "sand_wet",
 ]
 
 
@@ -177,6 +179,11 @@ def material_layers():
             layers[n] = to_arr(seamless_blend(cell(roofs, 2, 2, i % 2, i // 2, 12)))
     if shelf:
         layers["shelf"] = to_arr(shelf)
+    coast_path = os.path.join(ROOT, "assets/source/gpt_image/coastal_atlas.png")
+    if os.path.exists(coast_path):
+        atlas = Image.open(coast_path).convert("RGB")
+        for name, col, row in [("water", 0, 0), ("sand", 1, 0), ("foam", 0, 1), ("sand_wet", 1, 1)]:
+            layers[name] = to_arr(seamless_blend(cell(atlas, 2, 2, col, row, inset=2)))
     seeds = {"wall_paint": 1, "concrete": 2, "wall_dark": 3, "white": 4, "wood": 5, "metal": 6, "shelf": 7, "sand": 8, "water": 9, "foliage": 11}
     arrs = []
     for i, n in enumerate(MATERIALS):
@@ -194,7 +201,7 @@ SURFACE = {
     "asphalt": (2.2, 0.82, 0.12), "asphalt_cracked": (2.8, 0.84, 0.12), "sidewalk": (2.4, 0.78, 0.12), "pedra_port": (3.2, 0.72, 0.16),
     "grass": (2.6, 0.95, 0.04), "dirt": (2.6, 0.92, 0.06), "tile_floor": (1.2, 0.32, 0.10), "garage_floor": (1.6, 0.62, 0.20),
     "roof_tile": (3.0, 0.70, 0.12), "roof_fiber": (2.4, 0.66, 0.10), "roof_laje": (2.0, 0.86, 0.08), "roof_metal": (2.0, 0.42, 0.18),
-    "sand": (1.4, 0.92, 0.05), "water": (0.2, 0.08, 0.02), "foliage": (1.5, 0.75, 0.1),
+    "sand": (0.85, 0.92, 0.04), "sand_wet": (0.45, 0.42, 0.04), "foam": (0.0, 0.95, 0.0), "water": (0.35, 0.12, 0.025), "foliage": (1.5, 0.75, 0.1),
     "wall_paint": (1.6, 0.86, 0.08), "concrete": (2.0, 0.88, 0.08), "wall_dark": (1.6, 0.84, 0.08), "white": (1.0, 0.62, 0.06),
     "shelf": (1.0, 0.55, 0.10), "wood": (1.8, 0.66, 0.12), "metal": (1.4, 0.38, 0.14),
 }

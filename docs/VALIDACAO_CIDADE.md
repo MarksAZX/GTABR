@@ -56,3 +56,13 @@ Não houve teste em aparelho Android físico nem certificação de ausência de 
 Chunks/HLOD, LODs, instancing e deleção diferida estão implementados, mas a geração inicial ainda mantém os dados completos da cidade na CPU. Oclusão de setores e texture streaming por residência não foram implementados. Não há reflexos de cena por ray tracing/SSR nem simulação física de ondas: a água usa reflexão de céu e shader animado simples. As árvores/props novos são modelos procedurais próprios; as demais malhas de personagem e veículo vêm da base.
 
 Os interiores são pequenos e usam iluminação ambiente, emissivos e luzes limitadas. A aparência foi melhorada dentro do renderer existente; não há promessa de qualidade AAA nem desempenho móvel medido.
+
+## Atualização de texturas 0.2.1-coast
+
+A nova geração foi executada com o GPT Image disponível na sessão, com autorização do usuário para esse caminho. Higgsfield instalado no catálogo não expôs ferramentas de geração; nenhuma imagem desta atualização é atribuída a uma nova chamada Higgsfield, ao modelo 2.5 ou ao preset medium de geração. O manifesto `assets/source/gpt_image/coastal_atlas.json` registra a origem real.
+
+Quatro materiais costeiros foram integrados (mar, areia seca, espuma e areia úmida). A cor do mar agora usa a imagem, a máscara de espuma é amostrada/animada perto da costa e os UVs de repetição são independentes da distância da praia. A cor de profundidade varia por vértice, e a água foi incluída no HLOD para evitar buracos em chunks mistos de praia/mar.
+
+Verificação adicional: payloads de todas as outras camadas ASTC permanecem idênticos byte a byte em todos os mips (418 payloads de albedo e 380 de normal/roughness). Somente sand/water foram substituídos; foam/sand_wet foram acrescentados nos IDs 40/41. Crescimento total dos arrays: 1.016.000 bytes. Normais e roughness são derivados, não materiais escaneados.
+
+CTest passou nas 24 seeds, incluindo determinismo dos meshes HLOD e presença da água nos chunks distantes. O cenário de menus/lojas/costa/persistência passou na seed 2 e no preset médio; inclui andar na areia, nadar e retornar ao estado de caminhada. APK arm64 0.2.1-coast compilado e assinatura validada. Teste em aparelho físico continua pendente.
