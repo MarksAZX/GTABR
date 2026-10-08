@@ -161,6 +161,7 @@ bool loadModel(const std::string& path, ModelAsset& m) {
   gmesh::Header h;
   if (!readAt(b, off, &h) || h.magic != gmesh::kMagicMesh) { LOGE("bad gmesh %s", path.c_str()); return false; }
   m.skinned = (h.flags & gmesh::kSkinned) != 0;
+  m.fitted = (h.flags & gmesh::kRigFitted) != 0;
   m.vehicle = (h.flags & gmesh::kVehicle) != 0;
   m.bounds.mn = {h.bmin[0], h.bmin[1], h.bmin[2]};
   m.bounds.mx = {h.bmax[0], h.bmax[1], h.bmax[2]};
@@ -233,6 +234,7 @@ bool loadModel(const std::string& path, ModelAsset& m) {
       Mat4 l = m.skel.rest[b].matrix();
       g[b] = m.skel.parent[b] >= 0 ? g[m.skel.parent[b]] * l : l;
     }
+    if (!m.fitted) {   // legacy assets: patch the auto-rigger's skeleton at load time
     // The auto-rigger can deliver the skeleton turned about Y relative to the mesh (joints spread along one horizontal
     // axis, the body along the other). Detect the turn from the shoulder span and the foot direction, and fold it into
     // invBind so joint positions and hand frames live in the mesh frame.
@@ -268,13 +270,15 @@ bool loadModel(const std::string& path, ModelAsset& m) {
         for (Mat4& ib : m.skel.invBind) ib = ib * ri;
       }
     }
+    }
     m.rootFix = inverseGeneral(g[0] * m.skel.invBind[0]);
     float worst = 0;
     for (size_t b = 0; b < g.size(); ++b) {
       Mat4 p = m.rootFix * g[b] * m.skel.invBind[b];
       for (int i = 0; i < 16; ++i) worst = std::max(worst, std::fabs(p.m[i] - ((i % 5 == 0) ? 1.0f : 0.0f)));
     }
-    LOGI("%s: rig fix residual %.4f", path.c_str(), worst);
+    if (!m.fitted) LOGI("%s: rig fix residual %.4f", path.c_str(), worst);
+    if (!m.fitted) {
     // The source mesh is an A-pose while the skeleton hangs. Re-bind each arm chain at the mesh's own arm angle (rotate its
     // bind frames about the shoulder), so the rest pose is a true relaxed pose and the joints sit inside the arms.
     const char* arms[2][2] = {{"LeftArm", "LeftHand"}, {"RightArm", "RightHand"}};
@@ -315,6 +319,7 @@ bool loadModel(const std::string& path, ModelAsset& m) {
       m.armDown[s] = 0.0f;
     }
     rebuildSkinWeights(m, g);
+    }
     { int bh = m.skel.find("RightHand"); if (bh >= 0) m.restHand = m.rootFix * g[bh]; }
   }
   m.ok = !m.idx.empty();

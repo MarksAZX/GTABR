@@ -13,7 +13,7 @@ constexpr uint32_t kMagicAnim = 0x314E4147;  // "GAN1"
 constexpr int kMaxLods = 3;
 constexpr int kNameLen = 48;
 
-enum Flags : uint32_t { kSkinned = 1, kVehicle = 2 };
+enum Flags : uint32_t { kSkinned = 1, kVehicle = 2, kRigFitted = 4 };   // kRigFitted: tools/rigfit.py placed the joints and painted the weights
 
 #pragma pack(push, 1)
 struct Vertex {          // 36 bytes

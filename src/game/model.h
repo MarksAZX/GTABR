@@ -66,6 +66,7 @@ struct ModelAsset {
   std::string name;
   bool ok = false;
   bool skinned = false, vehicle = false;
+  bool fitted = false;              // rig fitted offline (tools/rigfit.py): joints inside the body, painted weights
   gfx::ModelHandle gpu;
   gfx::MaterialHandle material;
   Skeleton skel;

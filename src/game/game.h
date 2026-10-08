@@ -284,6 +284,8 @@ class Game {
   float wetness() const { return wetness_; }
   float timeOfDay() const { return timeOfDay_; }
   void setQuality(int q) { settings_.quality = q; applySettings(); }
+  // test / tooling hook: put an extra pedestrian of the given archetype in the world
+  int debugSpawnNpc(const std::string& archetype, Vec2 pos, float yaw, bool walk = false);
   void setIsometric(bool on) { settings_.isometric = on; applySettings(); }
  private:
   int dirIndex(float objYaw, int n) const;

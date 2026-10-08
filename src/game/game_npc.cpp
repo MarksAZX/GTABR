@@ -13,6 +13,23 @@ float h01(uint32_t x) { return (mix32(x) & 0xFFFFFF) / 16777215.0f; }
 bool isWorker(const Npc& n) { return n.stationary && !n.police; }
 }  // namespace
 
+int Game::debugSpawnNpc(const std::string& archetype, Vec2 pos, float yaw, bool walk) {
+  Npc n;
+  n.id = (int)npcs_.size() + 1000;
+  n.archetype = archetype;
+  n.pos = n.home = pos;
+  n.yaw = n.lookYaw = yaw;
+  n.walkSpeed = 1.4f;
+  n.stationary = !walk;
+  n.state = walk ? NpcState::Walk : NpcState::Idle;
+  n.stateTimer = 1e6f;
+  n.y = world_.heightAt(pos.x, pos.y);
+  n.bravery = 0.9f;
+  if (walk) { n.path = {pos + Vec2{std::sin(yaw), -std::cos(yaw)} * 40.0f}; n.pathIdx = 0; n.speed = 1.4f; }
+  npcs_.push_back(n);
+  return n.id;
+}
+
 void Game::spawnNpcs() {
   npcs_.clear();
   int id = 0;

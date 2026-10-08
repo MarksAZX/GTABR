@@ -28,7 +28,8 @@ void main() {
     vec3 c = albedo;
     float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
     float sat = (mx - mn) / max(mx, 1e-4);
-    bool skinLike = c.r >= c.g && c.g >= c.b && sat > 0.18 && sat < 0.70 && (c.g - c.b) > 0.25 * (c.r - c.b);
+    // warm hues (red -> yellow-orange) of moderate saturation are skin / hair / tan leather: never re-tinted
+    bool skinLike = c.r >= c.g * 0.97 && c.g >= c.b * 0.88 && sat > 0.10 && sat < 0.85;
     float clothes = skinLike ? 0.0 : 1.0;
     float w = clothes * smoothstep(0.10, 0.28, sat);
     float cs = cos(pc.tint.r), sn = sin(pc.tint.r);
