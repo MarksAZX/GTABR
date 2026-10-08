@@ -618,7 +618,7 @@ class Gen {
           else paint({rl.c - 0.08f, t, rl.c + 0.08f, t + 3.0f}, {0.95f, 0.95f, 0.92f});
         }
       }
-      if (rl.avenue) {
+      if (rl.avenue && !w_.island) {   // island: graph routes cross the grid freely, a median would block them
         // median strip with grass and palms between intersections
         const auto& cs = rl.horizontal ? xs_ : zs_;
         const auto& hw = rl.horizontal ? hwx_ : hwz_;
