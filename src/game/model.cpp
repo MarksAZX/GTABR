@@ -525,6 +525,7 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   a.refuel += (a.refuelTarget - a.refuel) * lr;
   a.crouch += (a.crouchTarget - a.crouch) * lr;
   a.wave += (a.waveTarget - a.wave) * lr;
+  a.guard += (a.guardTarget - a.guard) * expDecay(14.0f, dt);
   a.lean += (a.leanTarget - a.lean) * expDecay(5.0f, dt);
   a.headYaw += (a.headYawTarget - a.headYaw) * expDecay(5.0f, dt);
   a.gestureClock += dt;
@@ -671,6 +672,17 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     add("Hips", Z, wi * 0.025f * sway);
     add("Spine02", Z, wi * -0.03f * sway);
     add("Head", Y, wi * 0.08f * std::sin(gc * 0.23f + 2.0f));
+  }
+  // guard: elbows tucked, fists up beside the chin, a little forward crouch
+  if (a.guard > 0.01f) {
+    add("LeftArm", X, a.guard * 1.05f);
+    add("RightArm", X, a.guard * 1.05f);
+    add("LeftForeArm", X, a.guard * 1.75f);
+    add("RightForeArm", X, a.guard * 1.75f);
+    add("LeftArm", Z, a.guard * 0.18f);
+    add("RightArm", Z, a.guard * -0.18f);
+    add("Spine01", X, a.guard * 0.14f);
+    add("Head", X, a.guard * 0.10f);
   }
   // talking: small head nods and an open-hand forearm gesture
   if (a.talk > 0.01f) {

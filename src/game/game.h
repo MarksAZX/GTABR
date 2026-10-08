@@ -143,7 +143,7 @@ struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
 // Per-actor animation inputs: a pending one-shot request (consumed), lying on the floor, held weapon.
 struct AnimIn { int* req = nullptr; float reqSpeed = 1; bool reqUpper = false, reqHold = false; bool lying = false; int weapon = 0;
-                bool airborne = false, dead = false, combat = false; float airPhase = 0; };
+                bool airborne = false, dead = false, combat = false; float airPhase = 0; float rollPitch = 0; };
 
 class Game {
  public:
@@ -227,6 +227,9 @@ class Game {
   void openShopPanel(int shopId);
   void debugOpenNpcPanel(int idx) { openNpcPanel(idx); }   // tests / tooling
   void debugClosePanel() { closePanel(); }
+  void debugHurtPlayer(float amount, Vec2 dir) { DamageInfo d; d.type = DamageType::Unarmed; d.amount = amount; d.dir = dir; d.knockback = 1.0f; d.attacker = {ActorKind::Npc, 0}; applyDamage({ActorKind::Player, 0}, d); }
+  float hitstopLeft() const { return hitstop_; }
+  bool fightContext() const { return fightCtx_; }
   void setWaypointDebug(const std::string& name) { waypoint_.active = true; waypoint_.name = name; waypoint_.pos = world_.poiWorkshop; }
   void addMoneyDebug(int cents) { moneyCents_ += cents; }
   void openAttendantPanel(int shopId);
@@ -357,6 +360,9 @@ class Game {
   float locT_ = 0;
   int lastMoney_ = 0, moneyDelta_ = 0;   // floating +/- money feedback
   float moneyDeltaT_ = 0;
+  float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit
+  bool fightCtx_ = false;          // a fight is on: the jump button becomes dodge (tap) / block (hold)
+  float strikePower_ = 1.0f;
   float moneyShow_ = 0;           // seconds the money widget stays visible
   float moneyDisplay_ = 40000;    // animated value
   Rng rng_{12345};

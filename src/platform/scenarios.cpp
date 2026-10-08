@@ -1032,6 +1032,52 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("cockpit_b");
     return 0;
   }
+  if (name == "fight") {
+    // combat feel: a four-hit combo with impact freeze, a dodge roll and a guard
+    g.toggleCamera();
+    b.idle(40);
+    Vec2 c = g.player().pos;
+    int id = g.debugSpawnNpc("vizinho", c + Vec2{0.0f, 1.3f}, 3.14159f, false);
+    g.player().yaw = g.player().targetYaw = 3.14159f;   // face +z: the dummy
+    b.idle(10);
+    bool sawFreeze = false;
+    int maxCombo = 0;
+    for (int i = 0; i < 4; ++i) {
+      InputFrame a; a.attackPressed = true; a.attackHeld = true;
+      b.step(a, 1);
+      for (int f = 0; f < 40; ++f) { b.idle(1); sawFreeze |= g.hitstopLeft() > 0.0f; }
+      maxCombo = std::max(maxCombo, g.player().combo);
+      if (i == 1) b.shot("fight_combo_b");
+    }
+    CHECK(sawFreeze, "a landed blow freezes the world for an instant");
+    CHECK(maxCombo >= 2, "the combo advances past the second blow");
+    for (auto& n : g.npcs()) if (n.id == id) { n.state = NpcState::Fight; n.target = {ActorKind::Player, 0}; n.stateTimer = 20.0f; }
+    b.idle(15);
+    CHECK(g.fightContext(), "an enemy close by turns the jump button into the defence button");
+    float hp = g.player().health;
+    InputFrame tap; tap.jumpPressed = true; tap.jumpHeld = true; tap.move = {1, 0};
+    b.step(tap, 1);
+    InputFrame rel; rel.move = {1, 0};
+    b.step(rel, 1);
+    b.idle(6);
+    CHECK(g.player().dodgeT >= 0, "a tap rolls");
+    b.shot("fight_dodge");
+    g.debugHurtPlayer(20.0f, Vec2{0, 1});
+    CHECK(g.player().health >= hp - 0.01f, "nothing hurts during the roll");
+    b.idle(40);
+    InputFrame hold; hold.jumpHeld = true; hold.jumpPressed = true;
+    b.step(hold, 1);
+    hold.jumpPressed = false;
+    b.step(hold, 25);
+    CHECK(g.player().blocking, "holding raises the guard");
+    b.shot("fight_guard");
+    hp = g.player().health;
+    { float yw = g.player().yaw; g.debugHurtPlayer(20.0f, Vec2{-std::sin(yw), std::cos(yw)}); }   // from the front
+    float lost = hp - g.player().health;
+    printf("guard: lost %.1f hp of 20\n", lost);
+    CHECK(lost < 8.0f, "a guarded frontal blow is mostly absorbed");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

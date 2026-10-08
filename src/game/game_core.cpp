@@ -464,6 +464,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   float targetScale = wheel_.open ? 0.3f : 1.0f;   // the world keeps moving, slowly, while choosing
   timeScale_ += (targetScale - timeScale_) * expDecay(10.0f, dtReal);
   float dt = dtReal * timeScale_;
+  if (hitstop_ > 0.0f) { hitstop_ -= dtReal; dt *= 0.05f; }   // impact freeze
   time_ += dt;
 
   InputFrame gameIn = in;
@@ -744,7 +745,7 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     p.stamina = std::min(100.0f, p.stamina + (p.staminaCooldown > 0 ? 5.0f : 15.0f) * dt);
   }
   // ---- jump: a ballistic arc (about 0.95 m high, 0.84 s in the air) matched by the jump clip
-  if (in.jumpPressed && !p.airborne && !p.swimming && p.stamina > 8.0f && p.hitStun <= 0 && p.attackT < 0 && !p.down) {
+  if (in.jumpPressed && !fightCtx_ && !p.airborne && !p.swimming && p.stamina > 8.0f && p.hitStun <= 0 && p.attackT < 0 && !p.down) {
     p.airborne = true;
     p.airV = 4.6f;
     p.airT = 0.0f;

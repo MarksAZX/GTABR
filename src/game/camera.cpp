@@ -151,6 +151,9 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   dist_ = std::exp(lerp(std::log(tdDist), std::log(tpDist), t));
   fov_ = lerp(tdFovBase, kTpFov + (in.driving ? clamp(in.speed / 40.0f, 0.0f, 1.0f) * 6.0f * kDeg2Rad : 0.0f), t);
   yaw_ = yaw;
+  kick_ *= 1.0f - expDecay(9.0f, dt);
+  fov_ *= 1.0f - 0.045f * kick_;
+  dist_ *= 1.0f - 0.03f * kick_;
 
   Vec3 fwdH = forwardFromYaw(yaw_);
   float cp = std::cos(pitch_), sp = std::sin(pitch_);

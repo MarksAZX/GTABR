@@ -127,6 +127,13 @@ struct Player {
   bool attackHit = false;
   int combo = 0;
   float comboWindow = 0;
+  // dodge roll / guard (the jump button turns into the defence button while a fight is on)
+  float dodgeT = -1;       // seconds into the roll (-1 = none); the first 0.4 s cannot be hit
+  Vec2 dodgeDir;
+  float guardHold = 0;     // how long the defence button has been held
+  bool blocking = false;
+  float lunge = 0;         // forward drive while a strike is in progress (m/s)
+  float strikePower = 1;   // damage / knock-back multiplier of the current strike
   float fireCooldown = 0;
   float reloadT = -1;      // seconds into a reload (-1 = none)
   float aimHold = 0;       // keeps the weapon raised after a shot

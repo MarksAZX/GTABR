@@ -48,6 +48,7 @@ class CameraRig {
   float topDownZoom() const { return tdDist_; }
   float isoAmount() const { return isoBlend_ * (1.0f - blendEased_); }
   void setTopDownZoom(float z) { tdDist_ = clamp(z, 14.0f, 52.0f); }
+  void kick(float k) { kick_ = std::max(kick_, k); }   // impact punch: a brief tightening of the lens
   float sensitivity = 1.0f;
   bool invertY = false;
   bool isometric = false;   // top-down becomes a 45-degree isometric view (fixed yaw steps, long lens, 4 snap angles)
@@ -73,6 +74,7 @@ class CameraRig {
   Vec2 lookAhead_;
   float tpHitDist_ = 99.0f;
   float nearZ_ = 1.0f, farZ_ = 520.0f;
+  float kick_ = 0;
   bool first_ = true;
   void compute(const CameraInput& in, const World& w, float aspect, float dt);
 };

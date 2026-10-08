@@ -116,7 +116,13 @@ void Game::drawTouchControls(const InputFrame& in) {
     ui_.circle(h.x, h.y, L.joyRadius * 0.42f, C(1, 1, 1, 0.14f * a), 0, 0);
   }
   glassButton(ui_, L.run.c, L.run.r, in.runHeld, false, driving ? "target" : "run", kAccent, a, 0.72f);
-  if (L.jump.visible) glassButton(ui_, L.jump.c, L.jump.r, in.jumpPressed, false, "arrow", kAccent, a, 0.62f);
+  if (L.jump.visible) {
+    // during a fight the button is the defence: tap rolls away, hold raises the guard
+    glassButton(ui_, L.jump.c, L.jump.r, in.jumpHeld, fightCtx_, fightCtx_ ? "reload" : "arrow", fightCtx_ ? theme::kWarn : kAccent, a, 0.62f);
+    if (fightCtx_ && player_.guardHold > 0.0f)
+      ui_.arc(L.jump.c.x, L.jump.c.y, L.jump.r + 3 * S, L.jump.r + 7 * S, 0, kTau * clamp(player_.guardHold / 0.28f, 0.0f, 1.0f), withAlpha(theme::kWarn, a));
+    if (player_.blocking) ui_.arc(L.jump.c.x, L.jump.c.y, L.jump.r + 3 * S, L.jump.r + 7 * S, 0, kTau, withAlpha(kMint, a));
+  }
   const bool captions = settings_.hints && time_ < 90.0f;   // button captions only while learning the controls
   if (captions) ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r + 4 * S, 14 * S, C(1, 1, 1, 0.65f * a), Align::Center);
   // primary action: attack with the current weapon (fist / melee / firearm)

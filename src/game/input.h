@@ -41,7 +41,7 @@ struct InputFrame {
   bool wheelHeld = false, wheelPressed = false, wheelReleased = false;
   Vec2 wheelPos;
   bool interactHeld = false, enterExitHeld = false, cameraHeld = false, wheelBtnHeld = false, pauseHeld = false;
-  bool attackPressed = false, attackHeld = false, reloadPressed = false, jumpPressed = false;
+  bool attackPressed = false, attackHeld = false, reloadPressed = false, jumpPressed = false, jumpHeld = false;
   std::vector<UiPointer> ui;  // pointers for menus
 };
 

@@ -136,6 +136,7 @@ struct CharAnim {
   float rateScale = 1.0f;                // per-NPC variation
   float talk = 0, reach = 0, refuel = 0, crouch = 0, wave = 0;
   float lean = 0, headYaw = 0;
+  float guard = 0, guardTarget = 0;      // both fists up in front of the face
   float talkTarget = 0, reachTarget = 0, refuelTarget = 0, crouchTarget = 0, waveTarget = 0;
   float leanTarget = 0, headYawTarget = 0;
   float gestureClock = 0;

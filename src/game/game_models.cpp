@@ -189,6 +189,7 @@ void Game::emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, V
   d.material = m.material;
   d.lod = modelLod(m, dist);
   d.transform = yawMatrix(pos, yaw) * scaleM({scale, scale, scale});
+  if (in.rollPitch != 0.0f) d.transform = yawMatrix(pos, yaw) * Mat4::translation({0, 0.85f * scale, 0}) * rotX(-in.rollPitch) * Mat4::translation({0, -0.85f * scale, 0}) * scaleM({scale, scale, scale});   // tuck roll
   d.boneOffset = off;
   d.tint = tint;
   d.params = {0, 0, 1, 1};
@@ -358,6 +359,12 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       ai.req = &player_.animReq; ai.reqSpeed = player_.animReqSpeed; ai.reqUpper = player_.animReqUpper; ai.reqHold = player_.animReqHold;
       ai.lying = player_.down && player_.animReq < 0 && a.action != kActKnockDown && player_.dead;
       ai.weapon = player_.weapon;
+      a.guardTarget = player_.blocking ? 1.0f : 0.0f;
+      if (player_.dodgeT >= 0) {
+        a.crouchTarget = 0.9f;
+        float k = clamp(player_.dodgeT / 0.5f, 0.0f, 1.0f);
+        ai.rollPitch = kTau * (k * k * (3.0f - 2.0f * k));
+      }
       ai.airborne = player_.airborne; ai.airPhase = player_.airT / 0.836f; ai.dead = player_.dead;
       ai.combat = (player_.weapon > 0 && !isFirearm(player_.weapon)) || player_.attackT >= 0 || player_.comboWindow > 0;
       if (m && visible(pos, 2.0f)) emitCharacter(fd, *m, a, pos, player_.yaw, 1.0f, player_.speed, dt, true, {0, 0, 0, 0}, ai);

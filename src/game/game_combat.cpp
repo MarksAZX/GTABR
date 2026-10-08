@@ -124,12 +124,24 @@ int Game::findAimTarget(Vec2 from, Vec2 dir, float range, float cosCone, bool pr
 }
 
 // ------------------------------------------------------------------------------------------------ damage
-void Game::applyDamage(ActorRef target, const DamageInfo& d) {
+void Game::applyDamage(ActorRef target, const DamageInfo& dIn) {
+  DamageInfo d = dIn;
   const bool byPlayer = d.attacker.kind == ActorKind::Player;
   if (target.kind == ActorKind::Player) {
     Player& p = player_;
     if (p.dead) return;
+    if (p.dodgeT >= 0 && p.dodgeT < 0.4f) return;   // rolling: the blow finds nothing
     float mul = p.vehicle >= 0 && d.type == DamageType::Bullet ? 0.6f : 1.0f;   // the car body absorbs some rounds
+    if (p.blocking && d.type != DamageType::RunOver && d.type != DamageType::Crash && d.type != DamageType::Bullet && d.dir.dot(fwd2(p.yaw)) < -0.1f) {
+      // guard up and the attack comes from the front: most of it is absorbed, at a cost in stamina
+      p.stamina = std::max(0.0f, p.stamina - d.amount * 0.8f);
+      mul = 0.22f;
+      d.knockback *= 0.25f;
+      spawnImpact({p.pos.x + fwd2(p.yaw).x * 0.5f, 1.2f, p.pos.y + fwd2(p.yaw).y * 0.5f}, 4);
+      audio_.play("metal", {p.pos.x, 1.2f, p.pos.y}, 0.5f, 1.3f);
+      cam_.kick(0.3f);
+      if (p.stamina <= 0.5f) { p.blocking = false; p.guardHold = 0; p.hitStun = 0.5f; toast("Guarda quebrada", "bolt", rgba(0.93f, 0.72f, 0.40f)); }
+    }
     p.health -= d.amount * mul;
     p.hurtTimer = 0.6f;
     healthShow_ = 4.0f;
@@ -273,8 +285,9 @@ void Game::startMelee(ActorRef who, int kind) {
 bool Game::meleeStrike(ActorRef attacker, Vec2 pos, float yaw, int weapon, int kind) {
   const WeaponDef& w = weaponDef(weapon);
   float range = w.range + (kind == 2 ? 0.25f : 0.0f);
-  float dmg = w.damage * (kind == 2 ? 1.6f : 1.0f);
-  float knock = w.knockback * (kind == 2 ? 2.2f : 1.0f);
+  float power = attacker.kind == ActorKind::Player ? strikePower_ : 1.0f;
+  float dmg = w.damage * (kind == 2 ? 1.6f : 1.0f) * power;
+  float knock = w.knockback * (kind == 2 ? 2.2f : 1.0f) * (0.8f + 0.2f * power);
   Vec2 fwd = fwd2(yaw);
   const float cosArc = std::cos(55.0f * kDeg2Rad);
   bool indoors = attacker.kind == ActorKind::Player ? player_.indoors : npcs_[attacker.index].interior;
@@ -316,7 +329,13 @@ bool Game::meleeStrike(ActorRef attacker, Vec2 pos, float yaw, int weapon, int k
   const char* snd = w.sound;
   if (best.kind == ActorKind::Vehicle) snd = "metal";
   audio_.play(snd, at, 0.9f, 0.9f + 0.2f * (float)(rng_.uni()));
-  if (attacker.kind == ActorKind::Player) cameraShake_ = std::max(cameraShake_, 0.18f);
+  if (attacker.kind == ActorKind::Player) {
+    cameraShake_ = std::max(cameraShake_, 0.18f + 0.1f * (power - 1.0f));
+    // impact feedback: a short freeze on the blow and a lens punch, heavier for kicks / weapons / the finisher
+    hitstop_ = std::max(hitstop_, (kind == 1 ? 0.055f : 0.085f) * power);
+    cam_.kick(0.55f * power);
+    spawnImpact(at, 3);
+  } else if (best.kind == ActorKind::Player) { hitstop_ = std::max(hitstop_, 0.04f); cam_.kick(0.35f); }
   emitEvent(EventKind::Assault, pos, 12.0f, attacker, best, 0);
   return true;
 }
@@ -386,7 +405,47 @@ void Game::updatePlayerAttack(float dt, const InputFrame& in) {
   p.comboWindow = std::max(0.0f, p.comboWindow - dt);
   p.aimHold = std::max(0.0f, p.aimHold - dt);
   p.hitStun = std::max(0.0f, p.hitStun - dt);
-  if (p.dead || p.vehicle >= 0 || p.entering || p.exiting || p.down || p.swimming) { p.attackT = -1; p.reloadT = -1; p.aimHold = 0; return; }
+  if (p.dead || p.vehicle >= 0 || p.entering || p.exiting || p.down || p.swimming) {
+    p.attackT = -1; p.reloadT = -1; p.aimHold = 0; p.dodgeT = -1; p.blocking = false; p.guardHold = 0; fightCtx_ = false;
+    return;
+  }
+  // ---- fight context: someone hostile is close, or we just struck / got hit
+  {
+    bool ctx = p.attackT >= 0 || p.comboWindow > 0 || p.hitStun > 0 || p.dodgeT >= 0;
+    for (const Npc& n : npcs_)
+      if (!n.despawn && n.state == NpcState::Fight && n.target.kind == ActorKind::Player && n.interior == p.indoors && (n.pos - p.pos).length() < 9.0f) { ctx = true; break; }
+    fightCtx_ = ctx;
+  }
+  // ---- defence: tap = dodge roll, hold = guard (the jump button changes meaning during a fight)
+  if (fightCtx_ || p.guardHold > 0) {
+    if (in.jumpHeld) p.guardHold += dt;
+    else {
+      if (p.guardHold > 0 && p.guardHold < 0.28f && p.dodgeT < 0 && p.stamina >= 12.0f && p.hitStun <= 0) {
+        p.dodgeT = 0;
+        p.dodgeDir = in.move.length() > 0.3f ? p.vel.normalized() : fwd2(p.yaw) * -1.0f;
+        if (p.dodgeDir.lengthSq() < 0.5f) p.dodgeDir = fwd2(p.yaw) * -1.0f;
+        p.stamina -= 12.0f; p.staminaCooldown = std::max(p.staminaCooldown, 0.6f); staminaShow_ = 2.5f;
+        p.attackT = -1; p.reloadT = -1;
+        audio_.play("swing", {p.pos.x, 1.0f, p.pos.y}, 0.4f, 1.5f);
+      }
+      p.guardHold = 0;
+    }
+  }
+  p.blocking = fightCtx_ && in.jumpHeld && p.guardHold >= 0.28f && p.dodgeT < 0 && p.stamina > 1.0f && !isFirearm(p.weapon);
+  if (p.blocking) { p.stamina = std::max(0.0f, p.stamina - 5.0f * dt); staminaShow_ = 2.5f; p.attackT = -1; p.targetYaw = p.targetYaw; }
+  if (p.dodgeT >= 0) {
+    p.dodgeT += dt;
+    float k = clamp(1.0f - p.dodgeT / 0.5f, 0.0f, 1.0f);
+    phys::moveCircle(world_, p.pos, p.dodgeDir * (8.5f * k * k + 1.5f) * dt, 0.32f);
+    p.targetYaw = yawFromDir(p.dodgeDir);
+    if (p.dodgeT >= 0.5f) { p.dodgeT = -1; p.comboWindow = 0.2f; }
+    return;
+  }
+  // strike lunge: the body steps into the blow
+  if (p.attackT >= 0 && p.lunge > 0.0f && p.attackT < p.attackDur * 0.45f) {
+    float k = 1.0f - p.attackT / (p.attackDur * 0.45f);
+    phys::moveCircle(world_, p.pos, fwd2(p.yaw) * (p.lunge * k) * dt, 0.32f);
+  }
   const WeaponDef& w = weaponDef(p.weapon);
   const bool firearm = w.magazine > 0;
 
@@ -414,6 +473,7 @@ void Game::updatePlayerAttack(float dt, const InputFrame& in) {
     float hitAt = p.attackDur * (p.attackKind == 2 ? 0.5f : (p.attackKind == 3 ? w.hitTime : 0.45f));
     if (!p.attackHit && p.attackT >= hitAt) {
       p.attackHit = true;
+      strikePower_ = p.strikePower;
       meleeStrike({ActorKind::Player, 0}, p.pos, p.yaw, p.attackKind == 2 ? kWpnFists : p.weapon, p.attackKind);
     }
     if (p.attackT >= p.attackDur) { p.attackT = -1; p.comboWindow = 0.45f; }
@@ -453,11 +513,25 @@ void Game::updatePlayerAttack(float dt, const InputFrame& in) {
   int t = findAimTarget(p.pos, facing, 3.0f, std::cos(75.0f * kDeg2Rad), true);
   if (t >= 0) p.targetYaw = p.yaw = yawFromDir(npcs_[t].pos - p.pos);
   int kind = 3;
+  strikePower_ = 1.0f;
+  p.lunge = 0.0f;
+  p.combo = p.comboWindow > 0 ? (p.combo + 1) % 4 : 0;
+  float slow = 1.0f;
   if (p.weapon == kWpnFists) {
-    p.combo = p.comboWindow > 0 ? (p.combo + 1) % 3 : 0;
-    kind = p.combo == 2 ? 2 : 1;
+    if (p.running && p.speed > 4.0f) { kind = 2; strikePower_ = 1.5f; p.lunge = 6.0f; p.combo = 3; }   // flying kick out of a sprint
+    else switch (p.combo) {
+      case 0: kind = 1; p.lunge = 1.4f; break;                                      // jab
+      case 1: kind = 1; strikePower_ = 1.15f; p.lunge = 1.8f; break;                // cross
+      case 2: kind = 2; strikePower_ = 1.1f; p.lunge = 2.2f; break;                 // kick
+      default: kind = 1; strikePower_ = 1.6f; p.lunge = 2.6f; slow = 1.3f; break;   // haymaker finisher
+    }
+  } else {
+    // weapons: two quick swings and a heavy overhead finisher
+    if (p.combo == 3) { strikePower_ = 1.55f; p.lunge = 2.4f; slow = 1.3f; } else p.lunge = 1.2f;
   }
   startMelee({ActorKind::Player, 0}, kind);
+  p.strikePower = strikePower_;
+  if (slow > 1.0f) p.attackDur *= slow;
 }
 
 void Game::updateCombat(float dt, const InputFrame& in) {
