@@ -694,6 +694,21 @@ void Game::drawMapTab(float x, float y, float w, float h) {
   if (wanted_ > 0)
     for (const Npc& n : npcs_)
       if (n.police && !n.despawn && n.state != NpcState::Dead) marker(n.pos, "dot", std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kHot : rgba(0.5f, 0.7f, 1.0f), 16 * S);
+  // saved places
+  for (size_t i = 0; i < favs_.size(); ++i) marker(favs_[i].pos, favIcon(favs_[i].icon), rgba(1.0f, 0.82f, 0.36f), 30 * S, favs_[i].name);
+  // road route to the destination: pink dots along the street polyline
+  if (waypoint_.active && route_.size() >= 2) {
+    const Color rc = rgba(0.97f, 0.55f, 0.72f, 0.95f);
+    float stepPx = 9 * S;
+    for (size_t i = 0; i + 1 < route_.size(); ++i) {
+      Vec2 a = toScreen(route_[i]), b = toScreen(route_[i + 1]);
+      float len = (b - a).length();
+      for (float t = 0; t < len; t += stepPx) {
+        Vec2 q = a + (b - a) * (t / std::max(len, 1e-3f));
+        if (inside(q, 4 * S)) ui_.circle(q.x, q.y, 3.4f * S, rc);
+      }
+    }
+  }
   if (waypoint_.active) marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", kHot, 38 * S, waypoint_.name);
   // player
   {
@@ -715,10 +730,39 @@ void Game::drawMapTab(float x, float y, float w, float h) {
   pill(c, rx, by, bs, bs, "+", 2801);
   pill(c, rx + bs + 10 * S, by, bs, bs, "-", 2802);
   pill(c, rx + (bs + 10 * S) * 2, by, rw - (bs + 10 * S) * 2, bs, "CENTRALIZAR", 2803);
-  if (waypoint_.active) pill(c, rx, by + bs + 10 * S, rw, 46 * S, "REMOVER MARCADOR", 2804, false, true, kHot);
-  float ly = by + bs + (waypoint_.active ? 76 : 28) * S;
+  float wy = by + bs + 10 * S;
+  if (waypoint_.active) {
+    float hw = (rw - 10 * S) * 0.5f;
+    pill(c, rx, wy, hw, 46 * S, "SALVAR LOCAL", 2805, true);
+    pill(c, rx + hw + 10 * S, wy, hw, 46 * S, "REMOVER", 2804, false, true, kHot);
+    wy += 56 * S;
+    if (route_.size() >= 2) {
+      float L = 0;
+      for (size_t i = 0; i + 1 < route_.size(); ++i) L += (route_[i + 1] - route_[i]).length();
+      ui_.text(false, "Rota pelas ruas: " + (L >= 1000 ? fmtFloat(L / 1000.0f, 1) + " km" : std::to_string((int)L) + " m"), rx, wy, 17 * S, dimCol(c), Align::Left);
+      wy += 28 * S;
+    }
+  }
+  // saved places: tap to route there, x to forget
+  if (!favs_.empty()) {
+    ui_.text(false, "LOCAIS SALVOS", rx, wy + 4 * S, 14 * S, dimCol(c), Align::Left);
+    wy += 26 * S;
+    for (size_t i = 0; i < favs_.size() && i < 5; ++i) {
+      float rh2 = 40 * S;
+      bool pr = pressedUi_ == 2810 + (int)i;
+      ui_.rect(rx, wy, rw - 50 * S, rh2, pr ? kRowHot : kRow, 10 * S, 1.0f * S, kLine);
+      ui_.icon(favIcon(favs_[i].icon), rx + 20 * S, wy + rh2 * 0.5f, 20 * S, rgba(1.0f, 0.82f, 0.36f));
+      ui_.text(false, favs_[i].name, rx + 40 * S, wy + 9 * S, 17 * S, kInk, Align::Left);
+      uiRects_.push_back({Vec4(rx, wy, rw - 50 * S, rh2), 2810 + (int)i});
+      ui_.rect(rx + rw - 42 * S, wy, 42 * S, rh2, pressedUi_ == 2820 + (int)i ? kRowHot : kRow, 10 * S, 1.0f * S, kLine);
+      ui_.icon("close", rx + rw - 21 * S, wy + rh2 * 0.5f, 18 * S, kHot);
+      uiRects_.push_back({Vec4(rx + rw - 42 * S, wy, 42 * S, rh2), 2820 + (int)i});
+      wy += rh2 + 6 * S;
+    }
+  }
+  float ly = wy + 12 * S;
   struct L { const char* icon; const char* text; Color col; };
-  const L legend[] = {{"cart", "Loja", kAcc}, {"fuel", "Posto", kOk}, {"wrench", "Oficina", kAcc}, {"car", "Veículo", kInk}, {"pin", "Marcador", kHot}};
+  const L legend[] = {{"cart", "Loja", kAcc}, {"fuel", "Posto", kOk}, {"wrench", "Oficina", kAcc}, {"pin", "Destino", kHot}, {"star", "Local salvo", rgba(1.0f, 0.82f, 0.36f)}};
   for (const L& l : legend) {
     ui_.icon(l.icon, rx + 14 * S, ly + 14 * S, 24 * S, l.col);
     ui_.text(false, l.text, rx + 40 * S, ly + 3 * S, 18 * S, dimCol(c), Align::Left);
@@ -869,7 +913,27 @@ void Game::menuAction(int id) {
   if (id == 2801) { mapZoom_ *= 1.4f; return; }
   if (id == 2802) { mapZoom_ /= 1.4f; return; }
   if (id == 2803) { mapZoom_ = 0; return; }
-  if (id == 2804) { waypoint_.active = false; toast("Marcador removido", "pin"); return; }
+  if (id == 2804) { waypoint_.active = false; route_.clear(); toast("Marcador removido", "pin"); return; }
+  if (id == 2805 && waypoint_.active) {
+    if (favs_.size() >= 8) { toast("Limite de 8 locais salvos", "close", kHot); return; }
+    Fav f;
+    f.pos = {waypoint_.pos.x, waypoint_.pos.z};
+    f.name = waypoint_.name;
+    f.icon = (int)favs_.size();
+    favs_.push_back(f);
+    toast("Local salvo|" + f.name, "star", kOk);
+    return;
+  }
+  if (id >= 2810 && id < 2818 && id - 2810 < (int)favs_.size()) {
+    const Fav& f = favs_[id - 2810];
+    waypoint_.active = true;
+    waypoint_.pos = {f.pos.x, world_.heightAt(f.pos.x, f.pos.y), f.pos.y};
+    waypoint_.name = f.name;
+    routeT_ = 0;
+    toast("Destino|" + f.name, "pin");
+    return;
+  }
+  if (id >= 2820 && id < 2828 && id - 2820 < (int)favs_.size()) { favs_.erase(favs_.begin() + (id - 2820)); toast("Local removido", "close"); return; }
   // ---- settings
   if (id >= 3000 && id < 3100) { applySettingStep(id); return; }
 }

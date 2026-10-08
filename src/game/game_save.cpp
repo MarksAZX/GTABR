@@ -93,6 +93,9 @@ bool Game::saveToSlot(int slot) {
   o << "location=" << locationName(player_.vehicle >= 0 ? vehicles_[player_.vehicle].pos : player_.pos, player_.indoors) << "\n";
   o << "progress=" << progress_ << "\nshops_visited=" << shopsVisited_ << "\ndriven=" << driven_ << "\n";
   o << "money=" << moneyCents_ << "\n";
+  o << "favN=" << favs_.size() << "\n";
+  for (size_t i = 0; i < favs_.size(); ++i)
+    o << "fav" << i << "x=" << favs_[i].pos.x << "\nfav" << i << "z=" << favs_[i].pos.y << "\nfav" << i << "i=" << favs_[i].icon << "\nfav" << i << "n=" << favs_[i].name << "\n";
   o << "xp=" << xp_ << "\nlevel=" << level_ << "\njobsDone=" << jobsDone_ << "\nearned=" << earned_ << "\n";
   o << "playerX=" << player_.pos.x << "\nplayerZ=" << player_.pos.y << "\nplayerYaw=" << player_.yaw << "\n";
   o << "indoors=" << (player_.indoors ? 1 : 0) << "\n";
@@ -125,6 +128,17 @@ void Game::applyStateFromFile(const KV& kv) {
   jobsDone_ = (int)numOf(kv, "jobsDone", 0);
   earned_ = (int)numOf(kv, "earned", 0);
   job_ = Job();
+  favs_.clear();
+  int fn = std::min(8, (int)numOf(kv, "favN", 0));
+  for (int i = 0; i < fn; ++i) {
+    std::string p = "fav" + std::to_string(i);
+    Fav f;
+    f.pos = {numOf(kv, (p + "x").c_str(), 0), numOf(kv, (p + "z").c_str(), 0)};
+    f.icon = (int)numOf(kv, (p + "i").c_str(), 0);
+    f.name = strOf(kv, (p + "n").c_str());
+    if (f.name.empty()) f.name = "Local";
+    favs_.push_back(f);
+  }
   player_.health = clamp(numOf(kv, "health", 100), 1.0f, 100.0f);
   player_.stamina = clamp(numOf(kv, "stamina", 100), 0.0f, 100.0f);
   for (int w = 1; w < kWeaponCount; ++w) {

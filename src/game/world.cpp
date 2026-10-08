@@ -5,6 +5,7 @@
 #include <functional>
 #include <map>
 
+#include "../core/fileio.h"
 #include "material_ids.h"
 #include "props3d.h"
 
@@ -106,7 +107,17 @@ class Gen {
 
   void decor(DecorKind k, const std::string& base, int dirs, Vec3 pos, float yaw, float scale = 1.0f, bool collide = false, float colR = 0.3f,
              float colH = 2.0f, int species = -1, int model = -1) {
-    if (species >= 0) {
+    int pm = species == 0 ? 0 : (species == 3 ? 1 : (model == 7 ? 2 : -1));
+    if (pm >= 0 && w_.propModelAvailable[pm]) {
+      // drawn as a Higgsfield 3D model near the camera; the procedural version only feeds the far HLOD
+      w_.propModels.push_back({pm, pos, yaw, scale});
+      if (species >= 0) {
+        MeshData scratch;
+        MeshBuilder b(&scratch);
+        MeshBuilder l = lodb(pos.x, pos.z);
+        buildTree3D(b, &l, rng_, species, pos, yaw, scale);
+      }
+    } else if (species >= 0) {
       MeshBuilder b = mb(pos.x, pos.z);
       MeshBuilder l = lodb(pos.x, pos.z);
       buildTree3D(b, &l, rng_, species, pos, yaw, scale);
@@ -818,7 +829,10 @@ class Gen {
     w_.walkable.push_back(centre);
     w_.mapPlaza.push_back(centre);
     w_.walkable.push_back(L);
-    {
+    if (w_.propModelAvailable[3]) {
+      w_.propModels.push_back({3, {pl.cx(), kH, pl.cz()}, rng_.range(0.0f, kTau), 1.25f});
+      collider(AABB({pl.cx() - 1.9f, 0, pl.cz() - 1.9f}, {pl.cx() + 1.9f, 2.0f, pl.cz() + 1.9f}), ColKind::Prop);
+    } else {
       // fountain: basin, water, central column
       MeshBuilder b = mb(pl.cx(), pl.cz(), {0.85f, 0.85f, 0.85f});
       b.box(AABB({pl.cx() - 1.8f, kH, pl.cz() - 1.8f}, {pl.cx() + 1.8f, kH + 0.6f, pl.cz() + 1.8f}), mat::concrete, mat::concrete, 2.0f);
@@ -2014,6 +2028,8 @@ static void bakeProbes(World& w) {
 void buildWorld(World& w, uint32_t seed) {
   w = World();
   w.seed = seed;
+  static const char* kPropFiles[4] = {"data/models/mangueira.gmesh", "data/models/coqueiro.gmesh", "data/models/guardasol.gmesh", "data/models/chafariz.gmesh"};
+  for (int i = 0; i < 4; ++i) w.propModelAvailable[i] = fileio::assetExists(kPropFiles[i]);
   Gen g(w, seed);
   g.run();
   scatterDecals(w, seed);

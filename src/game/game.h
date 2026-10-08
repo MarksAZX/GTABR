@@ -436,6 +436,14 @@ class Game {
   Job job_;
   int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
   float statusBottom_ = 200;
+  // map: saved places and the road route to the destination
+  struct Fav { Vec2 pos; std::string name; int icon = 0; };
+  std::vector<Fav> favs_;
+  std::vector<Vec2> route_;
+  float routeT_ = 0;
+  Vec3 routeDest_;
+  void updateRoute(float dt);
+  static const char* favIcon(int i);
   Mat4 prevVP_;
   Vec3 prevEye_;
   bool prevVPValid_ = false;
@@ -684,7 +692,7 @@ class Game {
   void emitVehicle(gfx::FrameData& fd, int model, int color, Vec3 pos, float yaw, float pitch, float roll, float steer, float spin,
                    bool lightsOn, bool braking, int signal, bool reversing);
   struct PendingLight { Vec3 pos, dir, color; float radius, cone, dist; };
-  std::vector<ModelAsset> charModels_, carModels_;
+  std::vector<ModelAsset> charModels_, carModels_, propModels_;
   std::vector<AnimClip> clips_;
   Animator animator_;
   CharAnim playerAnim_;

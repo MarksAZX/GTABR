@@ -28,6 +28,8 @@ CARS = {  # name: (length m, wheels zf,zr,yc,r,track, paint rule)
 }
 CHARS = {"protagonista": 1.78, "frentista": 1.74, "atendente": 1.65, "pedestre_mulher": 1.64,
          "mecanico": 1.76, "pedestre_homem": 1.75, "policial": 1.80}
+# static props / trees from Higgsfield (Meshy image-to-3D, PBR textured): name -> height in metres
+PROPS = {"mangueira": 8.0, "coqueiro": 9.0, "guardasol": 2.5, "chafariz": 2.8}
 CLIPS = {"idle": "protagonista_idle.glb", "walk": "protagonista_walk.glb", "run": "protagonista_run.glb",
          # action clips (Meshy library on the same rig): runtime ActionId order lives in src/game/model.h
          "punch": "protagonista_punch.glb", "kick": "protagonista_kick.glb", "hit": "protagonista_hit.glb",
@@ -109,11 +111,29 @@ def package(quality):
     print("  packaged:", sorted(os.listdir(OUT)))
 
 
+def props(quality):
+    """Convert + package only the static props (does not touch the rig-fitted characters)."""
+    os.makedirs(WORK, exist_ok=True)
+    for n, h in PROPS.items():
+        src = os.path.join(SRC, n + ".glb")
+        if not os.path.exists(src):
+            print("  (missing)", n)
+            continue
+        run([MESHCONV, "mesh", src, os.path.join(WORK, n), "--kind", "prop", "--height", str(h)])
+        textures(n, 1024 if n in ("mangueira", "coqueiro") else 512, None, quality)
+        shutil.copy(os.path.join(WORK, n + ".gmesh"), os.path.join(OUT, n + ".gmesh"))
+        print("  prop", n, "packaged")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-convert", action="store_true")
     ap.add_argument("--quality", default="medium")
+    ap.add_argument("--props", action="store_true", help="only the static props")
     a = ap.parse_args()
+    if a.props:
+        props(a.quality)
+        sys.exit(0)
     if not a.skip_convert:
         convert()
     package(a.quality)

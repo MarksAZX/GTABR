@@ -211,22 +211,30 @@ void Game::drawMinimap() {
         if (c.police && !c.despawn && c.state != NpcState::Dead) marker(c.pos, "dot", std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky, 16 * S, false);
     for (const Pickup& k : pickups_)
       if (k.active) marker({k.pos.x, k.pos.z}, weaponDef(k.weapon).icon, C(1.0f, 0.85f, 0.4f, 0.95f), 20 * S, false);
+    for (const Fav& f : favs_) marker(f.pos, favIcon(f.icon), C(1.0f, 0.82f, 0.36f, 0.95f), 22 * S, false);
     if (waypoint_.active) {
-      // route hint: a pink trail of dots toward the destination (straight line; follows the map rotation)
-      Vec2 rel = Vec2{waypoint_.pos.x, waypoint_.pos.z} - pos;
-      Vec2 m{rel.dot(right) * k, -rel.dot(fwd) * k};
-      float len = m.length(), half = size * 0.5f - 10 * S;
-      if (len > 1.0f) {
-        Vec2 dir = m * (1.0f / len);
-        for (float t = 22 * S; t < std::min(len, half * 1.4f); t += 13 * S) {
-          Vec2 q = dir * t;
-          if (std::fabs(q.x) > half || std::fabs(q.y) > half) break;
-          ui_.circle(c.x + q.x, c.y + q.y, 3.6f * S, C(0.97f, 0.69f, 0.78f, 0.95f * a));
+      // route along the streets: pink dots following the road polyline, clipped to the map
+      auto toMap = [&](Vec2 w) { Vec2 rel = w - pos; return Vec2{rel.dot(right) * k, -rel.dot(fwd) * k}; };
+      float half = size * 0.5f - 8 * S;
+      for (size_t i = 0; i + 1 < route_.size(); ++i) {
+        Vec2 a0 = toMap(route_[i]), b0 = toMap(route_[i + 1]);
+        float len = (b0 - a0).length();
+        for (float t = (i == 0 ? 14 * S : 0.0f); t < len; t += 11 * S) {
+          Vec2 q = a0 + (b0 - a0) * (t / std::max(len, 1e-3f));
+          if (std::fabs(q.x) > half || std::fabs(q.y) > half) continue;
+          ui_.circle(c.x + q.x, c.y + q.y, 3.4f * S, C(0.97f, 0.55f, 0.72f, 0.95f * a));
         }
       }
       marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", C(0.97f, 0.69f, 0.78f, 1), 34 * S, true);
     }
     if (cityEvent_.active) marker({cityEvent_.pos.x, cityEvent_.pos.z}, "car", theme::kWarn, 26 * S, true);
+  }
+  // distance left along the route, in the corner of the map
+  if (waypoint_.active && !player_.indoors && route_.size() >= 2) {
+    float L = 0;
+    for (size_t i = 0; i + 1 < route_.size(); ++i) L += (route_[i + 1] - route_[i]).length();
+    std::string d = L >= 1000 ? fmtFloat(L / 1000.0f, 2) + " km" : std::to_string((int)L) + " m";
+    ui_.text(true, d, x + 14 * S, y + 10 * S, 20 * S, C(1, 1, 1, 0.95f * a), Align::Left, C(0, 0, 0, 0.7f * a), 0.14f);
   }
   // player heading wedge + dot
   float heading = (player_.vehicle >= 0 ? vehicles_[player_.vehicle].yaw : player_.yaw) - yaw;

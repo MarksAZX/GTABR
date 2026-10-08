@@ -480,6 +480,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateLife(dt);
   updateJobs(dt);
   updateCash(dt);
+  updateRoute(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
   if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;

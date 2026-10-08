@@ -5,12 +5,14 @@
 
 #include "../core/log.h"
 #include "game.h"
+#include "../core/fileio.h"
 
 namespace gtabr {
 
 namespace {
 const char* kCharModels[] = {"protagonista", "frentista", "atendente", "pedestre_mulher", "mecanico", "pedestre_homem", "policial"};
 const char* kCarModels[] = {"compacto", "sedan", "picape", "viatura"};
+const char* kPropModels[] = {"mangueira", "coqueiro", "guardasol", "chafariz"};   // order = World::PropModel::kind
 const char* kClipFiles[kClipCount] = {"data/models/anim_idle.ganim", "data/models/anim_walk.ganim", "data/models/anim_run.ganim",
                                      "data/models/anim_swim.ganim", "data/models/anim_swimidle.ganim", "data/models/anim_combat.ganim",
                                      "data/models/anim_die.ganim", "data/models/anim_turnl.ganim", "data/models/anim_turnr.ganim"};
@@ -52,7 +54,13 @@ void Game::queueModels() {
     loadModel(std::string("data/models/") + n + ".gmesh", m);
     carModels_.push_back(std::move(m));
   }
-  for (auto* list : {&charModels_, &carModels_})
+  for (const char* n : kPropModels) {
+    ModelAsset m;
+    m.name = n;
+    if (fileio::assetExists(std::string("data/models/") + n + ".gmesh")) loadModel(std::string("data/models/") + n + ".gmesh", m);
+    propModels_.push_back(std::move(m));
+  }
+  for (auto* list : {&charModels_, &carModels_, &propModels_})
     for (ModelAsset& m : *list) {
       if (!m.ok) continue;
       assets_.queueTexture("model:" + m.name + "_a", "models/" + m.name + "_a.gtex", gfx::SamplerKind::Repeat);
@@ -76,7 +84,7 @@ void Game::queueModels() {
 }
 
 void Game::finishModels() {
-  for (auto* list : {&charModels_, &carModels_})
+  for (auto* list : {&charModels_, &carModels_, &propModels_})
     for (ModelAsset& m : *list)
       if (m.ok)
         uploadModel(*r_, m, assets_.texture("model:" + m.name + "_a"), assets_.texture("model:" + m.name + "_n"),
@@ -423,6 +431,30 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       }
       emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, look, ai);
       npcModelDrawn_[n.id] = true;
+    }
+  }
+
+  // ---- Higgsfield trees and props (only where the chunk is drawn in full detail; far chunks keep the HLOD silhouettes)
+  if (!indoors) {
+    Vec3 focus = cam_.focus();
+    for (const World::PropModel& p : world_.propModels) {
+      if (p.kind < 0 || p.kind >= (int)propModels_.size()) continue;
+      const ModelAsset& pm = propModels_[p.kind];
+      if (!pm.ok || !pm.gpu.valid()) continue;
+      float ccx = (std::floor(p.pos.x / World::kChunk) + 0.5f) * World::kChunk, ccz = (std::floor(p.pos.z / World::kChunk) + 0.5f) * World::kChunk;
+      if (std::sqrt((ccx - focus.x) * (ccx - focus.x) + (ccz - focus.z) * (ccz - focus.z)) > lodDistance_) continue;
+      float rad = pm.bounds.extent().length() * p.scale;
+      if (!visible(p.pos + Vec3{0, rad * 0.5f, 0}, rad)) continue;
+      float dist = (p.pos - cam_.eye()).length();
+      gfx::ModelDraw d;
+      d.model = pm.gpu;
+      d.material = pm.material;
+      d.lod = modelLod(pm, dist);
+      d.transform = yawMatrix(p.pos, p.yaw) * scaleM({p.scale, p.scale, p.scale});
+      d.params = {0, 0, 1, 1};
+      d.castShadow = dist < shadowRadius_ * 1.3f;
+      fd.models.push_back(d);
+      stats_.drawnModels++;
     }
   }
 

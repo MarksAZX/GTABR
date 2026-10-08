@@ -124,6 +124,10 @@ struct World {
   std::string cityName;
 
   // chunk meshes (CPU) -> GPU handles are created by the game after generation
+  // high-detail static models placed by the generator and drawn as 3D models (kinds: 0 mangueira, 1 coqueiro, 2 guarda-sol, 3 chafariz)
+  struct PropModel { int kind; Vec3 pos; float yaw; float scale; };
+  std::vector<PropModel> propModels;
+  bool propModelAvailable[4] = {};
   struct Chunk { int cx, cz; MeshData mesh; MeshData lod; gfx::MeshHandle handle, lodHandle; AABB bounds; bool interior = false; bool resident = false; };
   std::vector<Chunk> chunks;
   MeshData interiorCeiling;

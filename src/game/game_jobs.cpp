@@ -117,3 +117,26 @@ void Game::updateJobs(float dt) {
 }
 
 }  // namespace gtabr
+
+namespace gtabr {
+const char* Game::favIcon(int i) {
+  static const char* k[4] = {"star", "pin", "car", "bag"};
+  return k[((i % 4) + 4) % 4];
+}
+
+// Road route from the player to the destination along the street grid (recomputed a few times a second or when either end moves).
+void Game::updateRoute(float dt) {
+  routeT_ -= dt;
+  if (!waypoint_.active || player_.indoors) { route_.clear(); return; }
+  Vec2 pp = player_.vehicle >= 0 ? vehicles_[player_.vehicle].pos : player_.pos;
+  bool destMoved = (Vec3{waypoint_.pos.x - routeDest_.x, 0, waypoint_.pos.z - routeDest_.z}).length() > 0.5f;
+  if (routeT_ > 0 && !destMoved && !route_.empty()) return;
+  routeT_ = 0.5f;
+  routeDest_ = waypoint_.pos;
+  Vec2 dest{waypoint_.pos.x, waypoint_.pos.z};
+  route_.clear();
+  route_.push_back(pp);
+  if ((dest - pp).length() < 25.0f) { route_.push_back(dest); return; }
+  for (const Vec2& p : world_.roadRoute(world_.nearestRoadPoint(pp), dest)) route_.push_back(p);
+}
+}  // namespace gtabr
