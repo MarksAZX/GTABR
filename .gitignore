@@ -16,3 +16,4 @@ tools/work/
 android/app/.cxx/
 *.apk
 entrega/
+*.zip

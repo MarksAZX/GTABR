@@ -118,3 +118,12 @@ A resolução dinâmica é opcional.
 - Os pesos de pele e as juntas são gerados automaticamente (`tools/rigfit.py`), não pintados à mão.
 - Texturas de albedo vêm do GPT Image; normais/rugosidade são derivadas com micro-relevo autoral por material. Não há mapas PBR escaneados.
 - Só houve teste em renderizador por software (lavapipe). O desempenho real precisa ser medido em aparelho.
+
+## 0.7.0
+
+- Bicos de entrega (balcão das lojas), XP, níveis e desconto nas lojas; chip de nível na HUD.
+- Conversa limpa, sem fundo, com o **modelo 3D do personagem renderizado ao vivo** (passe offscreen próprio com câmera e luz de estúdio).
+- Mira (ponto) com arma de fogo; correr em 3 toques (corre, corre rápido, para); movimento mais pesado.
+- NPCs derrubados pelo jogador soltam dinheiro.
+- Salto contextual sobre obstáculos baixos, esquiva e bloqueio, hitstop, mundo vivo (lojas abrem/fecham, trânsito por hora).
+- O ZIP `Bairro-v0.7.0-completo.zip` (raiz do projeto, não versionado por causa do tamanho) traz todos os arquivos e o APK.
