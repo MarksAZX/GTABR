@@ -163,6 +163,8 @@ uint32_t VkCtx::findMemoryType(uint32_t bits, VkMemoryPropertyFlags props) const
   return 0xFFFFFFFFu;
 }
 
+GpuMemStats gGpuMem;
+
 Buffer VkCtx::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible) {
   Buffer b;
   b.size = size;
@@ -182,11 +184,15 @@ Buffer VkCtx::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, bool hos
   ai.memoryTypeIndex = mt;
   VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &b.mem));
   VK_CHECK(vkBindBufferMemory(device, b.buf, b.mem, 0));
+  b.alloc = mr.size;
+  gGpuMem.bytes += (long long)mr.size; gGpuMem.allocs++;
+  if (hostVisible) gGpuMem.hostBytes += (long long)mr.size;
   if (hostVisible) VK_CHECK(vkMapMemory(device, b.mem, 0, VK_WHOLE_SIZE, 0, &b.map));
   return b;
 }
 
 void VkCtx::destroyBuffer(Buffer& b) {
+  if (b.mem) { gGpuMem.bytes -= (long long)b.alloc; gGpuMem.allocs--; if (b.map) gGpuMem.hostBytes -= (long long)b.alloc; }
   if (b.map) vkUnmapMemory(device, b.mem);
   if (b.buf) vkDestroyBuffer(device, b.buf, nullptr);
   if (b.mem) vkFreeMemory(device, b.mem, nullptr);
@@ -217,6 +223,8 @@ Image VkCtx::createImage(uint32_t w, uint32_t h, uint32_t layers, uint32_t mips,
   if (ai.memoryTypeIndex == 0xFFFFFFFFu) ai.memoryTypeIndex = findMemoryType(mr.memoryTypeBits, 0);
   VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &im.mem));
   VK_CHECK(vkBindImageMemory(device, im.image, im.mem, 0));
+  im.alloc = mr.size;
+  gGpuMem.bytes += (long long)mr.size; gGpuMem.allocs++;
   VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
   vi.image = im.image;
   vi.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
@@ -227,6 +235,7 @@ Image VkCtx::createImage(uint32_t w, uint32_t h, uint32_t layers, uint32_t mips,
 }
 
 void VkCtx::destroyImage(Image& i) {
+  if (i.mem) { gGpuMem.bytes -= (long long)i.alloc; gGpuMem.allocs--; }
   if (i.view) vkDestroyImageView(device, i.view, nullptr);
   if (i.image) vkDestroyImage(device, i.image, nullptr);
   if (i.mem) vkFreeMemory(device, i.mem, nullptr);

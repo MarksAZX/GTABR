@@ -217,6 +217,26 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("night_posto_third");
     return 0;
   }
+  if (name == "memwalk") {
+    // memory stability while moving around: visit spots all over the city repeatedly; GPU memory must not keep growing
+    b.render = true;
+    const World& W = g.world();
+    b.idle(30);
+    long long first = 0, peakLate = 0;
+    for (int lap = 0; lap < 4; ++lap) {
+      for (int k = 0; k < 8; ++k) {
+        float t = (k + 0.5f) / 8.0f;
+        Vec2 sp{W.land.x0 + (W.land.x1 - W.land.x0) * t, W.land.z0 + (W.land.z1 - W.land.z0) * (k % 2 ? 0.25f : 0.75f)};
+        g.teleportPlayer(W.nearestRoadPoint(sp), 0);
+        b.idle(25);
+      }
+      LOGI("lap %d: gpu %.1f MB in %d allocations", lap, gfx::gGpuMem.bytes / 1048576.0, gfx::gGpuMem.allocs);
+      if (lap == 0) first = gfx::gGpuMem.bytes;
+      else peakLate = std::max(peakLate, (long long)gfx::gGpuMem.bytes);
+    }
+    CHECK(peakLate < first + 64ll * 1048576ll, "GPU memory stays bounded while moving around the city");
+    return g_failures;
+  }
   if (name == "stream") {
     // chunk residency: jumping across the city (and into a shop) makes the chunks around the player resident within a few
     // frames, and chunks far from it are released again; nothing is ever drawn from a destroyed buffer
@@ -1105,6 +1125,14 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.toggleCamera();
     b.idle(30);
     b.shot("life_accident");
+    return 0;
+  }
+  if (name == "loading") {
+    b.idle(10);
+    g.debugLoading = true;
+    b.idle(40);
+    b.shot("loading_screen");
+    g.debugLoading = false;
     return 0;
   }
   if (name == "advanced") {

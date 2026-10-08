@@ -159,6 +159,7 @@ struct FrameData {
     lights.clear();
     worldMeshes.clear(); shadowMeshes.clear(); sprites.clear(); spriteBatches.clear(); silhouettes.clear();
     silhouetteBatches.clear(); decals.clear(); ui.clear(); uiBatches.clear(); models.clear(); bones.clear();
+    portraitModels.clear(); portraitActive = false;
   }
 };
 

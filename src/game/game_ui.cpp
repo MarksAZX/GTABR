@@ -74,21 +74,70 @@ InputLayout Game::makeLayout() const {
 void Game::drawLoading(float dt) {
   (void)dt;
   float S = uiScale();
-  ui_.gradient(0, 0, screenW_, screenH_, C(0.05f, 0.07f, 0.12f), C(0.02f, 0.025f, 0.04f));
-  float cx = screenW_ * 0.5f, cy = screenH_ * 0.5f;
-  bool hasFont = assets_.fontBold.tex.valid();
-  if (hasFont) {
-    ui_.text(true, "BAIRRO", cx, cy - 120 * S, 120 * S, kWhite, Align::Center);
-    ui_.text(false, "Um MVP urbano brasileiro", cx, cy + 20 * S, 32 * S, kMuted, Align::Center);
+  const float W = screenW_, H = screenH_;
+  ui_.rect(0, 0, W, H, C(0.03f, 0.03f, 0.05f, 1.0f));
+  // full-bleed key art with a slow push-in (cover crop keeps its aspect on any screen)
+  gfx::TexHandle art = assets_.texture("loading_art");
+  float artA = 0.0f;
+  if (art.valid()) {
+    artA = 1.0f;
+    float imgAspect = 1024.0f / 576.0f, scrAspect = W / std::max(1.0f, H);
+    float zoom = 1.0f + 0.06f * std::min(1.0f, loadingAnim_ / 12.0f);
+    float uw = scrAspect < imgAspect ? scrAspect / imgAspect : 1.0f, vh = scrAspect < imgAspect ? 1.0f : imgAspect / scrAspect;
+    uw /= zoom; vh /= zoom;
+    UvRect r;
+    r.u0 = 0.5f - uw * 0.5f; r.u1 = 0.5f + uw * 0.5f; r.v0 = 0.5f - vh * 0.5f; r.v1 = 0.5f + vh * 0.5f; r.valid = true;
+    ui_.image(art, r, 0, 0, W, H, C(1, 1, 1, 1), 0);
   }
-  float p = assets_.progress() * 0.85f + (worldReady_ ? 0.15f : 0.0f);
-  float bw = 520 * S, bh = 8 * S;
-  ui_.rect(cx - bw / 2, cy + 100 * S, bw, bh, C(1, 1, 1, 0.14f), bh / 2);
-  ui_.rect(cx - bw / 2, cy + 100 * S, bw * clamp(p, 0.02f, 1.0f), bh, kAccent, bh / 2);
+  // cinematic grading: dark band at the bottom for the text, a soft vignette at the top
+  ui_.gradient(0, H * 0.58f, W, H * 0.42f, C(0, 0, 0, 0), C(0.02f, 0.01f, 0.03f, 0.78f));
+  bool hasFont = assets_.fontBold.tex.valid() && assets_.fontRegular.tex.valid();
+  float lx = 64 * S, by = H - 64 * S;
+  float p = assets_.progress() * 0.8f + (worldReady_ ? 0.2f : 0.0f);
+  if (phase_ == Phase::Switching) p = worldReady_ ? 1.0f : clamp(loadingAnim_ / 6.0f, 0.05f, 0.92f);
+  shownProgress_ += (p - shownProgress_) * std::min(1.0f, dt * 6.0f);
   if (hasFont) {
-    static const char* tips[] = {"Dica: o botão de câmera alterna entre Top Down e Terceira Pessoa.", "Dica: o posto fica no quarteirão a nordeste.",
-                                 "Dica: segure o botão ITENS para abrir a roda de itens.", "Dica: se o tanque secar, empurre... ou ande até o posto!"};
-    ui_.text(false, tips[(int)(loadingAnim_ / 3.0f) % 4], cx, cy + 140 * S, 24 * S, C(1, 1, 1, 0.5f), Align::Center);
+    ui_.text(true, "BAIRRO", lx, by - 190 * S, 96 * S, kWhite, Align::Left, C(0, 0, 0, 0.6f), 0.1f);
+    ui_.rect(lx + 4 * S, by - 82 * S, 72 * S, 3 * S, C(0.97f, 0.62f, 0.38f, 1.0f), 1.5f * S);
+    const char* step = !worldReady_ ? (phase_ == Phase::Switching ? "Gerando a nova ilha" : "Gerando a ilha: cidades, estradas e praias")
+                                    : (shownProgress_ < 0.85f ? "Carregando texturas e modelos 3D" : "Preparando as ruas");
+    ui_.text(true, step, lx, by - 66 * S, 26 * S, C(1, 1, 1, 0.95f), Align::Left);
+    ui_.text(false, std::to_string((int)std::lround(shownProgress_ * 100)) + "%", W - lx, by - 66 * S, 26 * S, C(1, 1, 1, 0.8f), Align::Right);
+  }
+  // progress line with a moving highlight
+  float bw = W - lx * 2, bh = 4 * S;
+  ui_.rect(lx, by - 22 * S, bw, bh, C(1, 1, 1, 0.16f), bh / 2);
+  ui_.hgradient(lx, by - 22 * S, bw * clamp(shownProgress_, 0.01f, 1.0f), bh, C(0.97f, 0.55f, 0.72f, 1), C(1.0f, 0.72f, 0.42f, 1), bh / 2);
+  float sweep = std::fmod(loadingAnim_ * 0.6f, 1.0f);
+  ui_.glow(lx + bw * clamp(shownProgress_, 0.01f, 1.0f) * sweep - 20 * S, by - 22 * S, 40 * S, bh, bh, 10 * S, C(1, 1, 1, 0.25f));
+  // tips card on the right, rotating every few seconds with a fade
+  if (hasFont) {
+    static const char* tips[] = {
+        "Toque uma vez em CORRER para correr, duas para disparar, três para parar.",
+        "Nos balcões das lojas pergunte por bicos: entregas pagam por distância.",
+        "Toque no mapa grande para marcar um destino: a rota segue as ruas.",
+        "Salve seus lugares favoritos no mapa e volte com um toque.",
+        "O fim de tarde na orla é o melhor horário para fotos.",
+        "Desative opções em Configurações → AVANÇADO se o aparelho esquentar.",
+        "Nas vielas o chão é de terra: cuidado com a lama em dias de chuva.",
+    };
+    const int nt = (int)(sizeof(tips) / sizeof(tips[0]));
+    float period = 5.0f;
+    int ti = (int)(loadingAnim_ / period) % nt;
+    float ph = std::fmod(loadingAnim_, period);
+    float ta = std::min(1.0f, ph * 3.0f) * std::min(1.0f, (period - ph) * 3.0f);
+    float cw = std::min(560 * S, W * 0.42f), ch = 96 * S, cx0 = W - lx - cw, cy0 = by - 190 * S;
+    ui_.rect(cx0, cy0, cw, ch, C(0.04f, 0.04f, 0.06f, 0.55f * ta), 16 * S, 1.0f * S, C(1, 1, 1, 0.12f * ta));
+    ui_.text(false, "DICA", cx0 + 20 * S, cy0 + 14 * S, 14 * S, C(0.97f, 0.62f, 0.38f, ta), Align::Left);
+    auto lines = wrapText(ui_, tips[ti], cw - 40 * S, 19 * S, false);
+    float ty = cy0 + 38 * S;
+    for (size_t i = 0; i < lines.size() && i < 2; ++i) { ui_.text(false, lines[i], cx0 + 20 * S, ty, 19 * S, C(1, 1, 1, 0.9f * ta), Align::Left); ty += 24 * S; }
+  }
+  // spinner (keeps moving even when a long step blocks the bar)
+  {
+    float sx = W - lx - 14 * S, sy = 54 * S, r0 = 12 * S;
+    float a0 = loadingAnim_ * 5.0f;
+    ui_.arc(sx, sy, r0 - 2.5f * S, r0, a0, a0 + 4.0f, C(1, 1, 1, 0.85f * (artA > 0 ? 1.0f : 0.6f)));
   }
 }
 

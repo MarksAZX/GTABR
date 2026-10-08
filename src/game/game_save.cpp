@@ -211,7 +211,7 @@ bool Game::saveSettings() const {
   o.precision(5);
   const Settings& s = settings_;
   o << "quality=" << s.quality << "\ndynamicRes=" << s.dynamicRes << "\nshadows=" << s.shadows << "\ndrawDistance=" << s.drawDistance
-    << "\nmotionBlur=" << s.motionBlur << "\ntaa=" << s.taa << "\nssao=" << s.ssao << "\ncontactShadows=" << s.contactShadows << "\nvolClouds=" << s.volClouds << "\nlightShafts=" << s.lightShafts << "\nfilmGrain=" << s.filmGrain << "\nchromAb=" << s.chromAb << "\nvignette=" << s.vignette << "\ncolorStyle=" << s.colorStyle << "\nsharpness=" << s.sharpness << "\nresScale=" << s.resScale << "\nfovScale=" << s.fovScale << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
+    << "\nmotionBlur=" << s.motionBlur << "\ntaa2=" << s.taa << "\nssao=" << s.ssao << "\ncontactShadows=" << s.contactShadows << "\nvolClouds=" << s.volClouds << "\nlightShafts=" << s.lightShafts << "\nfilmGrain=" << s.filmGrain << "\nchromAb=" << s.chromAb << "\nvignette=" << s.vignette << "\ncolorStyle=" << s.colorStyle << "\nsharpness=" << s.sharpness << "\nresScale=" << s.resScale << "\nfovScale=" << s.fovScale << "\nreflections=" << s.reflections << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
     << "\nmaster=" << s.master << "\nsfx=" << s.sfx << "\nambience=" << s.ambience << "\nmuted=" << s.muted
     << "\nsensitivity=" << s.sensitivity << "\ninvertY=" << s.invertY << "\nisometric=" << s.isometric << "\nhudScale=" << s.hudScale << "\nhudOpacity=" << s.hudOpacity
     << "\naimAssist=" << s.aimAssist << "\nweatherMode=" << s.weatherMode << "\ndayCycle=" << s.dayCycle << "\nshowMinimap=" << s.showMinimap
@@ -233,8 +233,9 @@ bool Game::loadSettings() {
   s.bloom = numOf(kv, "bloom", 1) > 0.5f;
   s.reflections = numOf(kv, "reflections", 1) > 0.5f;
   s.motionBlur = numOf(kv, "motionBlur", 1) > 0.5f;
-  s.taa = numOf(kv, "taa", 1) > 0.5f;
+  // settings v2: TAA turned black on some phones (Xclipse) - it starts off and is opt-in
   s.ssao = numOf(kv, "ssao", 1) > 0.5f;
+  s.taa = numOf(kv, "taa2", 0) > 0.5f;
   s.contactShadows = numOf(kv, "contactShadows", 1) > 0.5f;
   s.volClouds = numOf(kv, "volClouds", 1) > 0.5f;
   s.lightShafts = numOf(kv, "lightShafts", 1) > 0.5f;

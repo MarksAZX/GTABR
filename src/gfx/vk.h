@@ -20,11 +20,16 @@
 namespace gtabr {
 namespace gfx {
 
+// live GPU allocation statistics (bytes / count), for the debug overlay and the memory log
+struct GpuMemStats { long long bytes = 0, hostBytes = 0; int allocs = 0; };
+extern GpuMemStats gGpuMem;
+
 struct Buffer {
   VkBuffer buf = VK_NULL_HANDLE;
   VkDeviceMemory mem = VK_NULL_HANDLE;
   void* map = nullptr;
   VkDeviceSize size = 0;
+  VkDeviceSize alloc = 0;
 };
 
 struct Image {
@@ -33,6 +38,7 @@ struct Image {
   VkImageView view = VK_NULL_HANDLE;
   VkFormat format = VK_FORMAT_UNDEFINED;
   uint32_t width = 0, height = 0, layers = 1, mips = 1;
+  VkDeviceSize alloc = 0;
 };
 
 struct DeviceCaps {

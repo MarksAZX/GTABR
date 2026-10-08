@@ -72,11 +72,13 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
         pages.push_back(atlas + "_" + idx);
       }
   }
-  queueTexture("materials", "materials.gtex", gfx::SamplerKind::Repeat);
-  queueTexture("materials_n", "materials_n.gtex", gfx::SamplerKind::Repeat);
+  // what the loading screen needs first: its key art, the fonts and the icons
+  queueTexture("loading_art", "loading_art.gtex", gfx::SamplerKind::ClampLinear);
   queueTexture("font_regular", "font_regular.gtex", gfx::SamplerKind::ClampLinear);
   queueTexture("font_bold", "font_bold.gtex", gfx::SamplerKind::ClampLinear);
   queueTexture("icons", "icons.gtex", gfx::SamplerKind::ClampLinear);
+  queueTexture("materials", "materials.gtex", gfx::SamplerKind::Repeat);
+  queueTexture("materials_n", "materials_n.gtex", gfx::SamplerKind::Repeat);
   queueTexture("ui_art", "ui_art.gtex", gfx::SamplerKind::ClampLinear);
   for (auto& p : pages) queueTexture("page:" + p, p + ".gtex", gfx::SamplerKind::ClampLinear);
 
@@ -89,7 +91,7 @@ void Assets::startLoading(gfx::Renderer* r, JobSystem* jobs) {
 }
 
 void Assets::onTexture(const Pending& p) {
-  if (!p.ok) { if (p.key.rfind("model:", 0) != 0 && p.key.rfind("page:", 0) != 0) failed_ = true; return; }  // models fall back to neutral maps
+  if (!p.ok) { if (p.key.rfind("model:", 0) != 0 && p.key.rfind("page:", 0) != 0 && p.key != "loading_art") failed_ = true; return; }  // models fall back to neutral maps
   gfx::TexHandle h = r_->createTexture(p.data, p.sampler);
   if (!h.valid()) { LOGE("GPU upload failed for %s", p.key.c_str()); failed_ = true; return; }
   if (p.key == "materials") materials = h;

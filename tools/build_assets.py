@@ -557,6 +557,12 @@ def build_ui_art(quality):
             atlas.paste(c, (x, y))
             lines.append(f"A portrait_{portn[i]} {x / W:.6f} {y / H:.6f} {(x + 512) / W:.6f} {(y + 512) / H:.6f}")
     gtex.save_texture(os.path.join(OUT, "ui_art.gtex"), os.path.join(OUT_RGBA, "ui_art.gtex"), [np.asarray(atlas).copy()], "color", quality)
+    # loading screen key art (golden hour on the coast), its own texture so it can be loaded first
+    ka = load("menu_keyart.png")
+    if ka:
+        ka = ka.convert("RGBA").resize((1024, 576), Image.LANCZOS)
+        gtex.save_texture(os.path.join(OUT, "loading_art.gtex"), os.path.join(OUT_RGBA, "loading_art.gtex"), [np.asarray(ka).copy()], "color", quality)
+        print("  loading_art.gtex")
     open(os.path.join(OUT, "ui_art.txt"), "w").write("\n".join(lines) + "\n")
     print("  ui_art:", len(lines), "entries")
 

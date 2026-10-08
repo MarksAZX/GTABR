@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -8,6 +9,8 @@
 #include <sstream>
 
 #include "game.h"
+#include "../core/crashlog.h"
+#include "../gfx/vk.h"
 
 namespace gtabr {
 
@@ -17,6 +20,13 @@ bool Game::init(const Init& i) {
   r_ = i.renderer;
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
+  {
+    // a crash last time? keep its log lines to show on the menu, then arm the handler for this run
+    std::string crashPath = fileio::saveDir() + "/crash.txt";
+    std::string txt;
+    if (fileio::readFile(crashPath, txt) && !txt.empty()) { crashReport_ = txt; std::remove(crashPath.c_str()); }
+    crashlog::install(crashPath);
+  }
   loadSettings();
   activeSlot_ = clamp(i.slot, 1, kSlots);
   if (i.seed) worldSeed_ = i.seed;
@@ -308,6 +318,16 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
 
   // smoothed frame time for adaptive quality + FPS counter
   frameMsAvg_ += (dtReal * 1000.0f - frameMsAvg_) * 0.05f;
+  {
+    // memory log (logcat on Android): GPU allocations alive, so leaks while streaming show up in the field
+    static float memLogT = 0;
+    memLogT += dtReal;
+    if (memLogT > 5.0f) {
+      memLogT = 0;
+      LOGI("mem: gpu %.1f MB (host-visible %.1f MB) in %d allocations, %d resident chunks, %.1f ms/frame", gfx::gGpuMem.bytes / 1048576.0,
+           gfx::gGpuMem.hostBytes / 1048576.0, gfx::gGpuMem.allocs, stats_.residentChunks, frameMsAvg_);
+    }
+  }
   fpsAccum_ += dtReal; fpsFrames_++;
   if (fpsAccum_ >= 0.5f) { fpsShown_ = fpsFrames_ / fpsAccum_; fpsAccum_ = 0; fpsFrames_ = 0; }
 
@@ -323,6 +343,14 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   }
 
   visualInput_ = in;
+  if (debugLoading) {
+    loadingAnim_ += dtReal;
+    ui_.begin(&fd, &assets_, screenW_, screenH_, uiScale());
+    drawLoading(dtReal);
+    ui_.end();
+    setupGlobals(fd);
+    return;
+  }
   if (phase_ == Phase::Loading) {
     loadingAnim_ += dtReal;
     bool assetsDone = assets_.pump();
@@ -557,13 +585,13 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
 
 void Game::updateAdaptiveQuality(float dt) {
   adaptTimer_ += dt;
-  if (adaptTimer_ < 3.0f || !settings_.dynamicRes) return;
+  if (adaptTimer_ < 8.0f || !settings_.dynamicRes) return;
   adaptTimer_ = 0;
   // dynamic resolution: never above the preset's base scale, never below 60% of it
   float base = preset().renderScale * settings_.resScale;
   float s = r_->renderScale();
-  if (frameMsAvg_ > 36.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.08f));
-  else if (frameMsAvg_ < 24.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.08f));
+  if (frameMsAvg_ > 40.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.1f));
+  else if (frameMsAvg_ < 20.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.1f));
 }
 
 void Game::applySettings() {

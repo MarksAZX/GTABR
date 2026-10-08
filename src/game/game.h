@@ -34,7 +34,7 @@ struct Settings {
   bool bloom = true;
   bool motionBlur = true;    // camera motion blur (Alto / Ultra)
   // advanced graphics
-  bool taa = true;             // temporal anti-aliasing (jittered frames + reprojected history)
+  bool taa = false;            // temporal anti-aliasing (experimental: black screen on some Android GPUs)
   bool ssao = true, contactShadows = true, volClouds = true, lightShafts = true;
   bool filmGrain = true, chromAb = true, vignette = true;
   int colorStyle = 1;          // 0 natural, 1 golden hour (cinema), 2 vivid
@@ -436,6 +436,11 @@ class Game {
   Job job_;
   int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
   float statusBottom_ = 200;
+  float shownProgress_ = 0;
+ public:
+  bool debugLoading = false;   // tests: draw the loading screen over a running game
+ private:
+  std::string crashReport_;   // log of the last crash (shown once on the main menu)
   // map: saved places and the road route to the destination
   struct Fav { Vec2 pos; std::string name; int icon = 0; };
   std::vector<Fav> favs_;

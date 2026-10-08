@@ -60,13 +60,13 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   LOGI("Scene colour format %d", (int)hdrFormat_);
 
   // descriptor pool
-  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
+  VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4096},
                                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
                                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8},
                                {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8}};
   VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-  dpi.maxSets = 480;
+  dpi.maxSets = 1536;
   dpi.poolSizeCount = 4;
   dpi.pPoolSizes = ps;
   VK_CHECK(vkCreateDescriptorPool(dev, &dpi, nullptr, &pool_));
@@ -797,7 +797,12 @@ void Renderer::destroyPortraitTarget() {
   if (portraitColor_.image) ctx_.destroyImage(portraitColor_);
   if (portraitDepth_.image) ctx_.destroyImage(portraitDepth_);
   portraitColor_ = {}; portraitDepth_ = {};
-  if (portraitTex_.valid()) textures_[portraitTex_.id].alive = false;   // the image is gone; the slot keeps its handle for the next target
+  if (portraitTex_.valid()) {
+    TexRes& t = textures_[portraitTex_.id];
+    if (t.set) vkFreeDescriptorSets(dev, pool_, 1, &t.set);   // recreated with every render-target rebuild (dynamic resolution)
+    t.set = VK_NULL_HANDLE;
+    t.alive = false;
+  }   // the image is gone; the slot keeps its handle for the next target
 }
 
 // Overwrites the globals block (arena offset 0, read by every pass) in command order, so a pass can use its own camera.

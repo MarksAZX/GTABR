@@ -170,6 +170,26 @@ void Game::drawMainMenu(float dt) {
   ui_.rect(lx, H * 0.105f + 132 * S, 84 * S, 3 * S, withAlpha(kAcc, fade), 1.5f * S);
   ui_.text(false, upper(world_.cityName) + "   ·   SEED " + std::to_string(worldSeed_), lx, H * 0.105f + 150 * S, 22 * S, withAlpha(dimCol(c), fade), Align::Left);
 
+  if (!crashReport_.empty()) {
+    // the game closed unexpectedly last time: show the tail of its log once (screenshot it and send it to the developer)
+    float bw = std::min(W * 0.46f, 860 * S), bh = H * 0.62f, bx = W - bw - 40 * S, by = H * 0.16f;
+    ui_.rect(bx, by, bw, bh, rgba(0.05f, 0.03f, 0.04f, 0.92f * fade), 18 * S, 1.2f * S, rgba(1.0f, 0.45f, 0.45f, 0.6f));
+    ui_.text(true, "O JOGO FECHOU NA ÚLTIMA VEZ", bx + 24 * S, by + 18 * S, 24 * S, rgba(1.0f, 0.6f, 0.6f, fade), Align::Left);
+    ui_.text(false, "Tire um print desta tela e mande para o desenvolvedor. Toque para fechar.", bx + 24 * S, by + 52 * S, 16 * S, withAlpha(dimCol(c), fade), Align::Left);
+    std::vector<std::string> lines;
+    size_t p0 = 0;
+    while (p0 < crashReport_.size()) { size_t e = crashReport_.find('\n', p0); if (e == std::string::npos) e = crashReport_.size(); lines.push_back(crashReport_.substr(p0, e - p0)); p0 = e + 1; }
+    int maxL = (int)((bh - 100 * S) / (19 * S));
+    int start = std::max(1, (int)lines.size() - maxL + 1);
+    float ty = by + 84 * S;
+    if (!lines.empty()) { ui_.text(true, lines[0], bx + 24 * S, ty, 15 * S, rgba(1, 0.8f, 0.8f, fade), Align::Left); ty += 19 * S; }
+    for (int i = start; i < (int)lines.size(); ++i) {
+      std::string l = lines[i].size() > 110 ? lines[i].substr(0, 110) : lines[i];
+      ui_.text(false, l, bx + 24 * S, ty, 13 * S, rgba(1, 1, 1, 0.8f * fade), Align::Left);
+      ty += 19 * S;
+    }
+    uiRects_.push_back({Vec4(bx, by, bw, bh), 2195});
+  }
   if (menu_ == MenuState::Main) {
     int last = latestSlot();
     SlotInfo li = last ? slots_[last - 1] : SlotInfo{};
@@ -590,7 +610,7 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
       rw = colW;
       rh = 58 * S;
       step("Estilo de cor", "Gradação de cinema", cs[clamp(s.colorStyle, 0, 2)], 3108);
-      toggle("Anti-aliasing temporal", "TAA: bordas estáveis", s.taa, 3100);
+      toggle("Anti-aliasing temporal", "TAA experimental", s.taa, 3100);
       toggle("Oclusão de ambiente", "SSAO (Alto / Ultra)", s.ssao, 3101);
       toggle("Sombras de contato", "Pés, rodas, props", s.contactShadows, 3102);
       toggle("Nuvens volumétricas", "Alto / Ultra", s.volClouds, 3103);
@@ -913,6 +933,7 @@ void Game::menuAction(int id) {
   if (id == 2801) { mapZoom_ *= 1.4f; return; }
   if (id == 2802) { mapZoom_ /= 1.4f; return; }
   if (id == 2803) { mapZoom_ = 0; return; }
+  if (id == 2195) { crashReport_.clear(); return; }
   if (id == 2804) { waypoint_.active = false; route_.clear(); toast("Marcador removido", "pin"); return; }
   if (id == 2805 && waypoint_.active) {
     if (favs_.size() >= 8) { toast("Limite de 8 locais salvos", "close", kHot); return; }
