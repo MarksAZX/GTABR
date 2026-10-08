@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
+#include <tuple>
 
 namespace gtabr {
 namespace gfx {
@@ -196,6 +198,9 @@ void Renderer::shutdown() {
   if (!ctx_.device) return;
   VkDevice dev = ctx_.device;
   vkDeviceWaitIdle(dev);
+  for (auto& m : retiredMeshes_) { ctx_.destroyBuffer(m.mesh.vb); ctx_.destroyBuffer(m.mesh.ib); }
+  for (auto& t : retiredTextures_) ctx_.destroyImage(t.tex.img);
+  retiredMeshes_.clear(); retiredTextures_.clear();
   destroySwapchain();
   destroyOffscreenTargets();
   destroyRenderTargets();
@@ -210,7 +215,7 @@ void Renderer::shutdown() {
     vkDestroySemaphore(dev, frames_[i].imageAvailable, nullptr);
   }
   VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                        pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                        pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshInstanced_, pipeMeshSkinned_, pipeShadowMesh_,
                         pipeShadowSkinned_};
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
   VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_};
@@ -344,6 +349,7 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
     ++n;
   }
   VkVertexInputBindingDescription bind{};
+  VkVertexInputBindingDescription bindings[2]{};
   std::vector<VkVertexInputAttributeDescription> attrs;
   auto A = [&](uint32_t loc, VkFormat f, uint32_t off) { attrs.push_back({loc, 0, f, off}); };
   VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
@@ -372,6 +378,7 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
       bind = {0, sizeof(WorldVertex), VK_VERTEX_INPUT_RATE_VERTEX};
       A(0, VK_FORMAT_R32G32B32_SFLOAT, 0);
       break;
+    case 10: // instanced static model
     case 6:  // model, static
     case 7:  // model, skinned
       bind = {0, sizeof(ModelVertex), VK_VERTEX_INPUT_RATE_VERTEX};
@@ -392,6 +399,12 @@ VkPipeline Renderer::buildPipeline(const char* vs, const char* fs, VkRenderPass 
     vi.pVertexBindingDescriptions = &bind;
     vi.vertexAttributeDescriptionCount = (uint32_t)attrs.size();
     vi.pVertexAttributeDescriptions = attrs.data();
+  }
+  if (vertexKind == 10) {
+    bindings[0]=bind;bindings[1]={1,sizeof(Mat4),VK_VERTEX_INPUT_RATE_INSTANCE};
+    for(uint32_t i=0;i<4;++i) attrs.push_back({6+i,1,VK_FORMAT_R32G32B32A32_SFLOAT,i*16});
+    vi.vertexBindingDescriptionCount=2;vi.pVertexBindingDescriptions=bindings;
+    vi.vertexAttributeDescriptionCount=(uint32_t)attrs.size();vi.pVertexAttributeDescriptions=attrs.data();
   }
   VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
   ia.topology = topo;
@@ -453,6 +466,7 @@ bool Renderer::createLayoutsAndPipelines() {
   pipeShadowSkinned_ = buildPipeline("mesh_shadow_skinned.vert.spv", nullptr, shadowPass_, plShadow_, 9, true, true, LESS, false,
                                      VK_CULL_MODE_NONE, true);
   pipeMesh_ = buildPipeline("mesh.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 6, true, true, LESS, false, VK_CULL_MODE_NONE);
+  pipeMeshInstanced_ = buildPipeline("mesh_instanced.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 10, true, true, LESS, false, VK_CULL_MODE_NONE);
   pipeMeshSkinned_ = buildPipeline("mesh_skinned.vert.spv", "mesh.frag.spv", scenePass_, plMesh_, 7, true, true, LESS, false,
                                    VK_CULL_MODE_BACK_BIT);
   pipeSprite_ = buildPipeline("sprite.vert.spv", "sprite.frag.spv", scenePass_, plSprite_, 2, true, true, LEQ, true, VK_CULL_MODE_NONE,
@@ -469,7 +483,7 @@ bool Renderer::createLayoutsAndPipelines() {
   pipeComposite_ = buildPipeline("fullscreen.vert.spv", "composite.frag.spv", compositePass_, plComposite_, 0, false, false, LEQ, false,
                                  VK_CULL_MODE_NONE);
   return pipeWorld_ && pipeShadow_ && pipeSprite_ && pipeDecal_ && pipeSky_ && pipeUi_ && pipeComposite_ && pipeMesh_ &&
-         pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_;
+         pipeMeshInstanced_ && pipeMeshSkinned_ && pipeShadowMesh_ && pipeShadowSkinned_;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -561,6 +575,7 @@ TexHandle Renderer::createTexture(const TextureData& td, SamplerKind sk) {
   tr.sampler = getSampler(sk);
   tr.set = allocTexSet(img.view, tr.sampler);
   tr.alive = true;
+  for (size_t i=0;i<textures_.size();++i) if (!textures_[i].alive) { textures_[i]=tr; return TexHandle{(int)i}; }
   textures_.push_back(tr);
   return TexHandle{(int)textures_.size() - 1};
 }
@@ -608,11 +623,14 @@ MeshHandle Renderer::createMesh(const WorldVertex* v, size_t nv, const uint32_t*
 }
 
 void Renderer::destroyMesh(MeshHandle h) {
-  if (!h.valid() || !meshes_[h.id].alive) return;
-  vkDeviceWaitIdle(ctx_.device);
-  ctx_.destroyBuffer(meshes_[h.id].vb);
-  ctx_.destroyBuffer(meshes_[h.id].ib);
+  if (!h.valid() || h.id >= (int)meshes_.size() || !meshes_[h.id].alive) return;
+  retiredMeshes_.push_back({meshes_[h.id]});
   meshes_[h.id] = MeshRes();
+}
+
+void Renderer::destroyTexture(TexHandle h) {
+  if (!h.valid() || h.id >= (int)textures_.size() || !textures_[h.id].alive) return;
+  retiredTextures_.push_back({textures_[h.id]}); textures_[h.id] = TexRes();
 }
 
 ModelHandle Renderer::createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
@@ -780,6 +798,12 @@ void Renderer::createRenderTargets() {
   for (int i = 1; i <= 4; ++i) blurDown_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));
   for (int i = 3; i >= 1; --i) blurUp_.push_back(mkLevel(sceneW_ >> i, sceneH_ >> i));  // sizes of down[2], down[1], down[0]
 
+  // Give inactive blur levels a valid descriptor layout even when the first frame uses no effects.
+  VkCommandBuffer initBlur = ctx_.beginOneShot();
+  for (auto& level : blurDown_) ctx_.transitionImage(initBlur, level.img.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+  for (auto& level : blurUp_) ctx_.transitionImage(initBlur, level.img.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1);
+  ctx_.endOneShot(initBlur);
+
   // composite set: scene + final blurred level
   VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   ai.descriptorPool = pool_;
@@ -894,7 +918,7 @@ bool Renderer::createSwapchain(uint32_t w, uint32_t h) {
     // (Re)build passes and pipelines for the chosen output format.
     VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_};
     VkPipeline pipes[] = {pipeWorld_, pipeShadow_, pipeSprite_, pipeSilhouette_, pipeDecal_, pipeSky_, pipeUi_,
-                          pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshSkinned_, pipeShadowMesh_,
+                          pipeBlurDown_, pipeBlurUp_, pipeComposite_, pipeMesh_, pipeMeshInstanced_, pipeMeshSkinned_, pipeShadowMesh_,
                           pipeShadowSkinned_};
     for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
     for (auto r : rps) if (r) vkDestroyRenderPass(dev, r, nullptr);
@@ -978,6 +1002,7 @@ void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd,
   int curMat = -1;
   bool globalsBound = false;
   for (const ModelDraw& d : fd.models) {
+    if (d.instanced && !shadow) continue;
     if (!d.model.valid() || d.model.id >= (int)models_.size()) continue;
     if (shadow && !d.castShadow) continue;
     const ModelRes& m = models_[d.model.id];
@@ -1018,6 +1043,26 @@ void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd,
     vkCmdBindIndexBuffer(cb, m.ib.buf, 0, VK_INDEX_TYPE_UINT32);
     vkCmdDrawIndexed(cb, m.lods[lod].indexCount, 1, m.lods[lod].firstIndex, 0, 0);
   }
+  if(!shadow) {
+    std::map<std::tuple<int,int,int>,std::vector<Mat4>> groups;
+    for(const auto& d:fd.models) if(d.instanced && d.model.valid() && d.material.valid() && d.model.id<(int)models_.size())
+      groups[{d.model.id,d.material.id,d.lod}].push_back(d.transform);
+    if(!groups.empty()) {
+      vkCmdBindPipeline(cb,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeMeshInstanced_);
+      vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_GRAPHICS,plMesh_,0,1,&fr.globalsB,0,nullptr);
+      struct {Mat4 model;Vec4 tint,params;} pc{Mat4(),{0,0,0,0},{0,0,1,1}};
+      vkCmdPushConstants(cb,plMesh_,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,0,96,&pc);
+      for(const auto& [key,transforms]:groups) {
+        auto [model,mat,lod]=key;const auto& m=models_[model];lod=clamp(lod,0,m.lodCount-1);
+        VkDeviceSize off;void* data=arenaAlloc(fr,transforms.size()*sizeof(Mat4),&off);if(!data)continue;
+        std::memcpy(data,transforms.data(),transforms.size()*sizeof(Mat4));
+        VkBuffer buffers[2]={m.vb.buf,fr.arena.buf};VkDeviceSize offsets[2]={0,off};
+        vkCmdBindVertexBuffers(cb,0,2,buffers,offsets);vkCmdBindIndexBuffer(cb,m.ib.buf,0,VK_INDEX_TYPE_UINT32);
+        vkCmdBindDescriptorSets(cb,VK_PIPELINE_BIND_POINT_GRAPHICS,plMesh_,1,1,&materials_[mat],0,nullptr);
+        vkCmdDrawIndexed(cb,m.lods[lod].indexCount,(uint32_t)transforms.size(),m.lods[lod].firstIndex,0,0);
+      }
+    }
+  }
 }
 
 bool Renderer::renderFrame(const FrameData& fd) {
@@ -1026,6 +1071,14 @@ bool Renderer::renderFrame(const FrameData& fd) {
   FrameRes& fr = frames_[frameIndex_];
   VK_CHECK(vkWaitForFences(dev, 1, &fr.fence, VK_TRUE, UINT64_MAX));
 
+  for (auto it = retiredMeshes_.begin(); it != retiredMeshes_.end();) {
+    if (--it->remaining <= 0) { ctx_.destroyBuffer(it->mesh.vb); ctx_.destroyBuffer(it->mesh.ib); it = retiredMeshes_.erase(it); }
+    else ++it;
+  }
+  for (auto it = retiredTextures_.begin(); it != retiredTextures_.end();) {
+    if (--it->remaining <= 0) { ctx_.destroyImage(it->tex.img); vkFreeDescriptorSets(dev, pool_, 1, &it->tex.set); it = retiredTextures_.erase(it); }
+    else ++it;
+  }
   uint32_t imageIndex = 0;
   if (cfg_.headless) {
     imageIndex = lastImage_ ^ 1u;

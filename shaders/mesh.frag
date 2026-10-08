@@ -26,8 +26,10 @@ void main() {
   vec3 orm = texture(uORM, vUV).rgb;
   float rough = clamp(orm.g * pc.params.z, 0.05, 1.0);
   float metal = orm.b;
-  vec3 Nn = normalize(vNormal);
-  vec3 T = normalize(vTangent.xyz - Nn * dot(Nn, vTangent.xyz));
+  vec3 Nn = dot(vNormal,vNormal) > 0.00001 ? normalize(vNormal) : vec3(0,1,0);
+  vec3 tangent = vTangent.xyz - Nn * dot(Nn, vTangent.xyz);
+  if (dot(tangent,tangent)<0.00001) tangent=cross(Nn,abs(Nn.y)>0.9?vec3(0,0,1):vec3(0,1,0));
+  vec3 T = normalize(tangent);
   vec3 B = cross(Nn, T) * vTangent.w;
   vec3 tn = texture(uNormal, vUV).xyz * 2.0 - 1.0;
   vec3 N = normalize(mat3(T, B, Nn) * tn);

@@ -2,6 +2,9 @@
 // walk -> switch camera -> enter car -> drive -> refuel at the pump -> market (talk + buy) -> workshop repair -> save -> reload.
 #include <cmath>
 #include <string>
+#include <sstream>
+#include <map>
+#include "../core/fileio.h"
 
 #include "../core/log.h"
 #include "../core/png.h"
@@ -140,6 +143,88 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "resume") {
+    std::string text;
+    CHECK(fileio::readFile(fileio::saveDir()+"/slot_"+std::to_string(g.activeSlot())+".sav",text),"fresh process finds persisted slot");
+    std::map<std::string,std::string> kv;std::istringstream in(text);std::string line;
+    while(std::getline(in,line)){auto p=line.find('=');if(p!=std::string::npos)kv[line.substr(0,p)]=line.substr(p+1);}
+    CHECK(g.world().seed==(uint32_t)std::strtoull(kv["seed"].c_str(),nullptr,10),"fresh process reconstructs saved seed instead of command-line seed");
+    CHECK(g.money()==std::atoi(kv["money"].c_str()),"fresh process restores money");
+    Vec2 expected{std::strtof(kv["playerX"].c_str(),nullptr),std::strtof(kv["playerZ"].c_str(),nullptr)};
+    CHECK((g.player().pos-expected).length()<0.1f,"fresh process restores position");
+    for(int i=1;i<kItemCount;++i)CHECK(g.itemCount(i)==std::atoi(kv[std::string("item_")+itemDef(i).key].c_str()),"fresh process restores inventory");
+    for(int w=1;w<kWeaponCount;++w){auto it=kv.find(std::string("wpn_")+weaponDef(w).key);if(it!=kv.end()){int mag=0,res=0;std::sscanf(it->second.c_str(),"%d,%d",&mag,&res);CHECK(g.player().owned[w]&&g.player().mag[w]==mag&&g.player().reserve[w]==res,"fresh process restores weapon and ammunition");}}
+    b.idle(4);b.shot("resume");LOGI("RESUME checks failures: %d",g_failures);return g_failures?1:0;
+  }
+  if (name == "city" || name == "menus") {
+    auto load=[&](){for(int i=0;i<1500&&!g.loaded();++i){g.frame(dt,fd);r.renderFrame(fd);}CHECK(g.loaded(),"city generation finishes");};
+    auto tap=[&](float x,float y){InputFrame in;UiPointer p;p.id=0;p.pos={x,y};p.pressed=true;p.down=true;in.ui={p};b.step(in);p.pressed=false;p.down=false;p.released=true;in.ui={p};b.step(in);b.idle(2);};
+    if(name=="menus"){
+      CHECK(g.menu()==MenuState::Main,"startup shows main menu");b.shot("00_main_menu");
+      float S=0.55f,x=480,y=60*S+80*S+70*S+72*S+31*S;
+      tap(x,y);CHECK(g.menu()==MenuState::Slots,"new game button opens slots");b.shot("01_slots");
+      tap(x,(60+80+424+31)*S);load();CHECK(g.menu()==MenuState::None,"create slot starts gameplay");
+    }
+    b.render=false;b.idle(45);
+    CHECK(g.world().shops.size()==4,"four enterable stores");
+    uint32_t seed=g.world().seed;auto spawn=g.world().spawnPlayer;
+    for(int shop=0;shop<4;++shop){
+      auto sh=g.world().shops[shop];int door=-1;
+      for(const auto& d:g.world().doors)if(d.shop==shop&&d.toInterior)door=d.id;
+      CHECK(door>=0,"shop has entrance");
+      g.teleportPlayer({sh.door.x,sh.door.z},0);b.idle(2);
+      Interactable it;it.kind=IKind::Door;it.id=door;g.activateInteractable(it);b.idle(20);
+      CHECK(g.player().indoors&&g.world().interiorAt(g.player().pos.x,g.player().pos.y)==sh.interior,"door enters correct interior");
+      int clerk=-1;for(size_t n=0;n<g.npcs().size();++n)if(g.npcs()[n].role==4&&g.world().interiorAt(g.npcs()[n].pos.x,g.npcs()[n].pos.y)==sh.interior)clerk=(int)n;
+      CHECK(clerk>=0,"clerk exists in each store");it.kind=IKind::Npc;it.id=clerk;g.activateInteractable(it);g.selectPanelOptionPublic(0);
+      CHECK(g.panel().open&&g.panel().title==sh.name,"clerk opens shop-specific catalog");
+      auto stock=sh.stock[0];int money=g.money(),count=g.itemCount(stock.id);g.selectPanelOptionPublic(0);
+      CHECK(g.money()==money-stock.priceCents,"purchase deducts actual shop price");
+      if(stock.kind==0)CHECK(g.itemCount(stock.id)==count+1,"purchase adds item to inventory");else CHECK(g.player().owned[stock.id],"hardware store gives real equipment");
+      b.render=true;b.idle(20);b.shot("shop_"+std::to_string(shop));b.render=false;
+      g.selectPanelOptionPublic((int)g.panel().options.size()-1);
+      g.money()=0;CHECK(!g.buyStock(shop,0),"insufficient funds reject purchase");g.money()=40000;
+    }
+    g.teleportPlayer({spawn.x,spawn.z},0);b.idle(2);
+    g.player().health=12;g.executeCode(0);CHECK(g.player().health==100,"health code changes state");
+    g.executeCode(1);CHECK(g.player().owned[kWpnPistol],"weapons code grants weapons");
+    g.player().mag[kWpnPistol]=0;g.executeCode(2);CHECK(g.player().mag[kWpnPistol]>0,"ammo code replenishes magazines");
+    int before=g.money();g.executeCode(3);CHECK(g.money()==before+100000,"money code grants money");
+    g.executeCode(5);CHECK(g.wantedLevel()>0,"wanted code raises wanted level");g.executeCode(4);CHECK(g.wantedLevel()==0,"clear code removes wanted level");
+    g.player().vehicle=0;g.vehicles()[0].health=1;g.vehicles()[0].fuel=0;g.executeCode(6);g.executeCode(7);
+    CHECK(g.vehicles()[0].health==100&&g.vehicles()[0].fuel==vehicleDef(0).fuelCap,"vehicle codes repair and fill tank");g.player().vehicle=-1;
+    if(g.world().coastSide>=0){auto& w=g.world();Vec2 p{w.poiBeach.x,w.poiBeach.z};int side=w.coastSide;
+      if(side==0)p.y=-w.shoreline-20;if(side==1)p.x=w.shoreline+20;if(side==2)p.y=w.shoreline+20;if(side==3)p.x=-w.shoreline-20;
+      g.teleportPlayer(p,0);b.idle(10);CHECK(g.player().swimming,"deep water switches to swimming");
+      CHECK(g.player().y>w.heightAt(p.x,p.y)+0.4f,"swimmer floats above seabed");
+      g.toggleCamera();b.render=true;b.idle(20);b.shot("beach_swimming");b.render=false;
+    }
+    g.money()=123456;g.player().health=67;g.player().mag[kWpnPistol]=7;g.equipWeapon(kWpnPistol);
+    Vec2 saved=g.player().pos;int waterCount=g.itemCount(1);CHECK(g.saveGame(),"slot is saved atomically");
+    CHECK(g.inspectSlot(g.activeSlot()).seed==seed,"save contains exact seed");
+    int slot=g.activeSlot();g.returnToMain();CHECK(g.menu()==MenuState::Main,"return to menu saves and freezes session");
+    CHECK(!g.startSlot(slot,true),"existing slot cannot be overwritten without confirmation");
+    CHECK(g.startSlot(slot,false),"load starts city reconstruction");load();b.idle(2);
+    CHECK(g.world().seed==seed&&g.world().spawnPlayer.x==spawn.x,"same seed regenerates same city");
+    CHECK((g.player().pos-saved).length()<0.1f,"position restored");CHECK(g.money()==123456&&g.itemCount(1)==waterCount,"money and inventory restored");
+    CHECK(g.player().owned[kWpnPistol]&&g.player().mag[kWpnPistol]==7,"weapons and ammunition restored");
+    g.showMenu(MenuState::Map);b.render=true;b.idle(4);b.shot("full_map");g.showMenu(MenuState::Codes);b.shot("codes");g.showMenu(MenuState::Settings);b.shot("settings");g.showMenu(MenuState::Pause);b.shot("pause");
+    g.returnToMain();CHECK(g.startSlot(1,true,true),"second slot starts independently");load();
+    CHECK(g.inspectSlot(slot).money==123456,"new slot preserves original save");
+    g.returnToMain();CHECK(g.deleteSlot(1),"inactive slot can be deleted");CHECK(!g.inspectSlot(1).exists,"deleted slot disappears");
+    CHECK(g.recentSlot()==slot,"continue falls back to most recent remaining slot");
+    LOGI("CITY checks failures: %d",g_failures);return g_failures?1:0;
+  }
+
+  if (name == "diagnostic") {
+    b.idle(40);
+    for(int i=0;i<4;++i){g.frame(dt,fd);
+      if(i==0){fd.worldMeshes.clear();fd.models.clear();fd.sprites.clear();fd.spriteBatches.clear();fd.decals.clear();fd.silhouettes.clear();fd.silhouetteBatches.clear();fd.ui.clear();fd.uiBatches.clear();}
+      if(i==1){fd.sprites.clear();fd.spriteBatches.clear();fd.decals.clear();fd.silhouettes.clear();fd.silhouetteBatches.clear();fd.ui.clear();fd.uiBatches.clear();}
+      if(i==2){fd.ui.clear();fd.uiBatches.clear();}
+      r.requestReadback();r.renderFrame(fd);std::vector<uint8_t> px;uint32_t w,h;if(r.readback(px,w,h))writePng(out+"/diag_"+std::to_string(i)+".png",px.data(),w,h);
+    } return 0;
+  }
   if (name == "start") {
     b.idle(40);
     b.shot("01_topdown");
@@ -339,6 +424,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     return 0;
   }
   if (name == "mvp") {
+    b.render = false; // simulation uses real input and physics; screenshots render selected states
     // ---- walk to the car
     b.idle(20);
     b.shot("10_spawn_topdown");

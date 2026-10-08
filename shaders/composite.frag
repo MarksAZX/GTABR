@@ -23,7 +23,8 @@ float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.545
 
 void main() {
   vec3 hdr = texture(uScene, vUV).rgb;
-  vec3 blurred = texture(uBlur, vUV).rgb;
+  vec3 blurred = hdr;
+  if (pc.a.x > 0.001 || pc.b.y > 0.001) blurred = texture(uBlur, vUV).rgb;
   vec3 bloom = max(blurred - vec3(pc.b.z), 0.0) * pc.b.y;
   hdr = mix(hdr, blurred, pc.a.x) + bloom;
   vec3 c = aces(hdr * pc.b.x);

@@ -145,7 +145,12 @@ void onAppCmd(android_app* app, int32_t cmd) {
 
 int32_t onInput(android_app* app, AInputEvent* ev) {
   App* a = (App*)app->userData;
-  if (!a->game || AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
+  if (!a->game) return 0;
+  if (AInputEvent_getType(ev) == AINPUT_EVENT_TYPE_KEY && AKeyEvent_getKeyCode(ev) == AKEYCODE_BACK) {
+    if (AKeyEvent_getAction(ev) == AKEY_EVENT_ACTION_UP) a->game->handleBack();
+    return 1;
+  }
+  if (AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
   int32_t action = AMotionEvent_getAction(ev);
   int32_t masked = action & AMOTION_EVENT_ACTION_MASK;
   size_t idx = (size_t)((action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT);
@@ -178,7 +183,7 @@ void android_main(android_app* app) {
   while (true) {
     int events;
     android_poll_source* source = nullptr;
-    bool animating = a.hasWindow && a.rendererReady && a.game;
+    bool animating = a.hasWindow && a.focused && a.rendererReady && a.game;
     int timeout = animating ? 0 : -1;
     int r;
     while ((r = ALooper_pollOnce(timeout, nullptr, &events, (void**)&source)) >= 0) {
@@ -189,14 +194,16 @@ void android_main(android_app* app) {
         if (a.renderer) a.renderer->shutdown();
         return;
       }
-      timeout = (a.hasWindow && a.rendererReady && a.game) ? 0 : -1;
+      timeout = (a.hasWindow && a.focused && a.rendererReady && a.game) ? 0 : -1;
     }
-    if (a.hasWindow && a.rendererReady && a.game) {
+    if (a.hasWindow && a.focused && a.rendererReady && a.game) {
       double t = nowSeconds();
       float dt = (float)(t - a.lastTime);
       a.lastTime = t;
       a.game->frame(dt, a.fd);
       a.renderer->renderFrame(a.fd);
+      double remaining = 1.0 / a.game->settings().fpsLimit - (nowSeconds() - t);
+      if (remaining > 0) {timespec delay{0, (long)(remaining * 1e9)}; nanosleep(&delay, nullptr); }
       if (a.game->wantsQuit()) {
         a.game->onBackground();
         ANativeActivity_finish(app->activity);

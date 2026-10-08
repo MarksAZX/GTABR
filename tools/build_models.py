@@ -32,7 +32,7 @@ CLIPS = {"idle": "protagonista_idle.glb", "walk": "protagonista_walk.glb", "run"
          # action clips (Meshy library on the same rig): runtime ActionId order lives in src/game/model.h
          "punch": "protagonista_punch.glb", "kick": "protagonista_kick.glb", "hit": "protagonista_hit.glb",
          "knockdown": "protagonista_knockdown.glb", "standup": "protagonista_standup.glb", "slash": "protagonista_slash.glb",
-         "reload": "protagonista_reload.glb", "chat": "protagonista_chat.glb"}
+         "reload": "protagonista_reload.glb", "chat": "protagonista_chat.glb", "swim": "protagonista_swim.glb", "swimidle": "protagonista_swimidle.glb"}
 
 
 def run(args):

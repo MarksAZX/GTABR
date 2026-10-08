@@ -19,6 +19,7 @@
 #include "ui.h"
 #include "../core/audio.h"
 #include "model.h"
+#include "decor_models.h"
 #include "weapons.h"
 #include "timeofday.h"
 #include "world.h"
@@ -33,6 +34,13 @@ struct Settings {
   bool dynamicRes = true;   // lower the render scale when the frame time is over budget
   float hudScale = 1.0f;
   bool showFps = false;
+  float volume = 0.9f;
+  float resolution = 1.0f;
+  float renderDistance = 1.0f;
+  float vegetation = 1.0f;
+  bool effects = true;
+  bool dayCycle = true;
+  int fpsLimit = 30;
 };
 
 // Graphics presets: every field changes real work done per frame.
@@ -97,7 +105,8 @@ struct Panel {
   int scroll = 0;
 };
 
-enum class MenuState { None, Pause, Settings };
+enum class MenuState { None, Main, Slots, Confirm, Pause, Settings, Map, Inventory, Codes };
+struct SaveSlot { bool exists = false; uint32_t seed = 0; int money = 0; float playtime = 0; std::string date, location; };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
@@ -112,12 +121,14 @@ class Game {
     std::string saveDir;
     bool newGame = false;
     uint32_t seed = 0;   // city seed for a new game (0 = pick one)
+    bool mainMenu = true;
   };
   bool init(const Init& i);
   void shutdown();
   void onTouch(int id, TouchAction a, float x, float y) { input_.onTouch(id, a, x, y); }
   // Advances the simulation and fills 'fd' (draw lists + HUD). dt in seconds (real time).
   void frame(float dt, gfx::FrameData& fd);
+  void handleBack();
   void onBackground();  // app paused: persist state
   bool wantsQuit() const { return quit_; }
   void setScreenSize(float w, float h) { screenW_ = w; screenH_ = h; }
@@ -151,6 +162,15 @@ class Game {
   void toggleCamera();
   void tryEnterExit();
   bool saveGame();
+  bool startSlot(int slot, bool fresh, bool confirmed = false);
+  bool deleteSlot(int slot);
+  SaveSlot inspectSlot(int slot) const;
+  int activeSlot() const { return activeSlot_; }
+  int recentSlot() const;
+  void returnToMain();
+  void executeCode(int code);
+  bool buyStock(int shop, int stock);
+  void showMenu(MenuState menu) { menu_ = menu; uiRects_.clear(); }
   bool loadGame();
   void startFueling(int vehicleIdx, int pumpId, int amountCents /*0 = fill*/);
   void buyItem(int item, bool fromShelf);
@@ -196,7 +216,7 @@ class Game {
   void openPanel(Panel p);
   void closePanel();
   void openFuelPanel(int pumpId);
-  void openShopPanel(const char* portrait);
+  void openShopPanel(const char* portrait, int shop = -1);
   void openAttendantPanel();
   void openWorkshopPanel();
   void openNpcPanel(int npcIdx);
@@ -230,6 +250,8 @@ class Game {
   void drawPanel(float dt);
   void drawWheel(float dt);
   void drawMenus(float dt);
+  void drawFullMap();
+  void menuAction(int id);
   void drawDebug();
   InputLayout makeLayout() const;
   void handleUiPointers(const InputFrame& in);
@@ -237,6 +259,26 @@ class Game {
 
   // ---- save (game_save.cpp)
   std::string savePath() const;
+  void readSettings();
+  bool writeSettings();
+  void readSeed();
+  void releaseWorld();
+  void updateStreaming();
+  bool worldInstalled_ = false;
+  int activeSlot_ = -1;
+  bool sessionActive_ = false;
+  bool initialLoading_ = true;
+  bool freshSlot_ = true;
+  bool selectingNew_ = false;
+  int selectedSlot_ = 0;
+  bool confirmDelete_ = false;
+  MenuState settingsBack_ = MenuState::Pause;
+  int settingsTab_ = 0;
+  int inventoryTab_ = 0;
+  Vec2 mapCenter_, mapDrag_;
+  float mapZoom_ = 1;
+  bool mapDragging_ = false;
+  int purchases_ = 0;
 
   Init cfg_;
   gfx::Renderer* r_ = nullptr;
@@ -423,6 +465,7 @@ class Game {
   float lastReportT_ = -100.0f, lastReportSev_ = 0;
   Vec2 lastReportPos_;
   int sirenHandle_ = 0;
+  int surfHandle_ = 0;
   float deathT_ = 0;
   float slowMo_ = 1.0f;
   float muzzleT_ = 0;
@@ -445,6 +488,7 @@ class Game {
   Animator animator_;
   CharAnim playerAnim_;
   std::vector<CharAnim> npcAnim_;
+  DecorModels decorModels_;
   gfx::ModelHandle wheelModel_;
   gfx::MaterialHandle wheelMaterial_;
   bool modelsReady_ = false, carsReady_ = false;

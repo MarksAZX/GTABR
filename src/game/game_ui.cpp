@@ -9,12 +9,12 @@ namespace gtabr {
 namespace {
 const Color kWhite = 0xFFFFFFFFu;
 Color C(float r, float g, float b, float a = 1.0f) { return rgba(r, g, b, a); }
-const Color kAccent = rgba(1.0f, 0.80f, 0.26f);
+const Color kAccent = rgba(0.78f, 0.82f, 0.84f);
 const Color kGlass = rgba(0.045f, 0.055f, 0.08f, 0.60f);
 const Color kGlassHi = rgba(0.10f, 0.12f, 0.17f, 0.72f);
-const Color kMint = rgba(0.36f, 0.89f, 0.66f);
+const Color kMint = rgba(0.60f, 0.72f, 0.66f);
 const Color kRed = rgba(1.0f, 0.36f, 0.40f);
-const Color kSky = rgba(0.42f, 0.72f, 1.0f);
+const Color kSky = rgba(0.58f, 0.67f, 0.76f);
 const Color kMuted = rgba(1.0f, 1.0f, 1.0f, 0.62f);
 
 std::vector<std::string> wrapText(const UiPainter& ui, const std::string& s, float maxW, float size, bool bold) {
@@ -49,8 +49,8 @@ InputLayout Game::makeLayout() const {
   // contextual (interact, enter/exit, reload only show up when they can be used)
   Vec2 A{screenW_ - 210.0f * S, screenH_ - 190.0f * S};
   bool driving = player_.vehicle >= 0;
-  L.attack = {A + Vec2{40, 40} * S, 84.0f * S, !driving && !player_.dead};
-  L.run = {A + Vec2{-128, 92} * S, 58.0f * S, true};
+  L.attack = {A + Vec2{40, 40} * S, 60.0f * S, !driving && !player_.dead && !player_.swimming};
+  L.run = {A + Vec2{-128, 92} * S, 44.0f * S, true};
   L.interact = {A + Vec2{-138, -46} * S, 56.0f * S, focusValid_};
   L.enterExit = {A + Vec2{36, -122} * S, 54.0f * S, driving || nearestVehicleTo(player_.pos, 2.4f) >= 0};
   L.reload = {A + Vec2{-70, -150} * S, 42.0f * S,
@@ -76,7 +76,7 @@ void Game::drawLoading(float dt) {
   bool hasFont = assets_.fontBold.tex.valid();
   if (hasFont) {
     ui_.text(true, "BAIRRO", cx, cy - 120 * S, 120 * S, kWhite, Align::Center);
-    ui_.text(false, "Um MVP urbano brasileiro", cx, cy + 20 * S, 32 * S, kMuted, Align::Center);
+    ui_.text(false, "Uma cidade. A sua história.", cx, cy + 20 * S, 32 * S, kMuted, Align::Center);
   }
   float p = assets_.progress() * 0.85f + (worldReady_ ? 0.15f : 0.0f);
   float bw = 520 * S, bh = 8 * S;
@@ -182,7 +182,7 @@ void Game::drawMinimap() {
   if (!player_.indoors) {
     marker({world_.poiGas.x, world_.poiGas.z}, "fuel", kMint, 30 * S, true);
     for (const ShopDef& sh : world_.shops)
-      if (sh.kind != ShopKind::Conveniencia) marker({sh.door.x, sh.door.z}, "cart", kAccent, 26 * S, sh.kind == ShopKind::Mercado);
+      marker({sh.door.x, sh.door.z}, "cart", kAccent, 26 * S, sh.kind == ShopKind::Mercado);
     marker({world_.poiWorkshop.x, world_.poiWorkshop.z}, "wrench", kSky, 30 * S, true);
     for (const Vehicle& v : vehicles_)
       if (player_.vehicle != v.id && !v.despawn) marker(v.pos, "car", v.police && v.siren ? (std::fmod(realTime_ * 2.6f, 1.0f) < 0.5f ? kRed : kSky) : C(1, 1, 1, 0.95f), 22 * S, false);
@@ -215,7 +215,7 @@ void Game::drawBars() {
   float S = uiScale();
   float a = 1.0f - 0.85f * wheel_.anim;
   float x = 40 * S, y = 40 * S;
-  float hAlpha = healthShow_ > 0.0f ? 1.0f : 0.40f;
+  float hAlpha = healthShow_ > 0.0f ? 1.0f : 0.0f;
   float hv = clamp(player_.health / 100.0f, 0.0f, 1.0f);
   Color hc = hv > 0.35f ? mixColor(kRed, kMint, 0.0f) : kRed;
   ui_.icon("heart", x + 10 * S, y + 10 * S, 22 * S, withAlpha(kRed, hAlpha * a));
@@ -549,126 +549,175 @@ void Game::drawWheel(float dt) {
 }
 
 // ------------------------------------------------------------------------------------------------ menus
-void Game::openSettingsMenu() { menu_ = MenuState::Settings; }
+void Game::openSettingsMenu() { settingsBack_=menu_; menu_=MenuState::Settings; }
+
+void Game::drawFullMap() {
+  float S=uiScale(), size=std::min(screenH_-180*S,screenW_-460*S);
+  float x=60*S,y=110*S; float span=2*mapExtent_/mapZoom_,k=size/span;
+  ui_.map(mapTex_,0.5f+mapCenter_.x/(2*mapExtent_),0.5f+mapCenter_.y/(2*mapExtent_),1/mapZoom_,0,x,y,size,size,8*S,kWhite);
+  uiRects_.push_back({Vec4(x,y,size,size),900});
+  auto marker=[&](Vec2 p,const char* icon,Color color,const std::string& label){
+    Vec2 m=(p-mapCenter_)*k+Vec2{x+size/2,y+size/2};
+    if(m.x<x+18*S||m.x>x+size-18*S||m.y<y+18*S||m.y>y+size-18*S)return;
+    ui_.icon(icon,m.x,m.y,26*S,color);
+    if(mapZoom_>1.8f&&!label.empty())ui_.text(false,label,m.x+17*S,m.y-10*S,18*S,kWhite);
+  };
+  for(const auto& sh:world_.shops)marker({sh.door.x,sh.door.z},"cart",kAccent,sh.name);
+  marker({world_.poiGas.x,world_.poiGas.z},"fuel",kMint,"Posto");
+  marker({world_.poiWorkshop.x,world_.poiWorkshop.z},"wrench",kSky,"Oficina");
+  if(world_.coastSide>=0)marker({world_.poiBeach.x,world_.poiBeach.z},"pin",kAccent,"Praia");
+  for(const auto& v:vehicles_)if(!v.despawn)marker(v.pos,"car",v.police?kSky:kMuted,"");
+  if(wanted_>0)for(const auto& n:npcs_)if(n.police&&!n.despawn&&n.state!=NpcState::Dead)marker(n.pos,"dot",kRed,"");
+  Vec2 p=player_.pos;
+  if(player_.indoors){int index=world_.interiorAt(p.x,p.y);if(index>=0){int shop=world_.interiors[index].shop;if(shop>=0&&shop<(int)world_.shops.size())p={world_.shops[shop].door.x,world_.shops[shop].door.z};}}
+  marker(p,"pin",kWhite,"Você");
+  ui_.text(false,"N ↑  •  Arraste para explorar",x,y+size+16*S,22*S,kMuted);
+  float tx=x+size+40*S;
+  ui_.text(true,world_.cityName,tx,y,32*S,kWhite);
+  ui_.text(false,"Seed "+std::to_string(worldSeed_),tx,y+50*S,22*S,kMuted);
+  auto b=[&](float yy,const std::string& text,int id){ui_.rect(tx,yy,270*S,54*S,C(1,1,1,0.09f),6*S);ui_.text(false,text,tx+20*S,yy+12*S,24*S,kWhite);uiRects_.push_back({Vec4(tx,yy,270*S,54*S),id});};
+  b(y+110*S,"+ Ampliar",901);b(y+178*S,"- Reduzir",902);b(y+246*S,"Centralizar em você",903);b(y+340*S,"Voltar",304);
+}
 
 void Game::drawMenus(float dt) {
-  (void)dt;
-  if (menu_ == MenuState::None) return;
-  float S = uiScale();
-  uiRects_.clear();
-  ui_.rect(0, 0, screenW_, screenH_, C(0.01f, 0.015f, 0.03f, 0.62f));
-  float cardW = std::min(760.0f * S, screenW_ - 80 * S);
-  float x = (screenW_ - cardW) / 2;
-  auto button = [&](float y, float h, const std::string& label, const char* icon, int id, bool accent = false) {
-    float rx = x + 34 * S, rw = cardW - 68 * S;
-    bool pressed = pressedUi_ == id;
-    ui_.rect(rx, y, rw, h, pressed ? C(1, 1, 1, 0.22f) : (accent ? withAlpha(kAccent, 0.22f) : C(1, 1, 1, 0.10f)), 22 * S, 1.2f * S, accent ? withAlpha(kAccent, 0.7f) : C(1, 1, 1, 0.14f));
-    if (icon) ui_.icon(icon, rx + 46 * S, y + h / 2, 40 * S, accent ? kAccent : C(1, 1, 1, 0.9f));
-    ui_.text(true, label, rx + (icon ? 90 : 34) * S, y + h / 2 - 20 * S, 34 * S, kWhite, Align::Left);
-    uiRects_.push_back({Vec4(rx, y, rw, h), id});
+  if(menu_==MenuState::None)return;
+  float S=uiScale();uiRects_.clear();
+  ui_.gradient(0,0,screenW_,screenH_,C(0.025f,0.028f,0.031f,0.92f),C(0.06f,0.065f,0.07f,0.85f));
+  if(menu_==MenuState::Map){drawFullMap();return;}
+  float w=std::min(1000*S,screenW_-100*S),x=(screenW_-w)/2,y=60*S;
+  auto text=[&](const std::string& t,float yy,float size=30){ui_.text(false,t,x+28*S,yy,size*S,kWhite);};
+  auto button=[&](const std::string& label,int id,const std::string& sub="",bool enabled=true){
+    float h=sub.empty()?62*S:96*S;
+    ui_.rect(x,y,w,h,pressedUi_==id?C(1,1,1,0.18f):C(1,1,1,0.06f),6*S,1*S,C(1,1,1,0.08f));
+    ui_.text(false,label,x+28*S,y+16*S,28*S,enabled?kWhite:kMuted);
+    if(!sub.empty())ui_.text(false,sub,x+28*S,y+57*S,19*S,kMuted);
+    if(enabled)uiRects_.push_back({Vec4(x,y,w,h),id});
+    y+=h+10*S;
   };
-  if (menu_ == MenuState::Pause) {
-    float h = 520 * S, y = (screenH_ - h) / 2;
-    ui_.glow(x, y + 8, cardW, h, 30 * S, 28 * S, C(0, 0, 0, 0.5f));
-    ui_.rect(x, y, cardW, h, C(0.05f, 0.06f, 0.09f, 0.9f), 30 * S, 1.6f * S, C(1, 1, 1, 0.16f));
-    ui_.text(true, "PAUSADO", x + cardW / 2, y + 28 * S, 54 * S, kWhite, Align::Center);
-    float by = y + 120 * S, bh = 78 * S, bg = 14 * S;
-    button(by, bh, "Continuar", "play", 200, true); by += bh + bg;
-    button(by, bh, "Salvar jogo", "save", 201); by += bh + bg;
-    button(by, bh, "Configurações", "gear", 202); by += bh + bg;
-    button(by, bh, "Sair do jogo", "close", 203);
-    ui_.text(false, "Dinheiro " + fmtMoney(moneyCents_) + "   •   Progresso salvo automaticamente", x + cardW / 2, y + h - 40 * S, 22 * S, kMuted, Align::Center);
-  } else {
-    float h = 790 * S, y = (screenH_ - h) / 2;
-    ui_.glow(x, y + 8, cardW, h, 30 * S, 28 * S, C(0, 0, 0, 0.5f));
-    ui_.rect(x, y, cardW, h, C(0.05f, 0.06f, 0.09f, 0.92f), 30 * S, 1.6f * S, C(1, 1, 1, 0.16f));
-    ui_.text(true, "CONFIGURAÇÕES", x + cardW / 2, y + 26 * S, 46 * S, kWhite, Align::Center);
-    float ry = y + 110 * S, rh = 84 * S;
-    auto slider = [&](const char* label, float v, float lo, float hi, int id, const std::string& valueText) {
-      float rx = x + 34 * S, rw = cardW - 68 * S;
-      ui_.rect(rx, ry, rw, rh - 10 * S, C(1, 1, 1, 0.07f), 20 * S);
-      ui_.text(true, label, rx + 24 * S, ry + 8 * S, 28 * S, kWhite, Align::Left);
-      ui_.text(false, valueText, rx + rw - 24 * S, ry + 8 * S, 24 * S, kMuted, Align::Right);
-      float tx = rx + 24 * S, tw = rw - 48 * S, ty = ry + rh - 30 * S;
-      float t = clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
-      ui_.rect(tx, ty - 4 * S, tw, 8 * S, C(1, 1, 1, 0.16f), 4 * S);
-      ui_.rect(tx, ty - 4 * S, tw * t, 8 * S, kAccent, 4 * S);
-      ui_.circle(tx + tw * t, ty, 15 * S, kWhite, 3 * S, kAccent);
-      uiRects_.push_back({Vec4(tx - 20 * S, ty - 34 * S, tw + 40 * S, 68 * S), id});
-      ry += rh;
-    };
-    auto toggle = [&](const char* label, bool on, int id, const std::string& txt = "") {
-      float rx = x + 34 * S, rw = cardW - 68 * S;
-      bool pressed = pressedUi_ == id;
-      ui_.rect(rx, ry, rw, rh - 10 * S, pressed ? C(1, 1, 1, 0.2f) : C(1, 1, 1, 0.07f), 20 * S);
-      ui_.text(true, label, rx + 24 * S, ry + (rh - 10 * S) / 2 - 18 * S, 28 * S, kWhite, Align::Left);
-      if (!txt.empty()) ui_.text(true, txt, rx + rw - 24 * S, ry + (rh - 10 * S) / 2 - 16 * S, 26 * S, kAccent, Align::Right);
-      else {
-        float sw = 86 * S, sh = 44 * S, sx = rx + rw - sw - 24 * S, sy = ry + (rh - 10 * S) / 2 - sh / 2;
-        ui_.rect(sx, sy, sw, sh, on ? withAlpha(kMint, 0.85f) : C(1, 1, 1, 0.2f), sh / 2);
-        ui_.circle(sx + (on ? sw - sh / 2 : sh / 2), sy + sh / 2, sh / 2 - 4 * S, kWhite);
+  auto title=[&](const std::string&t){ui_.text(true,t,x,y,48*S,kWhite);y+=80*S;};
+  switch(menu_) {
+    case MenuState::Main:
+      title("BAIRRO");text("Uma cidade. A sua história.",y,24);y+=70*S;
+      button("CONTINUAR",400,"",recentSlot()>=0);button("NOVO JOGO",401);button("CARREGAR JOGO",402);button("CONFIGURAÇÕES",202);button("SAIR",203);
+      break;
+    case MenuState::Slots: {
+      title(selectingNew_?"NOVO JOGO — SLOTS":"CARREGAR JOGO");
+      for(int i=0;i<4;++i){auto s=inspectSlot(i);std::string label="SAVE 0"+std::to_string(i+1)+(i==selectedSlot_?"  •":"");
+        std::string detail=s.exists?fmtMoney(s.money)+" • "+std::to_string((int)s.playtime/60)+" min • "+s.location+" • seed "+std::to_string(s.seed)+" • "+s.date:"Slot livre";
+        button(label,410+i,detail);}
+      auto s=inspectSlot(selectedSlot_);
+      button(selectingNew_?(s.exists?"SUBSTITUIR SLOT":"CRIAR NOVO SAVE"):"CARREGAR SLOT",420,"",selectingNew_||s.exists);
+      if(s.exists)button("EXCLUIR SLOT",421,"",!sessionActive_||selectedSlot_!=activeSlot_);
+      button("Voltar",304);break;
+    }
+    case MenuState::Confirm:
+      title(confirmDelete_?"EXCLUIR SAVE?":"SUBSTITUIR SAVE?");text("SAVE 0"+std::to_string(selectedSlot_+1)+" será removido. Esta ação não pode ser desfeita.",y,24);y+=90*S;
+      button("Confirmar",430);button("Cancelar",431);break;
+    case MenuState::Pause:
+      title("PAUSADO");button("MAPA",204);button("JOGO — CONTINUAR",200);button("INVENTÁRIO",205);button("CÓDIGOS",206);button("CONFIGURAÇÕES",202);button("SALVAR",201);button("MENU PRINCIPAL",207);break;
+    case MenuState::Inventory:
+      title("INVENTÁRIO");button(inventoryTab_ ? "ARMAS — ver consumíveis" : "CONSUMÍVEIS — ver armas", 520);
+      if(inventoryTab_) {
+        for(int i=0;i<kWeaponCount;++i) if(player_.owned[i])button(std::string(weaponDef(i).name)+(i==player_.weapon?" • equipada":"")+" • "+std::to_string(player_.mag[i])+" / "+std::to_string(player_.reserve[i]),530+i);
+        button("Voltar",304);break;
       }
-      uiRects_.push_back({Vec4(rx, ry, rw, rh - 10 * S), id});
-      ry += rh;
-    };
-    slider("Sensibilidade da câmera", settings_.sensitivity, 0.4f, 2.0f, 100, fmtFloat(settings_.sensitivity, 2) + "x");
-    slider("Tamanho dos controles", settings_.hudScale, 0.75f, 1.35f, 101, std::to_string((int)(settings_.hudScale * 100)) + "%");
-    static const char* q[4] = {"BAIXO", "MÉDIO", "ALTO", "ULTRA"};
-    toggle("Qualidade gráfica", false, 303, q[clamp(settings_.quality, 0, 3)]);
-    toggle("Resolução dinâmica", settings_.dynamicRes, 305);
-    toggle("Sombras dinâmicas", settings_.shadows, 301);
-    toggle("Inverter eixo Y da câmera", settings_.invertY, 300);
-    toggle("Mostrar FPS", settings_.showFps, 302);
-    button(ry + 10 * S, 74 * S, "Voltar", "arrow", 304, true);
+      for(int i=1;i<kItemCount;++i)if(inventory_[i]>0)button(std::string(itemDef(i).name)+" ×"+std::to_string(inventory_[i])+" — usar",500+i);
+      if(std::all_of(inventory_+1,inventory_+kItemCount,[](int n){return n==0;})){text("Sem consumíveis. Visite uma loja.",y,24);y+=50*S;}
+      // Equipped weapon and ammunition remain visible without overflowing the consumable list.
+      text(std::string("Arma: ")+weaponDef(player_.weapon).name+" • "+std::to_string(player_.mag[player_.weapon])+" / "+std::to_string(player_.reserve[player_.weapon]),y,23);y+=56*S;
+      button("Voltar",304);break;
+    case MenuState::Codes: {
+      title("CÓDIGOS");static const char* codes[]={"RECUPERAR VIDA","DAR ARMAS","MUNIÇÃO","DINHEIRO DE TESTE","REMOVER PROCURADO","ADICIONAR PROCURADO","REPARAR VEÍCULO","ENCHER TANQUE"};
+      for(int i=0;i<8;++i)button(codes[i],600+i);
+      button("Voltar",304);break;
+    }
+    case MenuState::Settings: {
+      title("CONFIGURAÇÕES");
+      static const char* tabs[]={"GRÁFICOS","ÁUDIO","CONTROLES","GAMEPLAY","ACESSIBILIDADE"};
+      float tw=w/5;for(int i=0;i<5;++i){ui_.rect(x+tw*i,y,tw-6*S,54*S,C(1,1,1,settingsTab_==i?0.2f:0.05f),4*S);ui_.text(false,tabs[i],x+tw*(i+0.5f),y+16*S,18*S,kWhite,Align::Center);uiRects_.push_back({Vec4(x+tw*i,y,tw-6*S,54*S),700+i});}y+=78*S;
+      if(settingsTab_==0){
+        button(std::string("Qualidade: ")+preset().name,303);
+        button("Resolução: "+std::to_string((int)(settings_.resolution*100))+"%",710);
+        button(std::string("Sombras: ")+(settings_.shadows?"ativadas":"desativadas"),301);
+        button("Vegetação: "+std::to_string((int)(settings_.vegetation*100))+"%",711);
+        button("Distância: "+std::to_string((int)(settings_.renderDistance*100))+"%",712);
+        button(std::string("Efeitos / bloom: ")+(settings_.effects?"ativados":"desativados"),713);
+        button(std::string("Resolução dinâmica: ")+(settings_.dynamicRes?"ativada":"desativada"),305);
+        button("Limite de FPS: "+std::to_string(settings_.fpsLimit),718);
+      }else if(settingsTab_==1)button("Volume: "+std::to_string((int)(settings_.volume*100))+"%",714);
+      else if(settingsTab_==2){button("Sensibilidade: "+fmtFloat(settings_.sensitivity,1)+"x",715);button(std::string("Inverter Y: ")+(settings_.invertY?"sim":"não"),300);}
+      else if(settingsTab_==3)button(std::string("Ciclo dia / noite: ")+(settings_.dayCycle?"ativo":"congelado"),716);
+      else {button("Escala da interface: "+std::to_string((int)(settings_.hudScale*100))+"%",717);button(std::string("Mostrar FPS: ")+(settings_.showFps?"sim":"não"),302);}
+      button("Voltar",304);break;
+    }
+    default:break;
+  }
+  (void)dt;
+}
+
+void Game::menuAction(int id) {
+  if(id==304){
+    if(menu_==MenuState::Settings){writeSettings();menu_=settingsBack_;}
+    else if(menu_==MenuState::Slots)menu_=MenuState::Main;
+    else menu_=MenuState::Pause;
+  }else if(id==200)menu_=MenuState::None;
+  else if(id==201){toast(saveGame()?"Jogo salvo":"Falha ao salvar", "save");}
+  else if(id==202)openSettingsMenu();
+  else if(id==203){if(!sessionActive_||saveGame())quit_=true;else toast("Falha ao salvar", "save");}
+  else if(id==204){menu_=MenuState::Map;mapCenter_={};mapZoom_=1;}
+  else if(id==205)menu_=MenuState::Inventory;
+  else if(id==206)menu_=MenuState::Codes;
+  else if(id==207)returnToMain();
+  else if(id==400){int s=recentSlot();if(s>=0)startSlot(s,false);}
+  else if(id==401||id==402){menu_=MenuState::Slots;selectingNew_=id==401;selectedSlot_=0;}
+  else if(id>=410&&id<414)selectedSlot_=id-410;
+  else if(id==420){if(selectingNew_&&inspectSlot(selectedSlot_).exists){confirmDelete_=false;menu_=MenuState::Confirm;}else startSlot(selectedSlot_,selectingNew_);}
+  else if(id==421){confirmDelete_=true;menu_=MenuState::Confirm;}
+  else if(id==430){if(confirmDelete_){toast(deleteSlot(selectedSlot_)?"Save excluído":"Não foi possível excluir", "save");menu_=MenuState::Slots;}else startSlot(selectedSlot_,true,true);}
+  else if(id==431)menu_=MenuState::Slots;
+  else if(id>500&&id<500+kItemCount)useItem(id-500);
+  else if(id==520)inventoryTab_=1-inventoryTab_;
+  else if(id>=530&&id<530+kWeaponCount) {equipWeapon(id-530);toast(std::string("Equipada: ")+weaponDef(id-530).name,"bag");}
+  else if(id>=600&&id<608)executeCode(id-600);
+  else if(id>=700&&id<705)settingsTab_=id-700;
+  else if(id==901)mapZoom_=std::min(8.0f,mapZoom_*1.4f);
+  else if(id==902)mapZoom_=std::max(1.0f,mapZoom_/1.4f);
+  else if(id==903){
+    mapCenter_=player_.pos;
+    if(player_.indoors){int index=world_.interiorAt(player_.pos.x,player_.pos.y);if(index>=0){int shop=world_.interiors[index].shop;if(shop>=0&&shop<(int)world_.shops.size())mapCenter_={world_.shops[shop].door.x,world_.shops[shop].door.z};}}
+    mapZoom_=4;
+  }
+  else if(menu_==MenuState::Settings){
+    if(id==300)settings_.invertY=!settings_.invertY;
+    if(id==301)settings_.shadows=!settings_.shadows;
+    if(id==302)settings_.showFps=!settings_.showFps;
+    if(id==303)settings_.quality=(settings_.quality+1)%4;
+    if(id==305)settings_.dynamicRes=!settings_.dynamicRes;
+    if(id==710)settings_.resolution=settings_.resolution<0.99f?std::min(1.0f,settings_.resolution+0.1f):0.6f;
+    if(id==711)settings_.vegetation=settings_.vegetation<0.99f?std::min(1.0f,settings_.vegetation+0.25f):0.25f;
+    if(id==712)settings_.renderDistance=settings_.renderDistance<1.39f?settings_.renderDistance+0.2f:0.6f;
+    if(id==713)settings_.effects=!settings_.effects;
+    if(id==714)settings_.volume=settings_.volume<0.99f?std::min(1.0f,settings_.volume+0.1f):0;
+    if(id==715)settings_.sensitivity=settings_.sensitivity<1.99f?settings_.sensitivity+0.2f:0.4f;
+    if(id==716)settings_.dayCycle=!settings_.dayCycle;
+    if(id==718)settings_.fpsLimit=settings_.fpsLimit==30?60:30;
+    if(id==717)settings_.hudScale=settings_.hudScale<1.34f?settings_.hudScale+0.1f:0.75f;
+    applySettings();writeSettings();
   }
 }
 
 void Game::handleUiPointers(const InputFrame& in) {
-  auto hit = [&](Vec2 p) {
-    for (auto it = uiRects_.rbegin(); it != uiRects_.rend(); ++it) {
-      const Vec4& r = it->first;
-      if (p.x >= r.x && p.x <= r.x + r.z && p.y >= r.y && p.y <= r.y + r.w) return it->second;
+  auto hit=[&](Vec2 p){for(auto it=uiRects_.rbegin();it!=uiRects_.rend();++it){const auto&r=it->first;if(p.x>=r.x&&p.x<=r.x+r.z&&p.y>=r.y&&p.y<=r.y+r.w)return it->second;}return -1;};
+  for(const auto&p:in.ui){
+    if(p.pressed){pressedUi_=hit(p.pos);if(menu_==MenuState::Map&&pressedUi_==900){mapDragging_=true;mapDrag_=p.pos;}}
+    if(menu_==MenuState::Map&&mapDragging_&&p.down){
+      float size=std::min(screenH_-180*uiScale(),screenW_-460*uiScale());
+      mapCenter_=mapCenter_-(p.pos-mapDrag_)*(2*mapExtent_/mapZoom_/size);mapDrag_=p.pos;
+      mapCenter_.x=clamp(mapCenter_.x,-mapExtent_,mapExtent_);mapCenter_.y=clamp(mapCenter_.y,-mapExtent_,mapExtent_);
     }
-    return -1;
-  };
-  auto applySlider = [&](int slider, float px) {
-    for (const auto& pr : uiRects_)
-      if (pr.second == slider) {
-        float tx = pr.first.x + 20 * uiScale(), tw = pr.first.z - 40 * uiScale();
-        float t = clamp((px - tx) / tw, 0.0f, 1.0f);
-        if (slider == 100) settings_.sensitivity = 0.4f + t * 1.6f;
-        if (slider == 101) settings_.hudScale = 0.75f + t * 0.6f;
-      }
-  };
-  for (const UiPointer& p : in.ui) {
-    if (p.pressed) {
-      pressedUi_ = hit(p.pos);
-      if (pressedUi_ == 100 || pressedUi_ == 101) { activeSlider_ = pressedUi_; applySlider(activeSlider_, p.pos.x); }
-    } else if (p.down && activeSlider_ >= 0) {
-      applySlider(activeSlider_, p.pos.x);
-    }
-    if (p.released) {
-      if (activeSlider_ >= 0) { applySlider(activeSlider_, p.pos.x); activeSlider_ = -1; pressedUi_ = -1; applySettings(); continue; }
-      int id = hit(p.pos);
-      if (id >= 0 && id == pressedUi_) {
-        if (menu_ == MenuState::Pause) {
-          if (id == 200) menu_ = MenuState::None;
-          else if (id == 201) { saveGame(); toast("Jogo salvo", "save"); menu_ = MenuState::None; }
-          else if (id == 202) menu_ = MenuState::Settings;
-          else if (id == 203) { saveGame(); quit_ = true; }
-        } else if (menu_ == MenuState::Settings) {
-          if (id == 300) settings_.invertY = !settings_.invertY;
-          else if (id == 301) settings_.shadows = !settings_.shadows;
-          else if (id == 302) settings_.showFps = !settings_.showFps;
-          else if (id == 303) { settings_.quality = (settings_.quality + 1) % 4; applySettings(); }
-          else if (id == 305) settings_.dynamicRes = !settings_.dynamicRes;
-          else if (id == 304) { menu_ = MenuState::Pause; saveGame(); }
-          applySettings();
-        } else if (panel_.open && id >= 0 && id < 100) {
-          selectPanelOption(id);
-        }
-      }
-      pressedUi_ = -1;
+    if(p.released){int id=hit(p.pos);mapDragging_=false;
+      if(id>=0&&id==pressedUi_){if(menu_!=MenuState::None)menuAction(id);else if(panel_.open&&id<100)selectPanelOption(id);}
+      pressedUi_=-1;
     }
   }
 }
@@ -692,7 +741,8 @@ void Game::buildUi(gfx::FrameData& fd, float dt) {
     // non-destructive snapshot kept in lastVisual_.
   }
   in = visualInput_;
-  drawHud(dt, in);
+  if (sessionActive_ && menu_ == MenuState::None) drawHud(dt, in);
+  else drawToasts(dt);
   if (wheel_.anim > 0.01f) drawWheel(dt);
   if (panel_.open) drawPanel(dt);
   if (menu_ != MenuState::None) drawMenus(dt);

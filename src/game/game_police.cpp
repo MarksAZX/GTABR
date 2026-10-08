@@ -422,7 +422,7 @@ void Game::copThink(Npc& c, float dt) {
       }
       if (player_.vehicle >= 0) { moveTo(pp, 5.6f); break; }
       // armed response: shoot at level 3 or when the suspect has a firearm out / is shooting
-      bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || wanted_ >= 2 && d > 8.0f);
+      bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || (wanted_ >= 2 && d > 8.0f));
       if (shoot && d < 24.0f) {
         c.speed = 0;
         c.yaw = lerpAngle(c.yaw, yawFromDir(pp - c.pos), expDecay(10.0f, dt));

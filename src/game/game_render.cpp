@@ -174,11 +174,11 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   fd.shadowCascades = std::max(1, qp.shadowCascades);
   fd.vignette = 0.26f;
   fd.fade = fadeAlpha_;
-  fd.blur = blur_;
+  fd.blur = menu_ != MenuState::None ? 0.5f : blur_;
   fd.dim = blur_ * 0.5f;
   // indoors: neutral lamp exposure
   fd.exposure = lerp(day_.exposure, 1.05f, ind);
-  fd.bloom = qp.bloom ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
+  fd.bloom = qp.bloom && settings_.effects ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
   fd.bloomThreshold = lerp(1.1f, 0.55f, day_.night);
   fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
   fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};
@@ -192,16 +192,17 @@ void Game::emitWorld(gfx::FrameData& fd) {
   Vec3 focus = cam_.focus();
   stats_.drawnChunks = 0;
   for (const World::Chunk& c : world_.chunks) {
-    if (!c.handle.valid()) continue;
+    if (!c.handle.valid() && !c.lodHandle.valid()) continue;
     if (c.interior != indoors) continue;
     Vec3 ctr = c.bounds.center();
     // HLOD: far chunks draw their merged low-detail mesh (one box per building, flat ground)
     float camD = std::sqrt((ctr.x - focus.x) * (ctr.x - focus.x) + (ctr.z - focus.z) * (ctr.z - focus.z));
-    bool far = c.lodHandle.valid() && camD > lodDistance_;
+    if (camD > preset().drawDistance * settings_.renderDistance + World::kChunk) continue;
+    bool far = c.lodHandle.valid() && (camD > lodDistance_ || !c.handle.valid());
     if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(far ? c.lodHandle.id : c.handle.id); stats_.drawnChunks++; }
     float dx = ctr.x - shadowFocus_.x, dz = ctr.z - shadowFocus_.z;
     float ext = (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
-    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(c.handle.id);
+    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(far ? c.lodHandle.id : c.handle.id);
   }
   if (indoors && world_.interiorCeilingHandle.valid() && cam_.blend() > 0.45f && cam_.eye().y < 3.1f)
     fd.worldMeshes.push_back(world_.interiorCeilingHandle.id);
@@ -306,7 +307,10 @@ void Game::emitSprites(gfx::FrameData& fd) {
     // ---- trees and props
     for (size_t i = 0; i < world_.decor.size(); ++i) {
       const DecorInstance& d = world_.decor[i];
-      float reach = d.kind == DecorKind::Tree ? 4.5f : 1.8f;
+      if (decorModels_.ready && d.model >= 0) continue;
+      if (d.species >= 0 && decorModels_.ready && (d.pos-eye).length() <= preset().drawDistance * settings_.renderDistance * 0.75f) continue;
+      if (d.kind == DecorKind::Tree && (i%100)/100.0f > settings_.vegetation * preset().decorDensity) continue;
+      float reach = d.kind == DecorKind::Tree ? 6.0f : 1.8f;
       if (!visible(d.pos, reach)) continue;
       const DecorSprites* ds = decorOf_[i];
       if (!ds) continue;

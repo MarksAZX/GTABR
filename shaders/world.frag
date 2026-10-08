@@ -25,7 +25,7 @@ vec3 perturb(vec3 N, vec3 P, vec2 uv, vec3 tn) {
 }
 
 void main() {
-  vec3 Ng = normalize(vNormal);
+  vec3 Ng = dot(vNormal,vNormal) > 0.00001 ? normalize(vNormal) : vec3(0,1,0);
   vec4 tex = texture(uMat, vUVL);
   vec4 nr = texture(uMatN, vUVL);
   vec3 albedo = tex.rgb * vColor.rgb;
@@ -34,6 +34,14 @@ void main() {
   vec3 N = perturb(Ng, vWorld, vUVL.xy, tn);
   float rough = clamp(nr.b, 0.04, 1.0);
   float ao = vColor.a * mix(1.0, nr.a, 0.85);
+  if (vUVL.z > 30.5 && vUVL.z < 31.5) {
+    N = Ng;
+    float phase = vUVL.y * 1.1 - g.camPos.w * 1.7;
+    float foam = pow(max(0.0, sin(phase)), 14.0) * (1.0 - smoothstep(0.0, 12.0, vUVL.y));
+    albedo = mix(vColor.rgb * 0.75, vec3(0.87, 0.92, 0.9), foam * 0.85);
+    rough = mix(0.14, 0.58, foam);
+    ao = 1.0;
+  }
   // rain-darkened / wet ground: darker albedo, glossier on horizontal surfaces
   float wet = g.cascade.w * smoothstep(0.7, 0.95, Ng.y);
   albedo *= 1.0 - 0.35 * wet;

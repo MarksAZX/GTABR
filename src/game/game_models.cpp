@@ -62,7 +62,7 @@ void Game::queueModels() {
   for (int i = 0; i < kClipCount; ++i) clipsOk &= loadClip(kClipFiles[i], clips_[i]);
   if (!clipsOk) { clips_.clear(); LOGE("animation clips missing - characters fall back to sprites"); }
   else {
-    clips_.resize(kClipCount + kActCount);
+    clips_.resize((int)kClipCount + (int)kActCount);
     for (int a = 0; a < kActCount; ++a)
       if (!loadClip(std::string("data/models/anim_") + actionFile(a) + ".ganim", clips_[kClipCount + a]))
         LOGW("action clip %s missing (gameplay still runs, without that animation)", actionFile(a));
@@ -317,13 +317,30 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
   pendingLights_.clear();
   const bool indoors = player_.indoors;
   const Frustum& fr = cam_.frustum();
-  const float drawDist = preset().drawDistance;
+  const float drawDist = preset().drawDistance * settings_.renderDistance;
   const Vec3 eye = cam_.eye();
   auto visible = [&](Vec3 p, float r) {
     if ((p - eye).lengthSq() > drawDist * drawDist) return false;
     return fr.intersectsSphere({p.x, p.y + r * 0.5f, p.z}, r);
   };
 
+  if (decorModels_.ready && !indoors) {
+    for (size_t i=0;i<world_.decor.size();++i) {
+      const auto& obj=world_.decor[i];bool tree=obj.species>=0;
+      if(!tree && obj.model<0) continue;
+      if(tree && (i%100)/100.0f > settings_.vegetation * preset().decorDensity) continue;
+      float radius=tree?6.0f:4.0f; if(!visible(obj.pos,radius)) continue;
+      float dist=(obj.pos-eye).length();
+      if(tree && dist>drawDist*0.75f) continue; // distant trees use their existing impostors
+      int index=tree?obj.species*3+(int)(i%3):obj.model;
+      const auto& list=tree?decorModels_.trees:decorModels_.props;
+      if(index<0 || index>=(int)list.size()) continue;
+      gfx::ModelDraw d;d.model=list[index];d.material=decorModels_.material;
+      d.lod=dist*preset().lodBias<25?0:(dist*preset().lodBias<60?1:2);
+      d.transform=yawMatrix(obj.pos,obj.yaw)*scaleM({obj.scale,obj.scale,obj.scale});
+      d.params={0,0,1,1};d.instanced=true;d.castShadow=dist<shadowRadius_;fd.models.push_back(d);++stats_.drawnModels;
+    }
+  }
   if (modelsReady_) {
     // ---- player
     if (player_.vehicle < 0) {
@@ -339,7 +356,13 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       AnimIn ai;
       ai.req = &player_.animReq; ai.reqSpeed = player_.animReqSpeed; ai.reqUpper = player_.animReqUpper; ai.reqHold = player_.animReqHold;
       ai.lying = player_.down && player_.animReq < 0 && a.action != kActKnockDown && player_.dead;
-      ai.weapon = player_.weapon;
+      ai.weapon = player_.swimming ? 0 : player_.weapon;
+      if (player_.swimming) {
+        int swim = player_.speed > 0.2f ? kActSwim : kActSwimIdle;
+        if (a.action != swim || a.actFading) animator_.play(a, swim, 1.0f, false, false);
+        else if (a.actT >= animator_.actionDuration(swim) - 0.08f) a.actT = 0;
+        ai.req = nullptr;
+      } else if (a.action == kActSwim || a.action == kActSwimIdle) animator_.stop(a);
       if (m && visible(pos, 2.0f)) emitCharacter(fd, *m, a, pos, player_.yaw, 1.0f, player_.speed, dt, true, {0, 0, 0, 0}, ai);
       interactPulse_ = std::max(0.0f, interactPulse_ - dt);
     }

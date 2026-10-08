@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 #include "../core/fileio.h"
 #include "../core/log.h"
@@ -14,6 +15,9 @@ bool Game::init(const Init& i) {
   r_ = i.renderer;
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
+  readSettings();
+  if (!i.mainMenu) { activeSlot_ = 0; sessionActive_ = true; freshSlot_ = i.newGame; if (!i.newGame) readSeed(); }
+  else menu_ = MenuState::Main;
   assets_.startLoading(r_, jobs_);
   queueModels();
   audio_.init();
@@ -23,37 +27,29 @@ bool Game::init(const Init& i) {
 }
 
 void Game::shutdown() {
-  if (phase_ == Phase::Playing) saveGame();
+  if (sessionActive_ && phase_ == Phase::Playing) saveGame();
   jobs_->waitIdle();
   audio_.shutdown();
 }
 
 void Game::startWorldJob() {
   jobs_->submit([this]() {
-    buildWorld(world_, worldSeed_);
+    worldReady_ = false;
+  buildWorld(world_, worldSeed_);
     worldReady_ = true;
   });
 }
 
 void Game::finishLoading() {
   // GPU meshes
-  for (auto& c : world_.chunks) {
-    if (c.mesh.empty()) continue;
-    c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
-    c.bounds = c.mesh.bounds;
-    c.mesh.v.clear(); c.mesh.v.shrink_to_fit(); c.mesh.idx.clear(); c.mesh.idx.shrink_to_fit();
-    if (!c.lod.empty()) {
-      c.lodHandle = r_->createMesh(c.lod.v.data(), c.lod.v.size(), c.lod.idx.data(), c.lod.idx.size());
-      c.lod.v.clear(); c.lod.v.shrink_to_fit(); c.lod.idx.clear(); c.lod.idx.shrink_to_fit();
-    }
-  }
+  for (auto& c : world_.chunks) c.bounds = c.mesh.bounds;
+  worldInstalled_ = true;
   if (!world_.interiorCeiling.empty()) {
     world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
                                                   world_.interiorCeiling.idx.size());
   }
   materials_ = assets_.materials;
-  finishModels();
-  buildWeaponMeshes(*r_, weaponMeshes_);
+  if (initialLoading_) { finishModels(); buildWeaponMeshes(*r_, weaponMeshes_); buildDecorModels(*r_, decorModels_); }
   // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
   {
     // weapon pickups on spots chosen by the city generator (melee first, firearms later in the list)
@@ -67,7 +63,7 @@ void Game::finishLoading() {
     phys::depenetrateCircle(world_, p, 0.5f);
     k.pos = {p.x, world_.heightAt(p.x, p.y), p.y};
   }
-  worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
+  if (initialLoading_) worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
   {
@@ -95,8 +91,9 @@ void Game::finishLoading() {
   }
   resetEntities(true);
   bool loaded = false;
-  if (!cfg_.newGame) loaded = loadGame();
-  if (!loaded) LOGI("Starting a new game");
+  if (sessionActive_ && !freshSlot_) loaded = loadGame();
+  if (sessionActive_ && !freshSlot_ && !loaded) {sessionActive_=false;toast("Save inválido. O arquivo foi preservado.","save");}
+  else if (!loaded) LOGI("Starting a new game");
   CameraInput ci;
   ci.focus = {player_.pos.x, player_.y, player_.pos.y};
   ci.headingYaw = player_.yaw;
@@ -105,7 +102,10 @@ void Game::finishLoading() {
   fadeAlpha_ = 1.0f;
   fadeTarget_ = 0.0f;
   applySettings();
-  toast("Bem-vindo ao bairro! Ache o carro e vá ao posto.", "pin");
+  initialLoading_ = false;
+  if (sessionActive_) { menu_ = MenuState::None; if (freshSlot_) saveGame(); toast(world_.cityName + " • seed " + std::to_string(worldSeed_), "pin"); }
+  else menu_ = MenuState::Main;
+  updateStreaming();
 }
 
 void Game::resetEntities(bool fresh) {
@@ -125,6 +125,14 @@ void Game::resetEntities(bool fresh) {
     v.health = health[i];
     vehicles_.push_back(v);
   }
+  time_ = 0; autosave_ = 0; timeScale_ = 1;
+  wanted_ = 0; wantedHeat_ = 0; sinceSeen_ = 1e9f; evadeT_ = 0; deathT_ = 0;
+  policeSpawnT_ = 0; tutorialStep_ = 0; purchases_ = 0;
+  fueling_ = {}; events_.clear(); tracers_.clear(); stains_.clear();
+  panel_ = {}; wheel_.open = false; wheel_.anim = 0; blur_ = 0;
+  waypoint_ = {}; playerAnim_ = {}; npcAnim_.clear();
+  audio_.loopStop(sirenHandle_); sirenHandle_ = 0;
+  audio_.loopStop(surfHandle_); surfHandle_ = 0;
   player_ = Player();
   player_.pos = {world_.spawnPlayer.x, world_.spawnPlayer.z};
   player_.yaw = player_.targetYaw = world_.spawnYaw;
@@ -153,7 +161,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   lastDt_ = dtReal;
   fd_ = &fd;
   fd.clear();
-  timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
+  if (sessionActive_ && menu_ == MenuState::None && settings_.dayCycle) timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
   fd.blur = 0; fd.fade = 0; fd.dim = 0;
 
   // smoothed frame time for adaptive quality + FPS counter
@@ -189,6 +197,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   }
   updatePlaying(dtReal, in);
   setupGlobals(fd);
+  updateStreaming();
   buildScene(fd);
   buildUi(fd, dtReal);
 }
@@ -286,6 +295,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (panel_.open || wheel_.open || fadeAlpha_ > 0.6f) { gameIn.move = {}; gameIn.runHeld = false; }
 
   updatePlayer(dt, gameIn);
+  if (player_.swimming) {gameIn.attackPressed=false;gameIn.attackHeld=false;gameIn.reloadPressed=false;}
   updateCombat(dt, gameIn);
   updateVehicles(dt, gameIn);
   updateNpcs(dt);
@@ -329,6 +339,11 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     cameraShake_ = std::max(0.0f, cameraShake_ - dtReal * 2.5f);
     audio_.setListener(cam_.focus(), cam_.right());
   }
+  if ((world_.coastSide >= 0 && !player_.indoors && world_.beach.inflated(25).contains(player_.pos.x, player_.pos.y)) || player_.swimming) {
+    Vec3 sound{player_.pos.x,world_.waterLevel,player_.pos.y};
+    if(!surfHandle_)surfHandle_=audio_.loopStart("surf",sound,0.35f);
+    audio_.loopUpdate(surfHandle_,sound,0.35f);
+  } else if(surfHandle_){audio_.loopStop(surfHandle_);surfHandle_=0;}
   indoorBlend_ += ((player_.indoors ? 1.0f : 0.0f) - indoorBlend_) * expDecay(6.0f, dtReal);
 
   // timers for HUD
@@ -352,7 +367,7 @@ void Game::updateAdaptiveQuality(float dt) {
   if (adaptTimer_ < 3.0f || !settings_.dynamicRes) return;
   adaptTimer_ = 0;
   // dynamic resolution: never above the preset's base scale, never below 60% of it
-  float base = preset().renderScale;
+  float base = preset().renderScale * settings_.resolution;
   float s = r_->renderScale();
   if (frameMsAvg_ > 36.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.08f));
   else if (frameMsAvg_ < 24.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.08f));
@@ -360,7 +375,8 @@ void Game::updateAdaptiveQuality(float dt) {
 
 void Game::applySettings() {
   const QualityPreset& qp = preset();
-  r_->setRenderScale(qp.renderScale);
+  r_->setRenderScale(qp.renderScale * settings_.resolution);
+  audio_.setMasterVolume(settings_.volume);
   r_->setShadowMapSize(qp.shadowMapSize);
   r_->setShadowsEnabled(settings_.shadows && qp.shadowCascades > 0);
   cam_.sensitivity = settings_.sensitivity;
@@ -409,7 +425,7 @@ void Game::tryEnterExit() {
     player_.transitionVehicle = player_.vehicle;
     return;
   }
-  if (player_.indoors) return;
+  if (player_.indoors || player_.swimming) return;
   int vi = nearestVehicleTo(player_.pos, 2.4f);
   if (vi < 0) { toast("Nenhum veículo por perto", "car"); return; }
   if (vehicles_[vi].occupant >= 0) return;
@@ -496,8 +512,9 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   Vec2 dir = camF2 * mv.y + camR2 * mv.x;
   bool wantRun = in.runHeld && mag > 0.2f;
   bool canRun = (p.stamina > 6.0f || p.runBoost > 0.0f) && p.staminaCooldown <= 0.0f;
+  p.swimming = world_.waterDepth(p.pos.x, p.pos.y) > (p.swimming ? 0.65f : 0.9f);
   p.running = wantRun && canRun;
-  float maxSpeed = p.running ? 6.4f : 3.1f;
+  float maxSpeed = p.swimming ? (p.running ? 2.8f : 1.8f) : (p.running ? 6.4f : 3.1f);
   Vec2 desired = mag > 0.01f ? dir.normalized() * (maxSpeed * (p.running ? 1.0f : std::max(0.45f, mag))) : Vec2{0, 0};
   float accel = mag > 0.01f ? 16.0f : 20.0f;
   p.vel += (desired - p.vel) * expDecay(accel, dt);
@@ -552,7 +569,8 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   p.yaw = lerpAngle(p.yaw, p.targetYaw, expDecay(13.0f, dt));
   float stride = p.running ? 2.5f : 1.55f;
   if (p.speed > 0.25f) p.animTime += p.speed * dt / stride;
-  float hy = world_.heightAt(p.pos.x, p.pos.y);
+  p.swimming = world_.waterDepth(p.pos.x, p.pos.y) > (p.swimming ? 0.65f : 0.9f);
+  float hy = p.swimming ? world_.waterLevel - 0.85f + 0.04f * std::sin(realTime_ * 2.2f) : world_.heightAt(p.pos.x, p.pos.y);
   p.y += (hy - p.y) * expDecay(18.0f, dt);
   p.indoors = world_.inInterior(p.pos.x, p.pos.y);
   p.health = std::min(100.0f, p.health + 0.4f * dt);   // slow natural recovery
@@ -707,7 +725,7 @@ void Game::collectInteractables() {
     for (const DoorDef& d : world_.doors) {
       if (d.toInterior == player_.indoors) continue;   // exterior doors are only usable outside, exit doors inside
       Interactable it;
-      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair"; it.sub = d.toInterior ? "Mercado do Zé" : "Voltar à rua"; it.icon = "door";
+      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair"; it.sub = d.toInterior && d.shop >= 0 ? world_.shops[d.shop].name : "Voltar à rua"; it.icon = "door";
       add(it);
     }
     if (player_.indoors)
@@ -715,8 +733,10 @@ void Game::collectInteractables() {
         const ItemDef& d = itemDef(pr.item);
         Interactable it;
         it.kind = IKind::Product; it.id = pr.id; it.pos = pr.pos; it.radius = 1.5f; it.label = "Comprar";
-        it.sub = std::string(d.name) + " • " + fmtMoney(d.priceCents); it.icon = "cart"; it.art = d.art ? d.art : "";
-        it.enabled = moneyCents_ >= d.priceCents;
+        int price=d.priceCents;
+        if(pr.shop>=0) for(const auto& stock:world_.shops[pr.shop].stock) if(stock.kind==0&&stock.id==pr.item)price=stock.priceCents;
+        it.sub = std::string(d.name) + " • " + fmtMoney(price); it.icon = "cart"; it.art = d.art ? d.art : "";
+        it.enabled = moneyCents_ >= price;
         add(it);
       }
   }
@@ -773,7 +793,7 @@ void Game::activateInteractable(const Interactable& it) {
         ci.headingYaw = door.arriveYaw;
         ci.indoors = player_.indoors;
         cam_.snapTo(ci, world_, screenW_ / std::max(1.0f, screenH_));
-        toast(door.toInterior ? "Mercado do Zé" : "Na rua", door.toInterior ? "cart" : "pin");
+        toast(door.toInterior && door.shop >= 0 ? world_.shops[door.shop].name : "Na rua", door.toInterior ? "cart" : "pin");
       };
       break;
     }

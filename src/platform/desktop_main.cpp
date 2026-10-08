@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
   gi.saveDir = a.save;
   gi.newGame = a.newGame;
   gi.seed = a.seed;
+  gi.mainMenu = a.scenario == "menus";
   game.init(gi);
   game.setScreenSize((float)a.width, (float)a.height);
 

@@ -103,9 +103,9 @@ void buildWheelTextures(std::vector<uint8_t>& albedo, std::vector<uint8_t>& orm,
 
 enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipCount = 3 };
 // One-shot action clips (Meshy library, same skeleton), stored after the locomotion clips.
-enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActCount };
+enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActSwim, kActSwimIdle, kActCount };
 inline const char* actionFile(int a) {
-  static const char* k[kActCount] = {"punch", "kick", "hit", "knockdown", "standup", "slash", "reload", "chat"};
+  static const char* k[kActCount] = {"punch", "kick", "hit", "knockdown", "standup", "slash", "reload", "chat", "swim", "swimidle"};
   return k[a];
 }
 

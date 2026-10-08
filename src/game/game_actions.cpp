@@ -124,6 +124,9 @@ void Game::applyItemEffects(const ItemDef& d) {
 }
 
 void Game::buyItem(int item, bool fromShelf) {
+  if (item <= 0 || item >= kItemCount) return;
+  int in=world_.interiorAt(player_.pos.x,player_.pos.y);
+  if(in>=0){int sh=world_.interiors[in].shop;for(size_t i=0;i<world_.shops[sh].stock.size();++i)if(world_.shops[sh].stock[i].kind==0&&world_.shops[sh].stock[i].id==item){buyStock(sh,(int)i);return;}return;}
   const ItemDef& d = itemDef(item);
   if (moneyCents_ < d.priceCents) { toast("Dinheiro insuficiente para " + std::string(d.name), "coin", rgba(1.0f, 0.5f, 0.45f)); return; }
   moneyCents_ -= d.priceCents;
@@ -132,43 +135,39 @@ void Game::buyItem(int item, bool fromShelf) {
   toast(std::string("Comprou: ") + d.name + " • -" + fmtMoney(d.priceCents) + (fromShelf ? "" : ""), "bag");
 }
 
-void Game::openShopPanel(const char* portrait) {
-  Panel p;
-  p.title = "Mercado do Zé";
-  p.portrait = portrait;
-  p.text = "O que vai levar hoje?";
-  for (int i = 1; i < kItemCount; ++i) {
-    const ItemDef& d = itemDef(i);
-    if (!d.sold) continue;
-    PanelOption o;
-    o.label = d.name;
-    o.sub = fmtMoney(d.priceCents) + (inventory_[i] > 0 ? "  •  você tem " + std::to_string(inventory_[i]) : "");
-    o.art = d.art ? d.art : "";
-    o.enabled = moneyCents_ >= d.priceCents;
-    o.closes = false;
-    int item = i;
-    o.action = [this, item]() {
-      buyItem(item, false);
-      // refresh the sub-labels/enabled flags in place
-      for (size_t k = 0; k < panel_.options.size(); ++k) {
-        int id = (int)k + 1;
-        if (id >= kItemCount || panel_.options[k].label == "Fechar") continue;
-        const ItemDef& dd = itemDef(id);
-        panel_.options[k].enabled = moneyCents_ >= dd.priceCents;
-        panel_.options[k].sub = fmtMoney(dd.priceCents) + (inventory_[id] > 0 ? "  •  você tem " + std::to_string(inventory_[id]) : "");
-      }
-    };
-    p.options.push_back(o);
+bool Game::buyStock(int shop, int stock) {
+  if(shop<0||shop>=(int)world_.shops.size()) return false;
+  const auto& sh=world_.shops[shop];
+  if(stock<0||stock>=(int)sh.stock.size()||world_.interiorAt(player_.pos.x,player_.pos.y)!=sh.interior) return false;
+  const auto& st=sh.stock[stock];
+  if(st.priceCents<0||moneyCents_<st.priceCents) {toast("Dinheiro insuficiente", "coin"); return false;}
+  if(st.kind==0) {if(st.id<=0||st.id>=kItemCount||inventory_[st.id]>=10000)return false;inventory_[st.id]++;}
+  else {if(st.id<=0||st.id>=kWeaponCount)return false;giveWeapon(st.id,st.kind==2?weaponDef(st.id).magazine*2:0);}
+  moneyCents_-=st.priceCents;moneyShow_=4;++purchases_;
+  toast(std::string("Comprou: ")+(st.kind==0?itemDef(st.id).name:weaponDef(st.id).name)+" • −"+fmtMoney(st.priceCents),"bag");return true;
+}
+void Game::openShopPanel(const char* portrait, int shop) {
+  if(shop<0){int in=world_.interiorAt(player_.pos.x,player_.pos.y);if(in>=0)shop=world_.interiors[in].shop;}
+  if(shop<0||shop>=(int)world_.shops.size())return;
+  const auto& sh=world_.shops[shop];
+  Panel p;p.title=sh.name;p.portrait=portrait;p.text="Escolha um produto • saldo "+fmtMoney(moneyCents_);
+  for(size_t i=0;i<sh.stock.size();++i){const auto& st=sh.stock[i];PanelOption o;
+    o.label=st.kind==0?itemDef(st.id).name:weaponDef(st.id).name;
+    o.sub=fmtMoney(st.priceCents)+(st.kind==0?" • no inventário: "+std::to_string(inventory_[st.id]):" • equipamento");
+    o.enabled=moneyCents_>=st.priceCents;o.closes=false;
+    o.icon=st.kind==0?itemDef(st.id).icon:weaponDef(st.id).icon;
+    o.action=[this,shop,i](){buyStock(shop,(int)i);openShopPanel("atendente",shop);};p.options.push_back(o);
   }
-  p.options.push_back({"Fechar", "", "close", "", true, true, nullptr});
-  openPanel(p);
+  p.options.push_back({"Fechar", "", "close", "", true, true, nullptr});openPanel(p);
 }
 
 void Game::openAttendantPanel() {
   Panel p;
   p.title = "Atendente";
   p.portrait = "atendente";
-  p.text = "Olá! Bem-vindo ao Mercado do Zé. Posso ajudar?";
+  int in=world_.interiorAt(player_.pos.x,player_.pos.y);
+  std::string name=in>=0?world_.shops[world_.interiors[in].shop].name:"loja";
+  p.text = "Olá! Bem-vindo a " + name + ". Posso ajudar?";
   p.options.push_back({"Ver produtos", "Água, lanches, kit de primeiros socorros...", "cart", "", true, false, [this]() { openShopPanel("atendente"); }});
   p.options.back().closes = false;
   p.options.push_back({"Conversar", "", "chat", "", true, false, [this]() {

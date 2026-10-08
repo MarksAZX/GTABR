@@ -107,6 +107,7 @@ struct ModelDraw {
   Vec4 params{0, 0, 1, 1};    // x emissive, y clear coat, z roughness scale, w unused
   int boneOffset = -1;        // first matrix in FrameData::bones (skinned models)
   bool castShadow = true;
+  bool instanced = false; // identical static material/params, grouped by mesh and LOD
 };
 
 struct Batch { TexHandle tex; uint32_t first = 0, count = 0; };
@@ -162,6 +163,7 @@ class Renderer {
   TexHandle createTextureRGBA(uint32_t w, uint32_t h, const uint8_t* rgba, bool srgb, bool mips, SamplerKind sampler);
   MeshHandle createMesh(const WorldVertex* v, size_t nv, const uint32_t* idx, size_t ni);
   void destroyMesh(MeshHandle h);
+  void destroyTexture(TexHandle h);
   ModelHandle createModel(const ModelVertex* v, size_t nv, const uint32_t* idx, size_t ni, const ModelLod* lods, int lodCount,
                           bool skinned);
   // World material: two texture arrays. Model material: albedo, normal, ORM 2D textures (invalid -> neutral defaults).
@@ -263,7 +265,7 @@ class Renderer {
   VkPipeline pipeWorld_ = VK_NULL_HANDLE, pipeShadow_ = VK_NULL_HANDLE, pipeSprite_ = VK_NULL_HANDLE,
              pipeSilhouette_ = VK_NULL_HANDLE, pipeDecal_ = VK_NULL_HANDLE, pipeSky_ = VK_NULL_HANDLE,
              pipeUi_ = VK_NULL_HANDLE, pipeBlurDown_ = VK_NULL_HANDLE, pipeBlurUp_ = VK_NULL_HANDLE,
-             pipeComposite_ = VK_NULL_HANDLE, pipeMesh_ = VK_NULL_HANDLE, pipeMeshSkinned_ = VK_NULL_HANDLE,
+             pipeComposite_ = VK_NULL_HANDLE, pipeMesh_ = VK_NULL_HANDLE, pipeMeshInstanced_ = VK_NULL_HANDLE, pipeMeshSkinned_ = VK_NULL_HANDLE,
              pipeShadowMesh_ = VK_NULL_HANDLE, pipeShadowSkinned_ = VK_NULL_HANDLE;
   VkSampler samplers_[3] = {};
   std::vector<VkShaderModule> shaderModules_;
@@ -272,6 +274,10 @@ class Renderer {
   FrameRes frames_[kFrames];
   uint32_t frameIndex_ = 0;
 
+  struct RetiredMesh { MeshRes mesh; int remaining = kFrames + 1; };
+  struct RetiredTex { TexRes tex; int remaining = kFrames + 1; };
+  std::vector<RetiredMesh> retiredMeshes_;
+  std::vector<RetiredTex> retiredTextures_;
   std::vector<MeshRes> meshes_;
   std::vector<TexRes> textures_;
   std::vector<ModelRes> models_;

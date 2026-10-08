@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <unistd.h>
 
 #ifdef __ANDROID__
 #include <android/asset_manager.h>
@@ -78,9 +79,10 @@ bool writeFileAtomic(const std::string& path, const void* data, size_t size) {
   FILE* f = fopen(tmp.c_str(), "wb");
   if (!f) return false;
   size_t n = fwrite(data, 1, size, f);
-  fflush(f);
-  fclose(f);
-  if (n != size) return false;
+  bool flushed = fflush(f) == 0;
+  bool synced = flushed && fsync(fileno(f)) == 0;
+  bool closed = fclose(f) == 0;
+  if (n != size || !synced || !closed) {std::remove(tmp.c_str()); return false;}
   return rename(tmp.c_str(), path.c_str()) == 0;
 }
 

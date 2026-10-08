@@ -453,7 +453,6 @@ class Gen {
 
   void streets() {
     float x0 = xs_.front() - hwx_.front(), x1 = xs_.back() + hwx_.back();
-    float z0 = zs_.front() - hwz_.front(), z1 = zs_.back() + hwz_.back();
     for (size_t j = 0; j < zs_.size(); ++j) {
       RectF r{x0, zs_[j] - hwz_[j], x1, zs_[j] + hwz_[j]};
       ground(r, 0.0f, mat::asphalt, 6.0f);
@@ -921,11 +920,11 @@ class Gen {
             return lerp(Vec3{0.32f, 0.78f, 0.74f}, Vec3{0.05f, 0.22f, 0.38f}, k);
           };
           MeshBuilder m = mb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f, tintAt(d));
-          bool flip = w_.coastSide == 1 || w_.coastSide == 2;
+
           // quad winding so the normal points up
-          if (flip == (w_.coastSide == 2 || w_.coastSide == 1))
+          if (w_.coastSide == 2 || w_.coastSide == 3)
             m.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
-          (void)tintAt;
+          else m.quad(a, b, c, e, {ss / 6.0f, d}, {ss1 / 6.0f, d}, {ss1 / 6.0f, d1}, {ss / 6.0f, d1}, mat::water);
         }
         d = d1;
       }
@@ -1104,7 +1103,20 @@ class Gen {
     collider(AABB({X1, 0, Z0}, {X1 + 1, HGT, Z1}), ColKind::Wall);
     auto furn = [&](float x0, float z0, float x1, float z1, float y1, int side, int top, Vec3 tint) {
       MeshBuilder bb = mb(cx, 0, tint);
-      bb.box(AABB({x0, 0, z0}, {x1, y1, z1}), side, top, 2.0f);
+      if (side == mat::shelf) {
+        // Open shelf silhouette: uprights, four boards and real product volumes.
+        bb.box(AABB({x0,0,z0},{x0+0.08f,y1,z1}),mat::metal,mat::metal,1);
+        bb.box(AABB({x1-0.08f,0,z0},{x1,y1,z1}),mat::metal,mat::metal,1);
+        for(int level=0;level<4;++level) {
+          float y=0.15f+level*(y1-0.2f)/4;
+          bb.setTint(tint);bb.box(AABB({x0,y,z0},{x1,y+0.045f,z1}),mat::wood,mat::wood,1);
+          for(float px=x0+0.28f;px<x1-0.25f;px+=0.38f) {
+            int variant=(int)((px-x0)*10)+level+shop.id;
+            bb.setTint(variant%3==0?Vec3{0.48f,0.25f,0.18f}:variant%3==1?Vec3{0.32f,0.47f,0.35f}:Vec3{0.75f,0.65f,0.43f});
+            bb.prism({px,y+0.045f,(z0+z1)*0.5f},0.09f,0.18f+(variant%3)*0.035f,6,mat::white,1);
+          }
+        }
+      } else bb.box(AABB({x0, 0, z0}, {x1, y1, z1}), side, top, 2.0f);
       collider(AABB({x0, 0, z0}, {x1, y1, z1}), ColKind::Prop);
       w_.interiorBlockers.push_back({x0, z0, x1, z1});
     };
@@ -1136,7 +1148,7 @@ class Gen {
           for (float x = g0 + 1.0f; x < g1 - 0.5f && k < (int)itemsOnShelves.size(); x += 2.4f) product(itemsOnShelves[k++], x, gz + 0.75f);
         }
         furn(X0, Z0 + 0.5f, X0 + 0.9f, Z1 - 2.5f, 2.0f, mat::metal, mat::white, {0.85f, 0.92f, 1.0f});
-        while (k < (int)itemsOnShelves.size()) product(itemsOnShelves[k++], X0 + 1.4f, Z0 + 1.0f + k * 1.2f);
+        while (k < (int)itemsOnShelves.size()) { product(itemsOnShelves[k], X0 + 1.4f, Z0 + 1.0f + k * 1.2f); ++k; }
         break;
       }
       case ShopKind::Padaria: {
@@ -1198,7 +1210,6 @@ class Gen {
     int nx = (int)xs_.size() - 1, nz = (int)zs_.size() - 1;
     struct Bk { RectF r; int i, j; District d; int special = 0; };
     std::vector<Bk> bks;
-    float cxm = 0, czm = 0;
     for (int i = 0; i < nx; ++i)
       for (int j = 0; j < nz; ++j) {
         Bk b;
@@ -1309,7 +1320,7 @@ class Gen {
     float carZ = north ? north->c + north->hw - 1.4f : pb.z0 - 4.0f;
     w_.vehicleSpawn[0] = {pb.cx() + 1.0f, 0, carZ};
     w_.vehicleYaw[0] = -kPi / 2;
-    w_.vehicleSpawn[1] = {w_.marketParking.x + 6.0f, 0, w_.marketParking.z};
+    w_.vehicleSpawn[1] = {w_.marketParking.x + 6.0f, 0, w_.marketParking.z + 2.2f};
     w_.vehicleYaw[1] = kPi / 2;
     w_.vehicleSpawn[2] = {w_.workshopBayEntry.x - 6.0f, 0, w_.workshopBayEntry.z};
     w_.vehicleYaw[2] = 0;
