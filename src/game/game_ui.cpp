@@ -283,35 +283,45 @@ void Game::drawMoney() {
   }
 }
 
+// Driving cluster: a speed dial with a thin sweep, fuel and body condition as two slim readouts beside it.
 void Game::drawFuelGauge() {
   if (player_.vehicle < 0) return;
   const Vehicle& v = vehicles_[player_.vehicle];
   const VehicleDef& d = vehicleDef(v.model);
   float S = uiScale();
-  float a = 1.0f - 0.85f * wheel_.anim;
-  float cx = screenW_ * 0.5f, y = screenH_ - 150 * S;
+  float a = (1.0f - 0.85f * wheel_.anim) * (0.6f + 0.4f * settings_.hudOpacity);
+  float cx = screenW_ * 0.5f - 90 * S, cy = screenH_ - 112 * S, R = 74 * S;
   int kmh = (int)std::lround(std::fabs(v.speed) * 3.6f);
-  ui_.glow(cx - 230 * S, y, 460 * S, 112 * S, 28 * S, 14 * S, C(0, 0, 0, 0.30f * a));
-  ui_.rect(cx - 230 * S, y, 460 * S, 112 * S, withAlpha(kGlass, a), 28 * S, 1.5f * S, C(1, 1, 1, 0.16f * a));
-  ui_.text(true, std::to_string(kmh), cx - 130 * S, y + 6 * S, 66 * S, C(1, 1, 1, a), Align::Center);
-  ui_.text(false, "km/h", cx - 130 * S, y + 72 * S, 22 * S, withAlpha(kMuted, a), Align::Center);
+  float top = std::max(1.0f, d.maxSpeed * 3.6f);
+  float k = clamp(kmh / top, 0.0f, 1.0f);
+  ui_.glow(cx - R, cy - R + 5 * S, R * 2, R * 2, R, 16 * S, C(0, 0, 0, 0.34f * a));
+  ui_.circle(cx, cy, R, withAlpha(kGlass, a), 1.2f * S, C(1, 1, 1, 0.16f * a));
+  const float a0 = 0.0f, sweep = kTau * 0.78f, start = -sweep / 2;
+  ui_.arc(cx, cy, R - 12 * S, R - 7 * S, start, start + sweep, C(1, 1, 1, 0.10f * a));
+  Color sc = k < 0.7f ? kAccent : (k < 0.9f ? theme::kWarn : kRed);
+  if (k > 0.01f) ui_.arc(cx, cy, R - 12 * S, R - 7 * S, start, start + sweep * k, withAlpha(sc, a));
+  (void)a0;
+  ui_.text(true, std::to_string(kmh), cx, cy - 33 * S, 58 * S, C(1, 1, 1, a), Align::Center);
+  ui_.text(false, "km/h", cx, cy + 24 * S, 18 * S, withAlpha(kMuted, a), Align::Center);
+  // readouts
   float fv = clamp(v.fuel / d.fuelCap, 0.0f, 1.0f);
   bool low = fv < 0.15f;
   float blink = low ? (0.55f + 0.45f * std::sin(realTime_ * 7.0f)) : 1.0f;
-  Color fc = fv > 0.35f ? kMint : (fv > 0.15f ? kAccent : kRed);
-  float bx = cx - 40 * S, bw = 230 * S;
-  ui_.icon("fuel", bx + 12 * S, y + 28 * S, 26 * S, withAlpha(fc, a * blink));
-  ui_.rect(bx + 34 * S, y + 24 * S, bw - 34 * S, 9 * S, C(1, 1, 1, 0.14f * a), 4.5f * S);
-  ui_.rect(bx + 34 * S, y + 24 * S, (bw - 34 * S) * fv, 9 * S, withAlpha(fc, a * blink), 4.5f * S);
-  ui_.text(false, fmtFloat(v.fuel, 1) + " L", bx + bw, y + 36 * S, 20 * S, withAlpha(kMuted, a), Align::Right);
+  Color fc = fv > 0.35f ? kMint : (fv > 0.15f ? theme::kWarn : kRed);
   float hv = clamp(v.health / 100.0f, 0.0f, 1.0f);
-  Color hc = hv > 0.5f ? kMint : (hv > 0.25f ? kAccent : kRed);
-  ui_.icon("car", bx + 12 * S, y + 72 * S, 24 * S, withAlpha(hc, a));
-  ui_.rect(bx + 34 * S, y + 68 * S, bw - 34 * S, 9 * S, C(1, 1, 1, 0.14f * a), 4.5f * S);
-  ui_.rect(bx + 34 * S, y + 68 * S, (bw - 34 * S) * hv, 9 * S, withAlpha(hc, a), 4.5f * S);
-  ui_.text(false, fmtFloat(v.health, 0) + "%", bx + bw, y + 80 * S, 20 * S, withAlpha(kMuted, a), Align::Right);
-  if (low && fv > 0.0f) ui_.text(true, "COMBUSTÍVEL BAIXO", cx, y - 40 * S, 28 * S, withAlpha(kRed, blink * a), Align::Center, C(0, 0, 0, 0.6f), 0.12f);
-  if (v.fuel <= 0.0f) ui_.text(true, "SEM COMBUSTÍVEL", cx, y - 40 * S, 30 * S, withAlpha(kRed, a), Align::Center, C(0, 0, 0, 0.6f), 0.12f);
+  Color hc = hv > 0.5f ? kMint : (hv > 0.25f ? theme::kWarn : kRed);
+  float rx = cx + R + 16 * S, rw = 230 * S, rh = 40 * S;
+  auto readout = [&](float y, const char* icon, Color col, float frac, const std::string& val, float al) {
+    ui_.rect(rx, y, rw, rh, withAlpha(kGlass, a), rh / 2, 1.0f * S, C(1, 1, 1, 0.14f * a));
+    ui_.icon(icon, rx + 24 * S, y + rh / 2, 22 * S, withAlpha(col, a * al));
+    ui_.rect(rx + 46 * S, y + rh / 2 - 4 * S, rw - 46 * S - 84 * S, 8 * S, C(1, 1, 1, 0.12f * a), 4 * S);
+    ui_.rect(rx + 46 * S, y + rh / 2 - 4 * S, (rw - 46 * S - 84 * S) * frac, 8 * S, withAlpha(col, a * al), 4 * S);
+    ui_.text(false, val, rx + rw - 16 * S, y + 8 * S, 20 * S, withAlpha(kMuted, a), Align::Right);
+  };
+  readout(cy - R * 0.62f - 6 * S, "fuel", fc, fv, fmtFloat(v.fuel, 1) + " L", blink);
+  readout(cy + 8 * S, "car", hc, hv, fmtFloat(v.health, 0) + "%", 1.0f);
+  if (low && fv > 0.0f) ui_.text(true, "COMBUSTÍVEL BAIXO", cx + 70 * S, cy - R - 38 * S, 26 * S, withAlpha(kRed, blink * a), Align::Center, C(0, 0, 0, 0.6f), 0.12f);
+  if (v.fuel <= 0.0f) ui_.text(true, "SEM COMBUSTÍVEL", cx + 70 * S, cy - R - 38 * S, 28 * S, withAlpha(kRed, a), Align::Center, C(0, 0, 0, 0.6f), 0.12f);
 }
 
 void Game::drawPrompt() {
@@ -324,7 +334,7 @@ void Game::drawPrompt() {
   float tw = std::max(ui_.textWidth(true, label, 32 * S), ui_.textWidth(false, sub, 23 * S));
   bool hasArt = !it.art.empty();
   float h = 84 * S, w = tw + (hasArt ? 190 : 150) * S;
-  float cx = screenW_ * 0.5f - 60 * S, y = screenH_ - (player_.vehicle >= 0 ? 300.0f : 175.0f) * S + (1.0f - promptAnim_) * 20 * S;
+  float cx = screenW_ * 0.5f - 60 * S, y = screenH_ - (player_.vehicle >= 0 ? 290.0f : 165.0f) * S + (1.0f - promptAnim_) * 20 * S;
   float x = cx - w / 2;
   ui_.glow(x, y + 4, w, h, h / 2, 14 * S, C(0, 0, 0, 0.33f * a));
   ui_.rect(x, y, w, h, withAlpha(kGlass, a), h / 2, 1.5f * S, C(1, 1, 1, 0.20f * a));

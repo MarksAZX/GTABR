@@ -1014,6 +1014,24 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(60); b.shot("hud_shop");
     return 0;
   }
+  if (name == "cockpit") {
+    // driving HUD: stand next to the first car, get in and accelerate
+    b.idle(30);
+    if (g.vehicles().empty()) return 0;
+    Vehicle& v = g.vehicles()[0];
+    g.teleportPlayer(v.pos + Vec2{1.6f, 0.0f}, 0.0f);
+    b.idle(10);
+    InputFrame e; e.enterExitPressed = true;
+    b.step(e, 1);
+    b.idle(70);
+    InputFrame d; d.move = {0, 1};
+    b.step(d, 90);
+    b.shot("cockpit_a");
+    g.toggleCamera();
+    b.step(d, 40);
+    b.shot("cockpit_b");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);
