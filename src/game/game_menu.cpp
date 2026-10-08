@@ -67,7 +67,26 @@ std::string Game::locationName(Vec2 p, bool indoors) const {
     if (r >= 0 && world_.interiors[r].shop >= 0 && world_.interiors[r].shop < (int)world_.shops.size()) return world_.shops[world_.interiors[r].shop].name;
     return "Interior";
   }
-  if (world_.coastSide >= 0) {
+  if (world_.island) {
+    const Town* nearest = nullptr;
+    float nd = 1e9f;
+    for (const Town& t : world_.towns) { float d = (p - t.c).length() - t.r; if (d < nd) { nd = d; nearest = &t; } }
+    std::string near = nearest ? nearest->name : world_.cityName;
+    if (world_.waterDepth(p.x, p.y) > 0.3f) return "Mar de " + world_.islandName.substr(world_.islandName.find(' ') + 1);
+    float d = world_.landDist(p.x, p.y);
+    if (d < 40.0f) return "Praia de " + near;
+    if (!world_.land.contains(p.x, p.y)) {
+      if (const Town* t = world_.townAt(p)) return t->name;
+      int e = -1;
+      Vec2 q = world_.nearestRoadPointNet(p, &e);
+      if (e >= 0 && (q - p).length() < world_.redges[e].hw + 3.0f) {
+        uint8_t k = world_.redges[e].kind;
+        if (k == 3) return "Estrada de terra";
+        return "Rodovia " + std::string(kStreetNames[(world_.seed + e) % 12]).substr(4);
+      }
+      return world_.forestAt(p.x, p.y) > 0.5f ? "Mata de " + near : "Campos de " + near;
+    }
+  } else if (world_.coastSide >= 0) {
     if (world_.waterDepth(p.x, p.y) > 0.3f) return "Mar de " + world_.cityName;
     if (world_.beach.contains(p.x, p.y)) return "Praia de " + world_.cityName;
   }
@@ -111,8 +130,11 @@ void Game::updateMenuScene(float dt) {
   menuCamT_ += dt;
   updateNpcs(dt);
   // slow cinematic orbit around the beach (or the park when the city has no coast)
-  Vec3 base = world_.coastSide >= 0 ? world_.poiBeach : world_.poiPlaza;
-  if (world_.coastSide >= 0) {
+  Vec3 base = (world_.coastSide >= 0 || world_.island) ? world_.poiBeach : world_.poiPlaza;
+  if (world_.island) {
+    Vec2 sea = (Vec2{world_.poiBeach.x, world_.poiBeach.z} - world_.islandC).normalized();
+    base.x -= sea.x * 14.0f; base.z -= sea.y * 14.0f;
+  } else if (world_.coastSide >= 0) {
     // stand on the sand a little inland of the water line so the camera looks along the beach, over the sea and the city
     Vec2 sea = world_.coastSide == 0 ? Vec2{0, -1} : (world_.coastSide == 1 ? Vec2{1, 0} : (world_.coastSide == 2 ? Vec2{0, 1} : Vec2{-1, 0}));
     base.x -= sea.x * 16.0f; base.z -= sea.y * 16.0f;
@@ -691,7 +713,13 @@ void Game::drawMapTab(float x, float y, float w, float h) {
   auto toScreen = [&](Vec2 wp) { return Vec2{mx + side * 0.5f + (wp.x - mapCenter_.x) * k, my + side * 0.5f + (wp.y - mapCenter_.y) * k}; };
   auto inside = [&](Vec2 s, float m) { return s.x > mx + m && s.x < mx + side - m && s.y > my + m && s.y < my + side - m; };
   // district / street labels when zoomed out enough to read
-  if (k < 3.2f) {
+  if (world_.island) {
+    for (const Town& t : world_.towns) {
+      Vec2 sc = toScreen(t.c);
+      if (!inside(sc, 40 * S)) continue;
+      ui_.text(true, upper(t.name), sc.x, sc.y - 12 * S, (k < 1.2f ? 17.0f : 22.0f) * S, rgba(1, 1, 1, 0.92f), Align::Center, rgba(0, 0, 0, 0.85f), 0.16f);
+    }
+  } else if (k < 3.2f) {
     for (const auto& b : world_.blocks) {
       Vec2 sc = toScreen({b.first.cx(), b.first.cz()});
       if (!inside(sc, 30 * S)) continue;

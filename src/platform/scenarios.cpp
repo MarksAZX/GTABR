@@ -286,14 +286,20 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
         if (k < last.size()) { travelled += (v.pos - last[k]).length() < 20.0f ? (v.pos - last[k]).length() : 0.0f; last[k] = v.pos; }
         ++k;
         maxSpeed = std::max(maxSpeed, std::fabs(v.speed));
+        if (f % 300 == 0 && getenv("GTABR_TRLOG")) LOGI("  car %d at %.1f,%.1f speed %.1f route %zu/%zu blocked %.1f stuck %.1f", v.id, v.pos.x, v.pos.y, v.speed, v.routeIdx, v.route.size(), v.blockedT, v.aiStuck);
         if (f % 30 == 0) {
           ++samples;
           Vec2 rp = W.nearestRoadPoint(v.pos);
           bool onRoad = false;
-          for (const RoadLine& r : W.roads) {
-            float along = r.horizontal ? v.pos.x : v.pos.y, across = r.horizontal ? v.pos.y : v.pos.x;
-            if (std::fabs(across - r.c) < r.hw + 1.0f && along > r.a - 2 && along < r.b + 2) onRoad = true;
-          }
+          if (!W.redges.empty()) {
+            float hw = 3.5f;
+            Vec2 q = W.nearestRoadPointNet(v.pos, nullptr, &hw);
+            onRoad = (q - v.pos).length() < hw + 1.0f;
+          } else
+            for (const RoadLine& r : W.roads) {
+              float along = r.horizontal ? v.pos.x : v.pos.y, across = r.horizontal ? v.pos.y : v.pos.x;
+              if (std::fabs(across - r.c) < r.hw + 1.0f && along > r.a - 2 && along < r.b + 2) onRoad = true;
+            }
           (void)rp;
           if (!onRoad) { ++offRoad; if (offRoad % 8 == 1) LOGI("  off-road car %d at %.1f,%.1f speed %.1f yaw %.2f wrecked %d health %.0f", v.id, v.pos.x, v.pos.y, v.speed, v.yaw, (int)v.wrecked, v.health); }
         }
@@ -1125,6 +1131,39 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.toggleCamera();
     b.idle(30);
     b.shot("life_accident");
+    return 0;
+  }
+  if (name == "island") {
+    // the island layout: map raster dump + views of the towns, a country road and the beach
+    b.idle(20);
+    const World& W = g.world();
+    std::vector<uint8_t> px;
+    renderMinimap(W, px, 1024, W.half);
+    writePng("shots/island_map.png", px.data(), 1024, 1024);
+    LOGI("towns %zu, nodes %zu, edges %zu, colliders %zu, decor %zu, propModels %zu", W.towns.size(), W.rnodes.size(), W.redges.size(), W.colliders.size(), W.decor.size(), W.propModels.size());
+    for (size_t t = 0; t < W.towns.size(); ++t) LOGI("town %s at %.0f,%.0f r %.0f", W.towns[t].name.c_str(), W.towns[t].c.x, W.towns[t].c.y, W.towns[t].r);
+    g.toggleCamera();
+    for (size_t t = 0; t < W.towns.size(); ++t) {
+      Vec2 p = W.nearestRoadPoint(W.towns[t].c + Vec2{W.towns[t].r * 0.5f, 0});
+      g.teleportPlayer(p, 0.0f);
+      b.idle(60);
+      b.shot("island_town" + std::to_string(t));
+    }
+    for (size_t e = 0; e < W.redges.size(); ++e)
+      if (W.redges[e].kind == 2) {
+        const RoadEdge& r = W.redges[e];
+        Vec2 p = r.pts[r.pts.size() / 2], q = r.pts[r.pts.size() / 2 + 1];
+        g.teleportPlayer(p + Vec2{-(q - p).y, (q - p).x}.normalized() * 6.0f, yawFromDir((q - p).normalized()));
+        b.idle(60);
+        b.shot("island_road");
+        break;
+      }
+    {
+      Vec2 bp{W.poiBeach.x, W.poiBeach.z};
+      g.teleportPlayer(bp, yawFromDir((bp - W.islandC).normalized()));
+      b.idle(60);
+      b.shot("island_beach");
+    }
     return 0;
   }
   if (name == "loading") {

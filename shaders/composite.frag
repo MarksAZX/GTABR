@@ -86,6 +86,7 @@ vec3 wetReflection(vec2 uv, float d, vec3 P) {
 // the depth buffer; what is found on screen (buildings, palms, the pier, cars on the avenue) replaces the analytic sky reflection.
 bool isSea(vec3 wp) {
   if (g.water.y < -0.5) return false;
+  if (g.water.y > 8.0) return abs(wp.y - g.water.x) < 0.3 && wp.y < -0.12;   // island: the sea sits below every land surface
   if (abs(wp.y - g.water.x) > 0.55) return false;
   int side = int(g.water.y + 0.5);
   float c = side == 0 ? -wp.z : (side == 1 ? wp.x : (side == 2 ? wp.z : -wp.x));

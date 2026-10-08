@@ -33,6 +33,9 @@ class MeshBuilder {
   // ground quad whose mud/dirt amount (0..1) varies per corner: the shader dissolves the surface into mud with it (soft transitions)
   void groundRectMud(float x0, float z0, float x1, float z1, float y, int layer, float tile, float mNW, float mNE, float mSE, float mSW);
   void setMud(float m) { mud_ = m; }
+  // Quad with a mud amount per corner (road ribbons fading into dirt shoulders). Corners counter-clockwise seen from above.
+  void quadMud(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec2& ua, const Vec2& ub, const Vec2& uc, const Vec2& ud, int layer,
+               float ma, float mb, float mc, float md);
   void roofRect(float x0, float z0, float x1, float z1, float y, int layer, float tile);
   // Vertical wall from (x0,z0) to (x1,z1) (left -> right as seen from the outside), bottom y0, top y1.
   void wall(float x0, float z0, float x1, float z1, float y0, float y1, int layer, float u0, float u1, float v0, float v1,

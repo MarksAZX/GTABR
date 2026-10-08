@@ -46,6 +46,18 @@ void MeshBuilder::groundRectMud(float x0, float z0, float x1, float z1, float y,
   m_->idx.insert(m_->idx.end(), {i0, i1, i2, i0, i2, i3});
 }
 
+void MeshBuilder::quadMud(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, const Vec2& ua, const Vec2& ub, const Vec2& uc,
+                          const Vec2& ud, int layer, float ma, float mb, float mc, float md) {
+  Vec3 n = (b - a).cross(c - a) + (c - a).cross(d - a);   // robust for degenerate (triangle) quads
+  n = n.normalized();
+  mud_ = ma; uint32_t i0 = vert(a, n, ua, layer, 1.0f);
+  mud_ = mb; uint32_t i1 = vert(b, n, ub, layer, 1.0f);
+  mud_ = mc; uint32_t i2 = vert(c, n, uc, layer, 1.0f);
+  mud_ = md; uint32_t i3 = vert(d, n, ud, layer, 1.0f);
+  mud_ = 0;
+  m_->idx.insert(m_->idx.end(), {i0, i1, i2, i0, i2, i3});
+}
+
 void MeshBuilder::roofRect(float x0, float z0, float x1, float z1, float y, int layer, float tile) { groundRect(x0, z0, x1, z1, y, layer, tile); }
 
 void MeshBuilder::ceiling(float x0, float z0, float x1, float z1, float y, int layer, float tile) {

@@ -104,6 +104,13 @@ struct ProbeGrid {
   bool valid() const { return w > 0 && h > 0 && !rgba.empty(); }
 };
 
+// Road network: every street, avenue and highway as a polyline edge between junction nodes (the grid core of the main town
+// is converted into it too). Traffic, routes, the map and "nearest road" queries all use it.
+struct RoadEdge { std::vector<Vec2> pts; float hw = 3.5f; uint8_t kind = 0; int a = -1, b = -1; float len = 0; };   // kind 0 street, 1 avenue, 2 highway, 3 dirt road
+struct RoadNode { Vec2 p; std::vector<int> edges; };
+struct Town { std::string name; Vec2 c; float r = 100; bool core = false; };
+struct MapPoly { Vec2 p[4]; uint8_t kind = 0; };   // rotated footprint for the map raster: 0 building, 1 lot / yard, 2 plaza
+
 struct World {
   static constexpr float kChunk = 32.0f;
   static constexpr float kSidewalkH = 0.14f;
@@ -122,6 +129,32 @@ struct World {
   std::vector<std::pair<RectF, int>> social;   // per block: 0 middle class, 1 self-built quarter, 2 wealthy quarter
   int socialAt(float x, float z) const { for (const auto& s : social) if (s.first.contains(x, z)) return s.second; return 0; }
   std::string cityName;
+  std::string islandName;
+
+  // ---- island layout (the whole map is an island with several towns joined by roads through forest and fields)
+  bool island = false;
+  Vec2 islandC;
+  float islandRx = 400, islandRz = 350;
+  float coastA[8] = {}, coastP[8] = {};   // coastline harmonics (amplitude, phase)
+  uint32_t noiseSeed = 1;
+  float landDist(float x, float z) const;        // metres inside the coastline (< 0 in the sea)
+  float forestAt(float x, float z) const;        // 0..1 woodland density
+  std::vector<Town> towns;
+  std::vector<RoadNode> rnodes;
+  std::vector<RoadEdge> redges;
+  std::vector<MapPoly> mapPolys;
+  // 0.5 m raster over the island: bit 0 = raised walking surface (sidewalk, lot pad, plaza) at kSidewalkH, bit 1 = road surface
+  float rasterX0 = 0, rasterZ0 = 0, rasterCell = 0.5f;
+  int rasterW = 0, rasterH = 0;
+  std::vector<uint8_t> raster;
+  uint8_t rasterAt(float x, float z) const {
+    int i = (int)std::floor((x - rasterX0) / rasterCell), j = (int)std::floor((z - rasterZ0) / rasterCell);
+    if (i < 0 || j < 0 || i >= rasterW || j >= rasterH) return 0;
+    return raster[(size_t)j * rasterW + i];
+  }
+  const Town* townAt(Vec2 p) const { for (const Town& t : towns) if ((p - t.c).length() < t.r) return &t; return nullptr; }
+  // nearest point on the road network (and the edge / its half width)
+  Vec2 nearestRoadPointNet(Vec2 p, int* edge = nullptr, float* hw = nullptr) const;
 
   // chunk meshes (CPU) -> GPU handles are created by the game after generation
   // high-detail static models placed by the generator and drawn as 3D models (kinds: 0 mangueira, 1 coqueiro, 2 guarda-sol, 3 chafariz)

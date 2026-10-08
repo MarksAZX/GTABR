@@ -1,11 +1,14 @@
 #include "world.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <functional>
 #include <map>
 
 #include "../core/fileio.h"
+#include "../core/log.h"
 #include "material_ids.h"
 #include "props3d.h"
 
@@ -62,12 +65,42 @@ class Gen {
     map_[key] = (int)w_.chunks.size() - 1;
     return (int)w_.chunks.size() - 1;
   }
+  // ---- local frame: lots along curved streets are built in a rotated frame (x along the street, +z away from it) with the same
+  // helpers as the grid city; geometry, colliders, props and map footprints are transformed to world space here.
+  bool xfOn_ = false;
+  Vec3 xfPos_;
+  float xfYaw_ = 0, xfC_ = 1, xfS_ = 0, xfGroundY_ = 0;
+  Vec2 toW(float x, float z) const { return {x * xfC_ + z * xfS_ + xfPos_.x, -x * xfS_ + z * xfC_ + xfPos_.z}; }
+  void setFrame(Vec3 origin, float yaw, float groundY) { xfOn_ = true; xfPos_ = origin; xfYaw_ = yaw; xfC_ = std::cos(yaw); xfS_ = std::sin(yaw); xfGroundY_ = groundY; }
+  void clearFrame() { xfOn_ = false; }
+  // rect in the current frame -> world map footprint (rotated polygon) or a plain rect list entry
+  void mapRect(std::vector<RectF>& list, const RectF& r, uint8_t kind) {
+    if (!xfOn_) { list.push_back(r); return; }
+    MapPoly p;
+    p.p[0] = toW(r.x0, r.z0); p.p[1] = toW(r.x1, r.z0); p.p[2] = toW(r.x1, r.z1); p.p[3] = toW(r.x0, r.z1);
+    p.kind = kind;
+    w_.mapPolys.push_back(p);
+  }
   MeshBuilder mb(float x, float z, Vec3 tint = {1, 1, 1}) {
+    if (xfOn_) {
+      Vec2 wp = toW(x, z);
+      MeshBuilder b(&w_.chunks[chunkIndex(wp.x, wp.y)].mesh);
+      b.setTint(tint);
+      b.setXform(xfPos_, xfYaw_);
+      return b;
+    }
     MeshBuilder b(&w_.chunks[chunkIndex(x, z)].mesh);
     b.setTint(tint);
     return b;
   }
   MeshBuilder lodb(float x, float z, Vec3 tint = {1, 1, 1}) {
+    if (xfOn_) {
+      Vec2 wp = toW(x, z);
+      MeshBuilder b(&w_.chunks[chunkIndex(wp.x, wp.y)].lod);
+      b.setTint(tint);
+      b.setXform(xfPos_, xfYaw_);
+      return b;
+    }
     MeshBuilder b(&w_.chunks[chunkIndex(x, z)].lod);
     b.setTint(tint);
     return b;
@@ -75,6 +108,12 @@ class Gen {
 
   void ground(RectF r, float y, int layer, float tile, Vec3 tint = {1, 1, 1}, bool lod = true) {
     if (r.x1 - r.x0 < 1e-3f || r.z1 - r.z0 < 1e-3f) return;
+    if (xfOn_) {   // lot-sized rects in a rotated frame: one builder, no chunk split
+      MeshBuilder b = mb(r.cx(), r.cz(), tint);
+      b.groundRect(r.x0, r.z0, r.x1, r.z1, y, layer, tile);
+      if (lod) { MeshBuilder l = lodb(r.cx(), r.cz(), tint); l.groundRect(r.x0, r.z0, r.x1, r.z1, y, layer, tile); }
+      return;
+    }
     int cx0 = (int)std::floor(r.x0 / World::kChunk), cx1 = (int)std::floor((r.x1 - 1e-4f) / World::kChunk);
     int cz0 = (int)std::floor(r.z0 / World::kChunk), cz1 = (int)std::floor((r.z1 - 1e-4f) / World::kChunk);
     for (int cz = cz0; cz <= cz1; ++cz)
@@ -91,7 +130,32 @@ class Gen {
       }
   }
 
-  void collider(const AABB& b, ColKind k, int owner = -1) { w_.colliders.push_back({b, k, owner}); }
+  void collider(const AABB& b, ColKind k, int owner = -1) {
+    if (!xfOn_) { w_.colliders.push_back({b, k, owner}); return; }
+    // a rotated box becomes a stack of thin axis-aligned slices (1 m rows along z): every consumer (physics, bullets, camera,
+    // navmesh, probes) keeps working with plain AABBs and the footprint stays tight on angled streets
+    Vec2 c[4] = {toW(b.mn.x, b.mn.z), toW(b.mx.x, b.mn.z), toW(b.mx.x, b.mx.z), toW(b.mn.x, b.mx.z)};
+    float zmin = std::min(std::min(c[0].y, c[1].y), std::min(c[2].y, c[3].y)), zmax = std::max(std::max(c[0].y, c[1].y), std::max(c[2].y, c[3].y));
+    const float step = 1.0f;
+    for (float z0 = zmin; z0 < zmax - 1e-3f; z0 += step) {
+      float z1 = std::min(zmax, z0 + step);
+      float xmn = 1e9f, xmx = -1e9f;
+      // x extent of the polygon over the band [z0,z1]: clip each edge to the band and take the end points
+      for (int e = 0; e < 4; ++e) {
+        Vec2 p = c[e], q = c[(e + 1) % 4];
+        for (float zz : {z0, z1}) {
+          if ((p.y - zz) * (q.y - zz) <= 0 && std::fabs(q.y - p.y) > 1e-5f) {
+            float t = (zz - p.y) / (q.y - p.y);
+            float x = p.x + (q.x - p.x) * t;
+            xmn = std::min(xmn, x); xmx = std::max(xmx, x);
+          }
+        }
+        for (Vec2 v : {p}) if (v.y >= z0 && v.y <= z1) { xmn = std::min(xmn, v.x); xmx = std::max(xmx, v.x); }
+      }
+      if (xmx <= xmn) continue;
+      w_.colliders.push_back({AABB({xmn, b.mn.y, z0}, {xmx, b.mx.y, z1}), k, owner});
+    }
+  }
 
   void box(const Vec3& mn, const Vec3& mx, int layerSide, int layerTop, float tile, Vec3 tint, bool addCollider = true, ColKind kind = ColKind::Prop) {
     MeshBuilder b = mb((mn.x + mx.x) * 0.5f, (mn.z + mx.z) * 0.5f, tint);
@@ -107,6 +171,16 @@ class Gen {
 
   void decor(DecorKind k, const std::string& base, int dirs, Vec3 pos, float yaw, float scale = 1.0f, bool collide = false, float colR = 0.3f,
              float colH = 2.0f, int species = -1, int model = -1) {
+    if (xfOn_) {
+      // placed from a rotated lot frame: move to world space, then build without the frame
+      Vec2 wp = toW(pos.x, pos.z);
+      pos = {wp.x, xfGroundY_, wp.y};
+      yaw += xfYaw_;
+      xfOn_ = false;
+      decor(k, base, dirs, pos, yaw, scale, collide, colR, colH, species, model);
+      xfOn_ = true;
+      return;
+    }
     int pm = species == 0 ? 0 : (species == 3 ? 1 : (model == 7 ? 2 : -1));
     if (pm >= 0 && w_.propModelAvailable[pm]) {
       // drawn as a Higgsfield 3D model near the camera; the procedural version only feeds the far HLOD
@@ -198,7 +272,7 @@ class Gen {
     wallsFor(r, h, front, f.layer, f.sideTint);
     sideLayer_ = mat::wall_paint;
     collider(AABB({r.x0, 0, r.z0}, {r.x1, h + 1.5f, r.z1}), ColKind::Building);
-    w_.mapBuildings.push_back(r);
+    mapRect(w_.mapBuildings, r, 0);
     MeshBuilder b = mb(r.cx(), r.cz(), {1, 1, 1});
     float cx = r.cx(), cz = r.cz();
     if (f.flat) {
@@ -413,7 +487,7 @@ class Gen {
 
   void plan() {
     // number and sizes of blocks vary with the seed; some lines are avenues (wider, with a median)
-    int nx = rng_.irange(4, 6), nz = rng_.irange(4, 6);
+    int nx = island_ ? rng_.irange(3, 4) : rng_.irange(4, 6), nz = island_ ? rng_.irange(3, 4) : rng_.irange(4, 6);
     auto lines = [&](int n, std::vector<float>& c, std::vector<float>& hw, bool* av) {
       std::vector<float> sizes;
       for (int i = 0; i < n; ++i) sizes.push_back(rng_.range(40.0f, 62.0f));
@@ -438,6 +512,7 @@ class Gen {
     lines(nz, zs_, hwz_, avZ_);
     // coast: most cities touch the sea on one side
     w_.coastSide = rng_.chance(0.88f) ? rng_.irange(0, 3) : -1;
+    if (island_) w_.coastSide = -1;   // the island has its own coastline
     if (w_.coastSide >= 0) {
       // the coast road becomes the "Avenida Beira-Mar"
       switch (w_.coastSide) {
@@ -450,7 +525,7 @@ class Gen {
     float x0 = xs_.front() - hwx_.front(), x1 = xs_.back() + hwx_.back();
     float z0 = zs_.front() - hwz_.front(), z1 = zs_.back() + hwz_.back();
     // an outer ring of land past the ring roads (backdrop lots) except on the coast
-    const float ring = 24.0f;
+    const float ring = island_ ? 0.0f : 24.0f;
     w_.land = {x0 - ring, z0 - ring, x1 + ring, z1 + ring};
     const float promenade = 7.0f, sand = rng_.range(28.0f, 40.0f), swim = 70.0f;
     beachDepth_ = promenade + sand;
@@ -1332,6 +1407,7 @@ class Gen {
     collider(AABB({P.x0 - t, 0, P.z1}, {P.x1 + t, 6, P.z1 + t}), ColKind::Wall);
     collider(AABB({P.x0 - t, 0, P.z0}, {P.x0, 6, P.z1}), ColKind::Wall);
     collider(AABB({P.x1, 0, P.z0}, {P.x1 + t, 6, P.z1}), ColKind::Wall);
+    if (island_) return;   // no backdrop: the island continues around the core
     // backdrop: a ring of tall buildings beyond the land edge (not on the sea side)
     Rng r(seed_ * 7919u + 777);
     const int layers[4] = {mat::apt_beige, mat::apt_green, mat::apt_bands, mat::sobrado_pink};
@@ -1693,6 +1769,8 @@ class Gen {
       }
   }
 
+#include "world_island.inl"
+
   void run() {
     plan();
     blocks();
@@ -1780,8 +1858,73 @@ static float seaDistance(const World& w, float x, float z) {
   }
 }
 
+// ---- island queries
+float World::landDist(float x, float z) const {
+  float dx = (x - islandC.x) / islandRx, dz = (z - islandC.y) / islandRz;
+  float rho = std::sqrt(dx * dx + dz * dz);
+  float th = std::atan2(dz, dx);
+  float r = 1.0f;
+  for (int k = 0; k < 8; ++k) r += coastA[k] * std::sin((k + 2) * th + coastP[k]);
+  return (r - rho) * std::min(islandRx, islandRz);
+}
+
+static float vnoise2(float x, float z, uint32_t seed) {
+  auto h = [&](int i, int j) {
+    uint32_t v = (uint32_t)i * 374761393u + (uint32_t)j * 668265263u + seed * 2246822519u;
+    v = (v ^ (v >> 13)) * 1274126177u;
+    return ((v ^ (v >> 16)) & 0xFFFFFF) / 16777215.0f;
+  };
+  int i = (int)std::floor(x), j = (int)std::floor(z);
+  float fx = x - i, fz = z - j;
+  fx = fx * fx * (3 - 2 * fx); fz = fz * fz * (3 - 2 * fz);
+  float a = h(i, j), b = h(i + 1, j), c = h(i, j + 1), d = h(i + 1, j + 1);
+  return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fz;
+}
+
+float World::forestAt(float x, float z) const {
+  float n = vnoise2(x / 160.0f, z / 160.0f, noiseSeed) * 0.6f + vnoise2(x / 60.0f, z / 60.0f, noiseSeed + 11u) * 0.3f + vnoise2(x / 22.0f, z / 22.0f, noiseSeed + 29u) * 0.1f;
+  float f = clamp((n - 0.42f) / 0.16f, 0.0f, 1.0f);
+  // the interior of the island is wilder than the coast
+  float d = landDist(x, z);
+  return f * clamp((d - 40.0f) / 60.0f, 0.0f, 1.0f);
+}
+
+Vec2 World::nearestRoadPointNet(Vec2 p, int* edge, float* hw) const {
+  Vec2 best = p;
+  float bd = 1e18f;
+  int be = -1;
+  for (size_t e = 0; e < redges.size(); ++e) {
+    const RoadEdge& r = redges[e];
+    for (size_t i = 0; i + 1 < r.pts.size(); ++i) {
+      Vec2 a = r.pts[i], b = r.pts[i + 1], ab = b - a;
+      float L2 = ab.lengthSq();
+      float t = L2 > 1e-6f ? clamp((p - a).dot(ab) / L2, 0.0f, 1.0f) : 0.0f;
+      Vec2 q = a + ab * t;
+      float d = (q - p).lengthSq();
+      if (d < bd) { bd = d; best = q; be = (int)e; }
+    }
+  }
+  if (edge) *edge = be;
+  if (hw) *hw = be >= 0 ? redges[be].hw : 3.5f;
+  return best;
+}
+
 float World::heightAt(float x, float z) const {
   if (interiorAt(x, z) >= 0) return 0.0f;
+  if (island) {
+    if (land.contains(x, z)) {
+      for (const RectF& r : lowRects)
+        if (r.contains(x, z)) return 0.0f;
+      return kSidewalkH;
+    }
+    uint8_t r = rasterAt(x, z);
+    if (r & 1) return kSidewalkH;
+    if (r & 2) return 0.0f;
+    float d = landDist(x, z);
+    if (d >= 14.0f) return 0.0f;
+    if (d >= 0.0f) return -0.6f + 0.6f * (d / 14.0f);
+    return std::max(-8.0f, -0.6f + d * 0.1f);
+  }
   for (const RectF& r : lowRects)
     if (r.contains(x, z)) return 0.0f;
   if (coastSide >= 0) {
@@ -1796,6 +1939,10 @@ float World::heightAt(float x, float z) const {
 }
 
 float World::waterDepth(float x, float z) const {
+  if (island) {
+    if (interiorAt(x, z) >= 0 || landDist(x, z) > 14.0f) return 0.0f;
+    return std::max(0.0f, waterLevel - heightAt(x, z));
+  }
   if (coastSide < 0) return 0.0f;
   float d = seaDistance(*this, x, z);
   if (d <= 0) return 0.0f;
@@ -1803,6 +1950,7 @@ float World::waterDepth(float x, float z) const {
 }
 
 Vec2 World::nearestRoadPoint(Vec2 p) const {
+  if (!redges.empty()) return nearestRoadPointNet(p);
   Vec2 best = p;
   float bd = 1e9f;
   for (const RoadLine& r : roads) {
@@ -1814,6 +1962,95 @@ Vec2 World::nearestRoadPoint(Vec2 p) const {
 }
 
 std::vector<Vec2> World::roadRoute(Vec2 a, Vec2 b) const {
+  if (!redges.empty()) {
+    // A* over the junction graph: enter at the nearest point of the nearest edge, leave the same way at the destination
+    int ea = -1, eb = -1;
+    Vec2 pa = nearestRoadPointNet(a, &ea), pb = nearestRoadPointNet(b, &eb);
+    std::vector<Vec2> out;
+    if (ea < 0 || eb < 0) return {b};
+    // polyline of edge e from point q toward its end node 'toB' (true = toward node b)
+    auto partial = [&](int e, Vec2 q, bool toB, std::vector<Vec2>& o) {
+      const RoadEdge& r = redges[e];
+      size_t bi = 0;
+      float bd = 1e18f;
+      for (size_t i = 0; i + 1 < r.pts.size(); ++i) {
+        Vec2 s0 = r.pts[i], ab = r.pts[i + 1] - s0;
+        float L2 = ab.lengthSq();
+        float t = L2 > 1e-6f ? clamp((q - s0).dot(ab) / L2, 0.0f, 1.0f) : 0.0f;
+        float d = ((s0 + ab * t) - q).lengthSq();
+        if (d < bd) { bd = d; bi = i; }
+      }
+      if (toB) for (size_t i = bi + 1; i < r.pts.size(); ++i) o.push_back(r.pts[i]);
+      else for (size_t i = bi + 1; i-- > 0;) o.push_back(r.pts[i]);
+    };
+    if (ea == eb) {
+      out.push_back(pa);
+      out.push_back(pb);
+      out.push_back(b);
+      return out;
+    }
+    const size_t N = rnodes.size();
+    std::vector<float> g(N, 1e18f);
+    std::vector<int> prevE(N, -1), prevN(N, -1);
+    std::vector<uint8_t> closed(N, 0);
+    // start: both ends of edge ea with the partial cost
+    auto edgeCostTo = [&](int e, Vec2 q, int node) { (void)e; return (rnodes[node].p - q).length() * 1.15f; };
+    typedef std::pair<float, int> QE;
+    std::vector<QE> open;
+    auto push = [&](float f, int n) { open.push_back({f, n}); std::push_heap(open.begin(), open.end(), std::greater<QE>()); };
+    for (int node : {redges[ea].a, redges[ea].b}) {
+      g[node] = edgeCostTo(ea, pa, node);
+      push(g[node] + (rnodes[node].p - pb).length(), node);
+    }
+    int goalA = redges[eb].a, goalB = redges[eb].b;
+    int reached = -1;
+    while (!open.empty()) {
+      std::pop_heap(open.begin(), open.end(), std::greater<QE>());
+      int n = open.back().second;
+      open.pop_back();
+      if (closed[n]) continue;
+      closed[n] = 1;
+      if (n == goalA || n == goalB) { reached = n; break; }
+      for (int e : rnodes[n].edges) {
+        const RoadEdge& r = redges[e];
+        int m = r.a == n ? r.b : r.a;
+        float cost = r.len * (r.kind == 3 ? 1.6f : 1.0f);
+        if (g[n] + cost < g[m]) {
+          g[m] = g[n] + cost;
+          prevE[m] = e;
+          prevN[m] = n;
+          push(g[m] + (rnodes[m].p - pb).length(), m);
+        }
+      }
+    }
+    if (reached < 0) return {pb, b};
+    // rebuild: start partial toward the first node, then edges, then the last partial
+    std::vector<int> chain;
+    for (int n = reached; n >= 0; n = prevN[n]) chain.push_back(n);
+    std::reverse(chain.begin(), chain.end());
+    out.push_back(pa);
+    partial(ea, pa, chain.front() == redges[ea].b, out);
+    for (size_t i = 1; i < chain.size(); ++i) {
+      int e = prevE[chain[i]];
+      const RoadEdge& r = redges[e];
+      if (r.a == chain[i - 1]) for (size_t k = 1; k < r.pts.size(); ++k) out.push_back(r.pts[k]);
+      else for (size_t k = r.pts.size() - 1; k-- > 0;) out.push_back(r.pts[k]);
+    }
+    // last edge from the reached node to pb
+    {
+      const RoadEdge& r = redges[eb];
+      std::vector<Vec2> tail;
+      partial(eb, pb, reached == r.b, tail);   // from pb toward the reached node
+      std::reverse(tail.begin(), tail.end());
+      for (const Vec2& p : tail) out.push_back(p);
+    }
+    out.push_back(pb);
+    out.push_back(b);
+    // drop duplicates
+    std::vector<Vec2> clean;
+    for (const Vec2& p : out) if (clean.empty() || (p - clean.back()).length() > 0.5f) clean.push_back(p);
+    return clean;
+  }
   // pick the closest line to each end, then go through the crossing(s) of the grid
   auto closest = [&](Vec2 p) {
     int best = -1;
@@ -2052,7 +2289,7 @@ void buildWorld(World& w, uint32_t seed) {
   // the generated mango tree came out with a sparse, spiky crown (image-to-3D loses the leaf mass): keep the procedural canopy
   w.propModelAvailable[0] = false;
   Gen g(w, seed);
-  g.run();
+  g.runIsland();
   scatterDecals(w, seed);
   for (auto& c : w.chunks) c.bounds = c.mesh.bounds;
   w.buildGrid();
@@ -2067,6 +2304,26 @@ void renderMinimap(const World& w, std::vector<uint8_t>& rgba, int size, float e
     rgba[i + 2] = (uint8_t)clamp(b * 255.0f, 0.0f, 255.0f); rgba[i + 3] = 255;
   };
   float k = (float)size / (2 * extent);
+  if (w.island) {
+    // island palette (like a road atlas): deep blue sea with a turquoise rim, sand, dark woods, light fields, grey towns, dark roads
+    for (int y = 0; y < size; ++y)
+      for (int x = 0; x < size; ++x) {
+        float wx = (x + 0.5f) / k - extent, wz = (y + 0.5f) / k - extent;
+        float d = w.landDist(wx, wz);
+        if (d < 0) {
+          float t = clamp(-d / 90.0f, 0.0f, 1.0f);
+          put(x, y, 0.10f + 0.06f * (1 - t), 0.30f + 0.25f * (1 - t) * (1 - t) - 0.12f * t, 0.48f + 0.12f * (1 - t) - 0.1f * t);
+          continue;
+        }
+        float th = std::atan2((wz - w.islandC.y) / w.islandRz, (wx - w.islandC.x) / w.islandRx);
+        float B = 22.0f + 12.0f * std::sin(th * 4.0f + 1.3f) + 6.0f * std::sin(th * 9.0f);
+        if (d < B) { put(x, y, 0.80f, 0.73f, 0.53f); continue; }
+        float f = w.forestAt(wx, wz);
+        Vec3 c = lerp(Vec3{0.46f, 0.55f, 0.36f}, Vec3{0.17f, 0.27f, 0.18f}, f);
+        if (w.townAt({wx, wz})) c = lerp(c, Vec3{0.50f, 0.52f, 0.47f}, 0.75f);
+        put(x, y, c.x, c.y, c.z);
+      }
+  } else
   // muted, dark palette (mature UI): land graphite, roads lighter, buildings warm grey, water deep teal
   for (int y = 0; y < size; ++y)
     for (int x = 0; x < size; ++x) put(x, y, 0.105f, 0.115f, 0.13f);
@@ -2076,14 +2333,58 @@ void renderMinimap(const World& w, std::vector<uint8_t>& rgba, int size, float e
     for (int y = std::max(0, y0); y < std::min(size, y1); ++y)
       for (int x = std::max(0, x0); x < std::min(size, x1); ++x) put(x, y, cr, cg, cb);
   };
-  for (const RectF& r : w.mapWater) fill(r, 0.07f, 0.17f, 0.22f);
-  for (const RectF& r : w.mapSand) fill(r, 0.36f, 0.33f, 0.26f);
+  if (!w.island) {
+    for (const RectF& r : w.mapWater) fill(r, 0.07f, 0.17f, 0.22f);
+    for (const RectF& r : w.mapSand) fill(r, 0.36f, 0.33f, 0.26f);
+  }
+  auto fillPoly = [&](const Vec2* q, int n, float cr, float cg, float cb) {
+    float mnx = 1e9f, mnz = 1e9f, mxx = -1e9f, mxz = -1e9f;
+    for (int i = 0; i < n; ++i) { mnx = std::min(mnx, q[i].x); mxx = std::max(mxx, q[i].x); mnz = std::min(mnz, q[i].y); mxz = std::max(mxz, q[i].y); }
+    int x0 = std::max(0, (int)std::floor((mnx + extent) * k)), x1 = std::min(size - 1, (int)std::ceil((mxx + extent) * k));
+    int y0 = std::max(0, (int)std::floor((mnz + extent) * k)), y1 = std::min(size - 1, (int)std::ceil((mxz + extent) * k));
+    for (int y = y0; y <= y1; ++y)
+      for (int x = x0; x <= x1; ++x) {
+        Vec2 c{(x + 0.5f) / k - extent, (y + 0.5f) / k - extent};
+        int pos = 0, neg = 0;
+        for (int e = 0; e < n; ++e) {
+          Vec2 a = q[e], b = q[(e + 1) % n];
+          float cr2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+          if (cr2 >= 0) ++pos; else ++neg;
+        }
+        if (pos == n || neg == n) put(x, y, cr, cg, cb);
+      }
+  };
+  for (const MapPoly& mp : w.mapPolys)
+    if (mp.kind == 1) fillPoly(mp.p, 4, 0.47f, 0.48f, 0.45f);
+  // roads of the network (thick dark lines like a road atlas)
+  for (const RoadEdge& e : w.redges) {
+    float hw = e.hw + (e.kind <= 1 ? 1.2f : 0.4f);
+    for (size_t i = 0; i + 1 < e.pts.size(); ++i) {
+      Vec2 a = e.pts[i], b = e.pts[i + 1];
+      Vec2 t = (b - a).normalized(), n{-t.y, t.x};
+      Vec2 q[4] = {a + n * hw - t * hw * 0.5f, b + n * hw + t * hw * 0.5f, b - n * hw + t * hw * 0.5f, a - n * hw - t * hw * 0.5f};
+      if (e.kind == 3) fillPoly(q, 4, 0.36f, 0.30f, 0.22f);
+      else fillPoly(q, 4, 0.13f, 0.14f, 0.15f);
+    }
+  }
+  for (const MapPoly& mp : w.mapPolys)
+    if (mp.kind == 0) fillPoly(mp.p, 4, 0.72f, 0.72f, 0.70f);
+  if (w.island) {
+    fill(w.land, 0.50f, 0.52f, 0.47f);
+    for (const RectF& r : w.mapGreen) fill(r, 0.40f, 0.52f, 0.33f);
+    for (const RectF& r : w.mapWalk) fill(r, 0.47f, 0.48f, 0.45f);
+    for (const RectF& r : w.mapParking) fill(r, 0.42f, 0.43f, 0.42f);
+    for (const RectF& r : w.mapRoads) fill(r, 0.13f, 0.14f, 0.15f);
+    for (const RectF& r : w.mapPlaza) fill(r, 0.62f, 0.60f, 0.55f);
+    for (const RectF& r : w.mapBuildings) fill(r, 0.72f, 0.72f, 0.70f);
+  } else {
   for (const RectF& r : w.mapGreen) fill(r, 0.17f, 0.27f, 0.2f);
   for (const RectF& r : w.mapWalk) fill(r, 0.19f, 0.2f, 0.22f);
   for (const RectF& r : w.mapParking) fill(r, 0.2f, 0.21f, 0.23f);
   for (const RectF& r : w.mapRoads) fill(r, 0.42f, 0.44f, 0.47f);
   for (const RectF& r : w.mapPlaza) fill(r, 0.33f, 0.33f, 0.31f);
   for (const RectF& r : w.mapBuildings) fill(r, 0.30f, 0.31f, 0.34f);
+  }
   for (int i = 0; i < size; ++i) { put(i, 0, 0.05f, 0.06f, 0.08f); put(i, size - 1, 0.05f, 0.06f, 0.08f); put(0, i, 0.05f, 0.06f, 0.08f); put(size - 1, i, 0.05f, 0.06f, 0.08f); }
 }
 

@@ -12,6 +12,11 @@ namespace gtabr {
 namespace {
 // metres of lane offset from a street's centre line (half the carriageway, so the car sits in the middle of its lane)
 float laneOffsetFor(const World& w, Vec2 a, Vec2 b) {
+  if (!w.redges.empty()) {
+    float hw = 3.5f;
+    w.nearestRoadPointNet((a + b) * 0.5f, nullptr, &hw);
+    return hw * 0.42f;
+  }
   bool horizontal = std::fabs(b.y - a.y) < std::fabs(b.x - a.x);
   Vec2 m = (a + b) * 0.5f;
   for (const RoadLine& r : w.roads)
@@ -30,6 +35,43 @@ void Game::spawnTraffic() {
 }
 
 bool Game::spawnTrafficCar(bool farFromPlayer) {
+  if (!world_.redges.empty()) {
+    // road network: a random point of a paved edge, away from the junctions, in the right-hand lane
+    for (int attempt = 0; attempt < 400; ++attempt) {
+      int ei = wRng_.irange(0, (int)world_.redges.size() - 1);
+      const RoadEdge& e = world_.redges[ei];
+      if (e.kind == 3 || e.len < 40.0f || e.pts.size() < 3) continue;
+      size_t k = (size_t)wRng_.irange(1, (int)e.pts.size() - 2);
+      Vec2 centre = e.pts[k];
+      Vec2 dir = (e.pts[k + 1] - e.pts[k]).normalized();
+      if (wRng_.chance(0.5f)) dir = dir * -1.0f;
+      Vec2 pos = centre + rightOf(dir) * (e.hw * 0.42f);
+      float dp = (pos - player_.pos).length();
+      if (farFromPlayer ? (dp < 85.0f || dp > 190.0f) : (dp < 26.0f || dp > 180.0f)) continue;
+      if ((centre - world_.rnodes[e.a].p).length() < 14.0f || (centre - world_.rnodes[e.b].p).length() < 14.0f) continue;
+      bool clash = false;
+      for (const Vehicle& o : vehicles_) if (!o.despawn && (o.pos - pos).length() < 9.0f) clash = true;
+      for (const ParkedCarDef& p : world_.parked) if ((Vec2{p.pos.x, p.pos.z} - pos).length() < 4.5f) clash = true;
+      if (clash) continue;
+      int slot = -1;
+      for (size_t i = 0; i < vehicles_.size(); ++i) if (vehicles_[i].traffic && vehicles_[i].despawn) { slot = (int)i; break; }
+      Vehicle v;
+      v.id = slot >= 0 ? slot : (int)vehicles_.size();
+      v.model = wRng_.irange(0, 2);
+      v.color = wRng_.irange(0, 2);
+      v.pos = pos;
+      v.yaw = yawFromDir(dir);
+      v.traffic = true;
+      v.engineOn = true;
+      v.fuel = vehicleDef(v.model).fuelCap;
+      v.health = 100;
+      v.cruise = e.kind == 2 ? wRng_.range(12.0f, 16.0f) : wRng_.range(7.5f, 12.0f);
+      if (slot >= 0) vehicles_[slot] = v; else vehicles_.push_back(v);
+      planTrafficRoute(vehicles_[v.id]);
+      return true;
+    }
+    return false;
+  }
   if (world_.roads.empty()) return false;
   for (int attempt = 0; attempt < 40; ++attempt) {
     const RoadLine& r = world_.roads[wRng_.irange(0, (int)world_.roads.size() - 1)];
@@ -84,8 +126,19 @@ std::vector<Vec2> Game::laneRoute(Vec2 here, Vec2 dest, Vec2 headingHint) const 
   for (size_t i = 0; i < pts.size(); ++i) {
     Vec2 in = i > 0 ? (pts[i] - pts[i - 1]).normalized() : Vec2{0, 0}, out = i + 1 < pts.size() ? (pts[i + 1] - pts[i]).normalized() : Vec2{0, 0};
     Vec2 o{0, 0};
-    if (i > 0) o += rightOf(in) * laneOffsetFor(world_, pts[i - 1], pts[i]);
-    if (i + 1 < pts.size()) o += rightOf(out) * laneOffsetFor(world_, pts[i], pts[i + 1]);
+    if (!world_.redges.empty()) {
+      // polyline roads: miter offset (the old grid only had right-angle corners, where the sum of both offsets is the corner)
+      float off = laneOffsetFor(world_, i > 0 ? pts[i - 1] : pts[i], i + 1 < pts.size() ? pts[i + 1] : pts[i]);
+      Vec2 rin = i > 0 ? rightOf(in) : rightOf(out), rout = i + 1 < pts.size() ? rightOf(out) : rightOf(in);
+      Vec2 m = rin + rout;
+      if (m.lengthSq() < 1e-4f) m = rin;
+      m = m.normalized();
+      float k = 1.0f / std::max(0.6f, m.dot(rin));
+      o = m * (off * k);
+    } else {
+      if (i > 0) o += rightOf(in) * laneOffsetFor(world_, pts[i - 1], pts[i]);
+      if (i + 1 < pts.size()) o += rightOf(out) * laneOffsetFor(world_, pts[i], pts[i + 1]);
+    }
     lane[i] = pts[i] + o;
   }
   std::vector<Vec2> route;
@@ -103,6 +156,24 @@ std::vector<Vec2> Game::laneRoute(Vec2 here, Vec2 dest, Vec2 headingHint) const 
 // Picks a destination on the grid (the centre of a random junction, never a dead end at the map edge) and plans the lane path.
 void Game::planTrafficRoute(Vehicle& v) {
   v.routeIdx = 0;
+  if (!world_.redges.empty()) {
+    Vec2 fwd = fwd2(v.yaw);
+    v.route.clear();
+    for (int attempt = 0; attempt < 12 && v.route.empty(); ++attempt) {
+      const RoadNode& n = world_.rnodes[wRng_.irange(0, (int)world_.rnodes.size() - 1)];
+      if (n.edges.size() < 3) continue;
+      float d = (n.p - v.pos).length();
+      if (d < 40.0f || d > 600.0f) continue;
+      v.route = laneRoute(v.pos, n.p, fwd);
+      v.routeDest = n.p;
+    }
+    if (v.route.empty()) {
+      Vec2 dest = world_.nearestRoadPoint(v.pos + fwd * 45.0f);
+      v.route = laneRoute(v.pos, dest, {0, 0});
+      v.routeDest = dest;
+    }
+    return;
+  }
   std::vector<const RoadLine*> hs, vs;
   for (const RoadLine& r : world_.roads) (r.horizontal ? hs : vs).push_back(&r);
   Vec2 fwd = fwd2(v.yaw);
@@ -168,6 +239,8 @@ void Game::updateTraffic(float dt) {
       LOGI("traffic car %d blocked %.1fs at %.1f,%.1f yaw %.2f nearest %.1f route %zu/%zu", v.id, v.blockedT, v.pos.x, v.pos.y, v.yaw, nearest, v.routeIdx, v.route.size());
       for (const Vehicle& o : vehicles_) if (&o != &v && !o.despawn && (o.pos - v.pos).length() < 12.0f) LOGI("   other car %d at %.1f,%.1f traffic %d spd %.1f", o.id, o.pos.x, o.pos.y, (int)o.traffic, o.speed);
       for (const ParkedCarDef& p : world_.parked) if ((Vec2{p.pos.x, p.pos.z} - v.pos).length() < 9.0f) LOGI("   parked car at %.1f,%.1f", p.pos.x, p.pos.z);
+      for (const Npc& n : npcs_) if ((n.pos - v.pos).length() < 9.0f) LOGI("   npc %d at %.1f,%.1f state %d", n.id, n.pos.x, n.pos.y, (int)n.state);
+      if ((player_.pos - v.pos).length() < 9.0f) LOGI("   player at %.1f,%.1f", player_.pos.x, player_.pos.y);
     }
     float want = v.cruise * clamp(1.0f - std::fabs(err) / 1.25f, 0.28f, 1.0f);
     if (nearest < seeDist) want = std::min(want, std::max(0.0f, (nearest - 3.2f) * 0.9f));

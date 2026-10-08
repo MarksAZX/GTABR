@@ -99,7 +99,15 @@ float stepVehicle(Vehicle& v, const VehicleInput& inIn, float dt, const World& w
   v.speed = v.vel.dot(fwd2(v.yaw));
   // world bounds
   // cars stay on land (the beach sand is drivable, the sea is not)
-  if (v.pos.x < World::kInteriorX - 60.0f) {
+  if (w.island && v.pos.x < World::kInteriorX - 60.0f) {
+    // island: the sand is drivable up to the water's edge, the sea is not
+    float d = w.landDist(v.pos.x, v.pos.y);
+    if (d < 6.0f) {
+      Vec2 toC = (w.islandC - v.pos).normalized();
+      v.pos += toC * ((6.0f - d) * 0.6f);
+      v.vel = v.vel * 0.6f;
+    }
+  } else if (v.pos.x < World::kInteriorX - 60.0f) {
     RectF lim = w.land;
     if (w.coastSide >= 0) {
       const RectF& b = w.beach;

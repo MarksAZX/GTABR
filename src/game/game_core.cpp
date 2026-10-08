@@ -510,7 +510,23 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateCash(dt);
   updateRoute(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
-  if (world_.coastSide >= 0) {
+  if (world_.island) {
+    // the coast toward the player along the ray from the island centre
+    Vec2 pp = player_.pos;
+    Vec2 dir = pp - world_.islandC;
+    if (dir.lengthSq() < 1.0f) dir = {1, 0};
+    dir = dir.normalized();
+    Vec2 d2{dir.x * world_.islandRx, dir.y * world_.islandRz};
+    float lo = 0.1f, hi = 2.0f;
+    for (int it = 0; it < 18; ++it) { float m = (lo + hi) * 0.5f; Vec2 q = world_.islandC + d2 * m; if (world_.landDist(q.x, q.y) > 0) lo = m; else hi = m; }
+    Vec2 c = world_.islandC + d2 * lo;
+    Vec3 src{c.x, 0.3f, c.y};
+    float d = std::max(0.0f, world_.landDist(pp.x, pp.y));
+    float vol = player_.indoors ? 0.0f : clamp(1.0f - d / 90.0f, 0.0f, 1.0f) * 0.55f;
+    if (vol > 0.01f && !surfHandle_) surfHandle_ = audio_.loopStart("surf", src, vol);
+    else if (surfHandle_ && vol <= 0.01f) { audio_.loopStop(surfHandle_); surfHandle_ = 0; }
+    else if (surfHandle_) audio_.loopUpdate(surfHandle_, src, vol);
+  } else if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;
     Vec3 src;
     switch (world_.coastSide) {
