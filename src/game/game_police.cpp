@@ -421,6 +421,8 @@ void Game::copThink(Npc& c, float dt) {
         break;
       }
       if (player_.vehicle >= 0) { moveTo(pp, 5.6f); break; }
+      // escalation: officers who arrived with a baton draw the pistol once the level reaches 2 and the suspect keeps distance
+      if (c.weapon == kWpnBaton && (wanted_ >= 3 || (wanted_ >= 2 && d > 8.0f) || (isFirearm(player_.weapon) && player_.aimHold > 0))) c.weapon = kWpnPistol;
       // armed response: shoot at level 3 or when the suspect has a firearm out / is shooting
       bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || (wanted_ >= 2 && d > 8.0f));
       if (shoot && d < 24.0f) {

@@ -807,6 +807,8 @@ class Gen {
     w_.poiMarket = F.P(14.0f, -2.5f);
     w_.poiMarketDoor = F.P(14.0f, -0.8f, kH);
     w_.marketParking = F.P(14.0f, -6.0f);   // street lane in front of the door
+    marketSpot_ = F.P(9.0f, 17.0f);
+    marketSpotYaw_ = F.yawToStreet();
     addShop(ShopKind::Mercado, "Mercado do Zé", F.P(14.0f, -1.0f, kH), F.front());
     float depth = L.h();
     for (float u = 2.0f; u < 30.5f; u += 2.7f) {
@@ -1036,7 +1038,7 @@ class Gen {
       for (float t = rl.a + 12.0f; t < rl.b - 12.0f; t += rng_.range(14.0f, 30.0f)) {
         if (nearIntersection(t, 9.0f, rl.horizontal)) continue;
         bool side = rng_.chance(0.5f);
-        float off = (rl.hw - 1.4f) * (side ? 1.0f : -1.0f);
+        float off = (rl.hw - 1.05f) * (side ? 1.0f : -1.0f);
         float x = rl.horizontal ? t : rl.c + off, z = rl.horizontal ? rl.c + off : t;
         bool blocked = false;
         for (const RectF& r : noTree_) if (r.inflated(4.0f).contains(x, z)) blocked = true;
@@ -1380,8 +1382,8 @@ class Gen {
     float carZ = north ? north->c + north->hw - 1.4f : pb.z0 - 4.0f;
     w_.vehicleSpawn[0] = {pb.cx() + 1.0f, 0, carZ};
     w_.vehicleYaw[0] = -kPi / 2;
-    w_.vehicleSpawn[1] = {w_.marketParking.x + 6.0f, 0, w_.marketParking.z + 2.2f};
-    w_.vehicleYaw[1] = kPi / 2;
+    w_.vehicleSpawn[1] = marketSpot_;   // a free bay of the market car park
+    w_.vehicleYaw[1] = marketSpotYaw_;
     w_.vehicleSpawn[2] = {w_.workshopBayEntry.x - 6.0f, 0, w_.workshopBayEntry.z};
     w_.vehicleYaw[2] = 0;
     // pedestrians on the pavements, more where the city is denser
@@ -1467,6 +1469,8 @@ class Gen {
   float interiorCursor_ = 0;
   bool placedNeighbour_ = false;
   bool periphery_ = false;
+  Vec3 marketSpot_;
+  float marketSpotYaw_ = 0;
   int sideLayer_ = mat::wall_paint;
   std::vector<int> pendingShopFront_;
 };
