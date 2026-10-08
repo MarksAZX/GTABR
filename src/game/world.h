@@ -90,6 +90,10 @@ struct ShopDef {
   std::vector<ShopStock> stock;
 };
 
+// A textured surface decal baked into the city layout (cracks, oil, manholes, drains, tyre marks, leaves, patches on the
+// ground; graffiti, grime streaks and posters on walls). kind matches shaders/decal.frag; vertical decals face 'yaw'.
+struct SurfaceDecal { Vec3 pos; float yaw = 0, hx = 1, hz = 1, alpha = 1; int kind = 2; bool vertical = false; };
+
 struct World {
   static constexpr float kChunk = 32.0f;
   static constexpr float kSidewalkH = 0.14f;
@@ -112,6 +116,7 @@ struct World {
   std::vector<Chunk> chunks;
   MeshData interiorCeiling;
   gfx::MeshHandle interiorCeilingHandle;
+  std::vector<SurfaceDecal> decals;
   std::vector<Vec3> lampLights;    // street lamp heads (night lights)
   std::vector<Vec3> interiorLights;
 

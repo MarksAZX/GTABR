@@ -1635,11 +1635,95 @@ std::vector<Vec2> World::roadRoute(Vec2 a, Vec2 b) const {
   return out;
 }
 
+// Decals follow the layout: wear on the roads and kerbs, stains at the pumps, street furniture holes, and urban marks on
+// the street-facing walls. Everything is seeded, so the same city always ages the same way.
+static void scatterDecals(World& w, uint32_t seed) {
+  Rng r(seed * 2654435761u + 77u);
+  auto add = [&](Vec3 p, float yaw, float hx, float hz, float a, int kind, bool vertical) {
+    SurfaceDecal d;
+    d.pos = p; d.yaw = yaw; d.hx = hx; d.hz = hz; d.alpha = a; d.kind = kind; d.vertical = vertical;
+    w.decals.push_back(d);
+  };
+  auto onLand = [&](float x, float z) { return w.land.contains(x, z); };
+  // inside the crossing of two streets (kerb drains, manholes and patches do not belong there)
+  auto inCrossing = [&](float x, float z, float margin) {
+    int n = 0;
+    for (const RoadLine& o : w.roads) {
+      float across = o.horizontal ? z - o.c : x - o.c, along = o.horizontal ? x : z;
+      if (std::fabs(across) < o.hw + margin && along > o.a - 1.0f && along < o.b + 1.0f) ++n;
+    }
+    return n >= 2;
+  };
+  for (const RoadLine& rl : w.roads) {
+    const float len = rl.b - rl.a;
+    if (len < 4.0f) continue;
+    auto at = [&](float along, float off, float& x, float& z) {
+      if (rl.horizontal) { x = along; z = rl.c + off; } else { x = rl.c + off; z = along; }
+    };
+    float yawAlong = rl.horizontal ? 1.5707963f : 0.0f;   // yaw 0 runs along -Z, pi/2 along +X
+    for (float s = rl.a + r.range(3.0f, 7.0f); s < rl.b; s += r.range(5.0f, 11.0f)) {
+      float x, z;
+      float lane = (r.chance(0.5f) ? 1.0f : -1.0f) * rl.hw * r.range(0.15f, 0.65f);
+      at(s, lane, x, z);
+      if (!onLand(x, z)) continue;
+      bool crossing = inCrossing(x, z, 0.0f);
+      float roll = r.uni();
+      if (crossing && roll > 0.45f) roll = r.range(0.0f, 0.45f);   // only cracks / oil / tyre marks in a junction
+      if (((roll > 0.64f && roll < 0.76f) || roll >= 0.86f) && inCrossing(x, z, 5.5f)) roll = r.range(0.0f, 0.3f);   // none over the zebra crossings
+      float y = w.heightAt(x, z);
+      if (roll < 0.34f) add({x, y, z}, r.range(0, kTau), r.range(0.9f, 1.8f), r.range(0.9f, 1.8f), r.range(0.55f, 0.95f), 2, false);          // cracks
+      else if (roll < 0.5f) add({x, y, z}, r.range(0, kTau), r.range(0.5f, 0.9f), r.range(0.5f, 0.9f), r.range(0.6f, 0.9f), 3, false);      // oil
+      else if (roll < 0.64f) add({x, y, z}, yawAlong, 1.1f, r.range(2.2f, 4.0f), r.range(0.5f, 0.8f), 6, false);                           // tyre marks
+      else if (roll < 0.76f) add({x, y, z}, yawAlong, r.range(1.0f, 1.8f), r.range(0.9f, 1.8f), 0.85f, 9, false);                           // patches
+      else if (roll < 0.86f) add({x, y, z}, r.range(0, kTau), r.range(1.0f, 2.0f), r.range(1.0f, 2.0f), r.range(0.4f, 0.7f), 10, false);    // wet spots
+      else add({x, y, z}, yawAlong, 0.82f, 0.82f, 1.0f, 4, false);                                                                          // manholes
+    }
+    // kerb drains and leaf drifts along both edges
+    for (float s = rl.a + r.range(4.0f, 12.0f); s < rl.b; s += r.range(18.0f, 30.0f)) {
+      for (float side : {-1.0f, 1.0f}) {
+        float x, z;
+        at(s, side * (rl.hw - 0.45f), x, z);
+        if (!onLand(x, z) || inCrossing(x, z, 1.5f)) continue;
+        if (r.chance(0.55f)) add({x, w.heightAt(x, z), z}, yawAlong, 0.42f, 0.55f, 1.0f, 5, false);
+        else add({x, w.heightAt(x, z), z}, r.range(0, kTau), 0.9f, 0.9f, 0.9f, 8, false);
+      }
+    }
+  }
+  for (const PumpDef& p : w.pumps) {
+    add({p.pos.x, w.heightAt(p.pos.x, p.pos.z), p.pos.z}, r.range(0, kTau), 1.1f, 1.1f, 0.85f, 3, false);
+    add({p.pos.x + r.range(-1.5f, 1.5f), w.heightAt(p.pos.x, p.pos.z), p.pos.z + r.range(-1.5f, 1.5f)}, r.range(0, kTau), 0.7f, 0.7f, 0.7f, 3, false);
+  }
+  // walls facing the streets: graffiti, grime streaks, posters
+  for (const RectF& b : w.mapBuildings) {
+    if (b.w() < 4.0f || b.h() < 4.0f) continue;
+    struct Side { Vec3 mid; Vec2 dir; float yaw; float len; };
+    Side sides[4] = {{{b.cx(), 0, b.z0 - 0.02f}, {1, 0}, 0.0f, b.w()},                       // -z face
+                     {{b.cx(), 0, b.z1 + 0.02f}, {1, 0}, 3.1415927f, b.w()},                 // +z face
+                     {{b.x0 - 0.02f, 0, b.cz()}, {0, 1}, -1.5707963f, b.h()},                // -x face
+                     {{b.x1 + 0.02f, 0, b.cz()}, {0, 1}, 1.5707963f, b.h()}};                // +x face
+    for (const Side& s : sides) {
+      if (!r.chance(0.55f)) continue;
+      Vec2 out{std::sin(s.yaw), -std::cos(s.yaw)};
+      Vec2 probe{s.mid.x + out.x * 3.0f, s.mid.z + out.y * 3.0f};
+      if (!onLand(probe.x, probe.y)) continue;
+      float t = r.range(-0.4f, 0.4f) * s.len;
+      Vec3 p{s.mid.x + s.dir.x * t, 0, s.mid.z + s.dir.y * t};
+      float g = w.heightAt(p.x, p.z);
+      float roll = r.uni();
+      if (roll < 0.30f) add({p.x, g + r.range(1.3f, 1.9f), p.z}, s.yaw, r.range(0.9f, 1.5f), r.range(0.55f, 0.9f), 0.95f, 7, true);   // graffiti
+      else if (roll < 0.60f) add({p.x, g + 1.9f, p.z}, s.yaw, r.range(0.5f, 1.2f), r.range(1.2f, 2.0f), r.range(0.5f, 0.85f), 11, true); // grime streaks
+      else if (roll < 0.80f) add({p.x, g + r.range(1.4f, 1.8f), p.z}, s.yaw, r.range(0.28f, 0.42f), r.range(0.4f, 0.55f), 1.0f, 12, true); // posters
+      else add({p.x, g + 0.45f, p.z}, s.yaw, r.range(1.0f, 2.0f), 0.5f, 0.55f, 11, true);                                                 // damp at the base
+    }
+  }
+}
+
 void buildWorld(World& w, uint32_t seed) {
   w = World();
   w.seed = seed;
   Gen g(w, seed);
   g.run();
+  scatterDecals(w, seed);
   for (auto& c : w.chunks) c.bounds = c.mesh.bounds;
   w.buildGrid();
 }

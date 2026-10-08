@@ -918,6 +918,42 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(20); b.shot("graph_landed");
     return 0;
   }
+  if (name == "decals") {
+    // street wear and wall decals: walk the first street of the city in both cameras
+    const World& w = g.world();
+    printf("decals in the city: %zu\n", w.decals.size());
+    Vec2 at{0, 0};
+    int best = 0;
+    for (const SurfaceDecal& d : w.decals) {
+      int n = 0;
+      for (const SurfaceDecal& e : w.decals) if (std::fabs(e.pos.x - d.pos.x) < 14 && std::fabs(e.pos.z - d.pos.z) < 14) ++n;
+      if (n > best) { best = n; at = {d.pos.x, d.pos.z}; }
+    }
+    {
+      // a street with lots of wear: the road line whose decals are closest to the player start
+      float bestD = 1e9f;
+      for (const RoadLine& rl : w.roads) {
+        float mid = (rl.a + rl.b) * 0.5f;
+        Vec2 pt = rl.horizontal ? Vec2{mid, rl.c} : Vec2{rl.c, mid};
+        float dd = (pt - g.player().pos).length();
+        if (dd < bestD && rl.avenue) { bestD = dd; at = pt; }
+      }
+    }
+    g.teleportPlayer(at, 0.0f);
+    b.idle(40);
+    b.shot("decals_top");
+    g.toggleCamera();
+    b.idle(60);
+    b.shot("decals_third");
+    for (const SurfaceDecal& d : w.decals) if (d.vertical && std::fabs(d.pos.x - at.x) < 40 && std::fabs(d.pos.z - at.y) < 40) {
+      Vec2 out{std::sin(d.yaw), -std::cos(d.yaw)};
+      g.teleportPlayer({d.pos.x + out.x * 3.0f, d.pos.z + out.y * 3.0f}, d.yaw + 3.14159f);
+      b.idle(40);
+      b.shot("decals_wall");
+      break;
+    }
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

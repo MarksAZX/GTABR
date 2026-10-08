@@ -343,6 +343,26 @@ void Game::emitSprites(gfx::FrameData& fd) {
       }
     }
   }
+  // surface decals of the city (cracks, oil, manholes, drains, tyre marks, graffiti, grime, posters), faded with distance
+  {
+    Vec3 fc = cam_.focus();
+    const float far2 = 62.0f * 62.0f;
+    int cap = 260;
+    for (const SurfaceDecal& sd : world_.decals) {
+      float dx = sd.pos.x - fc.x, dz = sd.pos.z - fc.z;
+      float d2 = dx * dx + dz * dz;
+      if (d2 > far2) continue;
+      if (indoors) break;
+      float fade = 1.0f - smoothstep((std::sqrt(d2) - 40.0f) / 22.0f);
+      if (!visible(sd.pos, std::max(sd.hx, sd.hz))) continue;
+      gfx::DecalInst d{};
+      d.pos[0] = sd.pos.x; d.pos[1] = sd.pos.y + (sd.vertical ? 0.0f : 0.012f); d.pos[2] = sd.pos.z;
+      d.yaw = sd.yaw; d.half[0] = sd.hx; d.half[1] = sd.hz; d.alpha = sd.alpha * fade;
+      d.kind = (float)(sd.kind + (sd.vertical ? 20 : 0));
+      decals_.push_back(d);
+      if (--cap <= 0) break;
+    }
+  }
   emitRain();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");
