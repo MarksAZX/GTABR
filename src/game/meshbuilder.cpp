@@ -162,9 +162,20 @@ void MeshBuilder::blob(const Vec3& c, const Vec3& rad, int segs, int rings, floa
     for (int j = 0; j <= segs; ++j) {
       int jj = j % segs;
       float th = (float)jj / segs * kTau;
-      float k = (i == 0 || i == rings) ? hash3(0, i, seed) : hash3(i, jj, seed);
-      float r = 1.0f + lump * (k - 0.5f) * 2.0f;
       Vec3 dir{std::sin(ph) * std::cos(th), std::cos(ph), std::sin(ph) * std::sin(th)};
+      // smooth 3D value noise over the direction (two octaves) so the crown gets soft lumps instead of per-vertex spikes;
+      // the same value is used at the seam and the poles, so the surface stays closed
+      auto vnoise = [&](Vec3 q, uint32_t sd) {
+        float fx = std::floor(q.x), fy = std::floor(q.y), fz = std::floor(q.z);
+        float tx = q.x - fx, ty = q.y - fy, tz = q.z - fz;
+        tx = tx * tx * (3.0f - 2.0f * tx); ty = ty * ty * (3.0f - 2.0f * ty); tz = tz * tz * (3.0f - 2.0f * tz);
+        auto h = [&](int dx, int dy, int dz) { return hash3((int)fx + dx, (int)fy + dy * 131 + dz * 7919, sd); };
+        float c00 = lerp(h(0, 0, 0), h(1, 0, 0), tx), c10 = lerp(h(0, 1, 0), h(1, 1, 0), tx);
+        float c01 = lerp(h(0, 0, 1), h(1, 0, 1), tx), c11 = lerp(h(0, 1, 1), h(1, 1, 1), tx);
+        return lerp(lerp(c00, c10, ty), lerp(c01, c11, ty), tz);
+      };
+      float k = 0.65f * vnoise(dir * 1.7f + Vec3{3.1f, 1.3f, 7.7f}, seed) + 0.35f * vnoise(dir * 4.1f + Vec3{9.0f, 2.2f, 5.4f}, seed ^ 0x9e3779b9u);
+      float r = 1.0f + lump * (k - 0.5f) * 2.4f;
       P[i * (segs + 1) + j] = c + Vec3{dir.x * rad.x, dir.y * rad.y, dir.z * rad.z} * r;
       N[i * (segs + 1) + j] = Vec3{dir.x / rad.x, dir.y / rad.y, dir.z / rad.z}.normalized();
       AO[i * (segs + 1) + j] = aoBase + (1.0f - aoBase) * (0.5f + 0.5f * dir.y);

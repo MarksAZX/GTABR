@@ -249,6 +249,7 @@ class Game {
   void updateVehicles(float dt, const InputFrame& in);
   void updateInteractions(const InputFrame& in);
   void updateParticles(float dt);
+  void updateAmbientFx(float dt);   // wind-blown leaves, dust motes in sunlight, exhaust of moving cars
   void updateAdaptiveQuality(float dt);
   void applySettings();
   void collectInteractables();

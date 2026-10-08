@@ -25,7 +25,10 @@ vec3 aces(vec3 v) {
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
 void main() {
-  vec3 hdr = texture(uScene, vUV).rgb;
+  // lens: slight chromatic aberration towards the edges (cheap, only 2 extra taps of the scene)
+  vec2 qc = vUV - 0.5;
+  vec2 ca = qc * (0.0016 * dot(qc, qc) * 4.0);
+  vec3 hdr = vec3(texture(uScene, vUV + ca).r, texture(uScene, vUV).g, texture(uScene, vUV - ca).b);
   // ambient occlusion: darkens crevices and contact areas, less on bright direct light (it only models ambient)
   float ao = texture(uAo, vUV).r;
   float lum0 = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
@@ -44,6 +47,10 @@ void main() {
     }
     float onScreen = 1.0 - smoothstep(0.9, 1.7, length(pc.fx.zw - 0.5) * 1.4);
     hdr += pc.sunCol.rgb * (acc / 20.0) * pc.fx.y * onScreen * smoothstep(1.6, 0.1, dist * 1.2);
+    // soft glare halo around the sun disc (only where the sky is visible, so buildings and trees cut it)
+    float skyHere = texture(uAo, pc.fx.zw).g;
+    float halo = pow(clamp(1.0 - dist * 2.6, 0.0, 1.0), 3.0);
+    hdr += pc.sunCol.rgb * halo * pc.fx.y * 0.35 * skyHere;
   }
   vec3 blurred = texture(uBlur, vUV).rgb;
   vec3 bloom = max(blurred - vec3(pc.b.z), 0.0) * pc.b.y;

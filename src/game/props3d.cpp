@@ -35,7 +35,7 @@ float buildTree3D(MeshBuilder& b, MeshBuilder* lod, Rng& rng, int species, const
     b.setTint(tint);
     b.frustum(base, top, r0, r1, sides, mat::bark, true, false, 0.7f);
   };
-  auto crown = [&](const Crown& c, int segs = 10, int rings = 5, float lump = 0.17f) {
+  auto crown = [&](const Crown& c, int segs = 14, int rings = 7, float lump = 0.2f) {
     b.setTint(c.tint);
     b.blob(c.c, c.r, segs, rings, lump, rng.next(), mat::foliage, 0.5f);
   };

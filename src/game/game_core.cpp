@@ -883,7 +883,58 @@ void Game::updateVehicles(float dt, const InputFrame& in) {
   }
 }
 
+// Life in the air: leaves carried by the wind near trees and parks, dust motes drifting in sunlit air, and exhaust puffs
+// from moving cars. Particles come from the shared pool (only a few at a time) and use the world RNG-independent wRng_.
+void Game::updateAmbientFx(float dt) {
+  if (phase_ != Phase::Playing || player_.indoors || settings_.reduceMotion) return;
+  Vec3 c{player_.pos.x, player_.y, player_.pos.y};
+  float day = 1.0f - day_.night;
+  // leaves (daytime, breeze)
+  if (rain_ < 0.3f && wRng_.chance(dt * (0.8f + wind_ * 5.0f))) {
+    Particle* q = particles_.acquire();
+    if (q) {
+      float a = wRng_.range(0, kTau), d = wRng_.range(4.0f, 16.0f);
+      q->pos = {c.x + std::cos(a) * d, c.y + wRng_.range(2.5f, 6.0f), c.z + std::sin(a) * d};
+      q->vel = {wRng_.range(0.6f, 1.6f) * (0.5f + wind_), wRng_.range(-0.45f, -0.2f), wRng_.range(-0.5f, 0.5f)};
+      q->life = q->maxLife = wRng_.range(3.5f, 6.0f);
+      q->size = wRng_.range(0.07f, 0.12f);
+      q->gravity = 0.05f;
+      q->color = wRng_.chance(0.5f) ? rgba(0.55f, 0.62f, 0.2f, 0.95f) : rgba(0.72f, 0.5f, 0.16f, 0.95f);
+    }
+  }
+  // dust motes in the sun
+  if (day > 0.5f && rain_ < 0.1f && wRng_.chance(dt * 3.0f)) {
+    Particle* q = particles_.acquire();
+    if (q) {
+      float a = wRng_.range(0, kTau), d = wRng_.range(1.5f, 9.0f);
+      q->pos = {c.x + std::cos(a) * d, c.y + wRng_.range(0.4f, 2.8f), c.z + std::sin(a) * d};
+      q->vel = {wRng_.range(-0.15f, 0.15f) + wind_ * 0.3f, wRng_.range(-0.04f, 0.1f), wRng_.range(-0.15f, 0.15f)};
+      q->life = q->maxLife = wRng_.range(3.0f, 5.5f);
+      q->size = wRng_.range(0.03f, 0.05f);
+      q->gravity = 0.001f;   // > 0 keeps the size fixed (only smoke-like particles grow)
+      q->color = rgba(1.0f, 0.93f, 0.75f, 0.55f);
+    }
+  }
+  // exhaust
+  for (const Vehicle& v : vehicles_) {
+    if (!v.engineOn || std::fabs(v.speed) < 0.6f) continue;
+    Vec2 d2 = v.pos - player_.pos;
+    if (d2.lengthSq() > 45.0f * 45.0f) continue;
+    if (!wRng_.chance(dt * (3.0f + std::min(8.0f, std::fabs(v.speed) * 0.5f)))) continue;
+    Particle* q = particles_.acquire();
+    if (!q) break;
+    Vec2 back = fwd2(v.yaw) * (-vehicleDef(v.model).length * 0.5f);
+    q->pos = {v.pos.x + back.x, 0.32f, v.pos.y + back.y};
+    q->vel = {wRng_.range(-0.15f, 0.15f) - fwd2(v.yaw).x * 0.5f, wRng_.range(0.15f, 0.4f), wRng_.range(-0.15f, 0.15f) - fwd2(v.yaw).y * 0.5f};
+    q->life = q->maxLife = wRng_.range(0.7f, 1.2f);
+    q->size = wRng_.range(0.12f, 0.2f);
+    q->gravity = 0.0f;
+    q->color = rgba(0.62f, 0.62f, 0.64f, 0.3f);
+  }
+}
+
 void Game::updateParticles(float dt) {
+  updateAmbientFx(dt);
   particles_.forEach([&](Particle& p, int idx) {
     p.life -= dt;
     if (p.life <= 0) { particles_.release(idx); return; }
