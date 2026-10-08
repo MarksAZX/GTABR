@@ -72,6 +72,7 @@ class Gen {
 
   void ground(RectF r, float y, int layer, float tile, Vec3 tint = {1, 1, 1}, bool lod = true) {
     if(layer==mat::grass)tile=2.0f;
+    if(layer==mat::asphalt||layer==mat::asphalt_cracked)tile=1.8f;
     if (r.x1 - r.x0 < 1e-3f || r.z1 - r.z0 < 1e-3f) return;
     int cx0 = (int)std::floor(r.x0 / World::kChunk), cx1 = (int)std::floor((r.x1 - 1e-4f) / World::kChunk);
     int cz0 = (int)std::floor(r.z0 / World::kChunk), cz1 = (int)std::floor((r.z1 - 1e-4f) / World::kChunk);

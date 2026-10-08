@@ -682,7 +682,7 @@ void Game::drawMenus(float dt) {
   if(menuPages_>1){float py=screenH_-122*S;float bw=120*S;
     for(int dir=0;dir<2;++dir){float bx=x+(dir? w-bw:0);ui_.rect(bx,py,bw,35*S,C(1,1,1,0.11f),4*S);ui_.text(false,dir?"Próxima":"Anterior",bx+12*S,py+7*S,18*S,kWhite);uiRects_.push_back({Vec4(bx,py,bw,35*S),790+dir});}
     ui_.text(false,std::to_string(menuPage_+1)+" / "+std::to_string(menuPages_),x+w/2,py+7*S,18*S,kMuted,Align::Center);}
-  ui_.text(false,"0.3.0  •  "+std::string(sessionActive_?"Partida em andamento":"Pronto para explorar"),left,screenH_-45*S,17*S,kMuted);
+  ui_.text(false,"0.4.0  •  "+std::string(sessionActive_?"Partida em andamento":"Pronto para explorar"),left,screenH_-45*S,17*S,kMuted);
 }
 
 void Game::menuAction(int id) {

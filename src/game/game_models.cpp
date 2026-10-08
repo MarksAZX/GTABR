@@ -229,6 +229,7 @@ void Game::emitVehicle(gfx::FrameData& fd, int model, int color, Vec3 pos, float
   float dist = (pos - cam_.eye()).length();
   const VehicleDef& vd = vehicleDef(model);
   Vec3 paint = paintColor(vd.colors[clamp(color, 0, 2)]);
+  if(!policeCar&&color>2){static const Vec3 finishes[]={{0.12f,0.19f,0.24f},{0.26f,0.28f,0.29f},{0.48f,0.39f,0.29f}};paint=finishes[(color-3)%3];}
   if (policeCar && mi == 1) paint = {0.85f, 0.85f, 0.84f};
   Mat4 body = yawMatrix(pos, yaw) * rotX(-pitch) * rotZ(roll);
   gfx::ModelDraw d;

@@ -34,6 +34,7 @@ bool Game::saveGame() {
   o << "currentVehicle=" << (player_.vehicle >= 0 && player_.vehicle < (int)vehicles_.size() && !vehicles_[player_.vehicle].police ? player_.vehicle : -1) << "\n";
   for (const Vehicle& v : vehicles_) {
     if (v.police || v.despawn || v.ambientTraffic) continue;
+    o << "veh_model"<<v.id<<"="<<v.model<<"\nveh_color"<<v.id<<"="<<v.color<<"\n";
     o << "veh" << v.id << "=" << v.pos.x << "," << v.pos.y << "," << v.yaw << "," << v.fuel << "," << v.health << "\n";
   }
   for (int w = 1; w < kWeaponCount; ++w)
@@ -99,6 +100,8 @@ bool Game::loadGame() {
     if (it == kv.end()) continue;
     float x, z, yaw, fuel, hp;
     if (std::sscanf(it->second.c_str(), "%f,%f,%f,%f,%f", &x, &z, &yaw, &fuel, &hp) == 5 && std::isfinite(x) && std::isfinite(z) && std::isfinite(yaw) && std::isfinite(fuel) && std::isfinite(hp) && world_.playArea.contains(x, z)) {
+      v.model=clamp((int)num(("veh_model"+std::to_string(v.id)).c_str(),v.model),0,2);
+      v.color=clamp((int)num(("veh_color"+std::to_string(v.id)).c_str(),v.color),0,5);
       v.ambientTraffic=false;v.pos = {x, z}; v.yaw = yaw;
       v.fuel = clamp(fuel, 0.0f, vehicleDef(v.model).fuelCap);
       v.health = clamp(hp, 0.0f, 100.0f);

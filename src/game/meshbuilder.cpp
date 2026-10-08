@@ -13,6 +13,7 @@ uint32_t MeshBuilder::vert(const Vec3& p, const Vec3& n, const Vec2& uv, int lay
   w.layer = (float)layer;
   m_->v.push_back(w);
   m_->bounds.expand(p);
+  if(layer==31){m_->bounds.expand({p.x,p.y-0.32f,p.z});m_->bounds.expand({p.x,p.y+0.32f,p.z});}
   return (uint32_t)m_->v.size() - 1;
 }
 

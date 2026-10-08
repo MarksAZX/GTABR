@@ -207,7 +207,6 @@ struct Npc {
   float animReqSpeed = 1;
   bool animReqUpper = false, animReqHold = false;
   // ---- police
-  bool ambientTraffic = false;
   bool police = false;
   int unit = -1;            // police car index (vehicles_) this officer arrived with
   Vec2 lastKnown;           // last known suspect position
