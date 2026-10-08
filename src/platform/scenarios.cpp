@@ -109,6 +109,9 @@ struct Bot {
       if (std::fabs((c.box.mn.x + c.box.mx.x) * 0.5f - v.pos.x) < 5 && std::fabs((c.box.mn.z + c.box.mx.z) * 0.5f - v.pos.y) < 5)
         LOGW("  near collider kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y);
     LOGW("driveTo (%.1f, %.1f) timed out: car at (%.2f, %.2f) yaw %.2f speed %.2f fuel %.1f", target.x, target.y, v.pos.x, v.pos.y, v.yaw, v.speed, v.fuel);
+    { std::vector<int> ids; g.world().queryColliders(v.pos.x - 4, v.pos.y - 4, v.pos.x + 4, v.pos.y + 4, ids);
+      for (int id : ids) { const Collider& c = g.world().colliders[id]; LOGW("  near collider kind %d [%.1f,%.1f]-[%.1f,%.1f] y %.1f..%.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mn.y, c.box.mx.y); }
+      LOGW("  ground h %.2f raster %d", g.world().heightAt(v.pos.x, v.pos.y), (int)g.world().rasterAt(v.pos.x, v.pos.y)); }
     return false;
   }
   // drives along the street grid (right-hand lane) to a point on or next to a street
