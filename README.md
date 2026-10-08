@@ -134,3 +134,14 @@ A resolução dinâmica é opcional.
 - **Cidade por classe social:** bairros autoconstruídos (vielas, casas de tijolo e retalhos de tinta, telhado de zinco, lama), bairro nobre perto do mar (vilas, muros altos, piscinas) e classe média. Ruas de bloquete e de paralelepípedo, ruas de terra batida e transições suaves asfalto → lama → terra feitas no shader (quantidade de lama guardada na parte fracionária da camada do vértice).
 - **Materiais novos (8):** lama, bloquete, paralelepípedo, terra batida, parede de favela, zinco, vila de luxo, torre de luxo (albedo gerado por IA; normais/rugosidade derivadas).
 - **Gráficos:** desfoque de movimento opcional, sombras de contato, nitidez, nuvens volumétricas (Ultra).
+
+## 0.9.0
+
+- **TAA:** jitter Halton(2,3) na projeção, histórico reprojetado com profundidade + câmera anterior, clipping de variância em YCoCg.
+- **Água:** reflexos em tela (SSR) da orla no mar e refração com ondulação.
+- **GI:** os probes guardam a cor de um rebote (areia, grama, terra, asfalto, paredes) e tingem a luz indireta.
+- **Golden hour:** luz de fim de tarde refeita (sol âmbar baixo, sombras longas, horizonte dourado) e estilo de cor "Golden Hour".
+- **Configurações → AVANÇADO:** estilo de cor, TAA, SSAO, sombras de contato, nuvens volumétricas, raios de luz, granulação, aberração cromática, vinheta, nitidez, resolução e campo de visão.
+- **Mapa:** rota pelas ruas (mapa e minimapa, com distância), locais salvos (até 8, persistem no save).
+- **Modelos 3D Higgsfield:** coqueiro, guarda-sol e chafariz no mundo. A mangueira gerada saiu com copa falha e ficou de fora (a copa procedural continua).
+- **Limites:** materiais não são escaneados; GI é aproximada (visibilidade do céu + cor do rebote), não traçado de raios.
