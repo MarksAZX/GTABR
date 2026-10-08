@@ -40,6 +40,7 @@ class UiPainter {
   void arc(float cx, float cy, float rIn, float rOut, float a0, float a1, Color c);
   void icon(const char* name, float cx, float cy, float size, Color c);
   void image(gfx::TexHandle tex, const UvRect& uv, float x, float y, float w, float h, Color c = 0xFFFFFFFFu, float radius = 0);
+  void portrait(gfx::TexHandle tex, float x, float y, float w, float h, float radius);   // live 3D render (tone mapped in the shader)
   void art(const char* name, float x, float y, float w, float h, Color c = 0xFFFFFFFFu, float radius = 0);
   void map(gfx::TexHandle tex, float cu, float cv, float uvScale, float rot, float x, float y, float w, float h, float radius, Color c);
   float text(bool bold, const std::string& s, float x, float y, float size, Color c, Align al = Align::Left, Color outline = 0,

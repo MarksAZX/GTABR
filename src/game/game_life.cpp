@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "game.h"
+#include "ui_theme.h"
 
 namespace gtabr {
 
@@ -212,4 +213,43 @@ void Game::emitBirds() {
   }
 }
 
+}  // namespace gtabr
+
+namespace gtabr {
+// People caught with cash drop a few notes when they go down; the player picks them up by walking over them.
+void Game::dropCash(const Npc& n) {
+  int cents = 300 + (int)(rng_.uni() * 2200.0f);
+  if (n.role != 0) cents += 1500;   // shopkeepers carry more
+  cents = cents / 10 * 10;
+  cash_.push_back({{n.pos.x, world_.heightAt(n.pos.x, n.pos.y) + 0.12f, n.pos.y}, cents, 0.0f});
+}
+
+void Game::updateCash(float dt) {
+  for (CashDrop& c : cash_) {
+    c.t += dt;
+    if (c.t > 0.5f && !player_.indoors && !player_.dead && (Vec2{c.pos.x, c.pos.z} - player_.pos).length() < 1.5f) {
+      moneyCents_ += c.cents;
+      toast("Dinheiro|+" + fmtMoney(c.cents), "cash", theme::kOk);
+      audio_.play("cash", {c.pos.x, c.pos.y, c.pos.z}, 0.7f);
+      c.t = 1e9f;
+    }
+  }
+  cash_.erase(std::remove_if(cash_.begin(), cash_.end(), [](const CashDrop& c) { return c.t > 90.0f; }), cash_.end());
+}
+
+void Game::emitCash() {
+  UvRect dot = assets_.icon("dot");
+  if (!dot.valid || cash_.empty()) return;
+  SpriteDef sd;
+  sd.tex = assets_.iconsTex; sd.u0 = dot.u0; sd.v0 = dot.v0; sd.u1 = dot.u1; sd.v1 = dot.v1; sd.pivX = 0.5f; sd.pivY = 0.5f; sd.valid = true;
+  for (const CashDrop& c : cash_) {
+    if (!cam_.frustum().intersectsSphere(c.pos, 1.0f)) continue;
+    float bob = 0.08f * std::sin(c.t * 4.0f) + 0.1f;
+    sd.wm = 0.34f; sd.hm = 0.2f;
+    addSprite(&sd, c.pos + Vec3{0, bob, 0}, 1.0f, 0.95f, false, 0xFF55B87Au, false, false);
+    sd.wm = 0.1f; sd.hm = 0.1f;
+    float tw = 0.5f + 0.5f * std::sin(c.t * 7.0f);
+    addSprite(&sd, c.pos + Vec3{0.05f, bob + 0.18f, 0}, 1.0f, 0.9f, false, tw > 0.7f ? 0xFFFFFFFFu : 0x00FFFFFFu, false, false);
+  }
+}
 }  // namespace gtabr

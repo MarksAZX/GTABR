@@ -41,7 +41,7 @@ struct DecalInst {
 static_assert(sizeof(DecalInst) == 32, "DecalInst layout");
 
 enum UiKind : int {
-  kUiRect = 0, kUiImage = 1, kUiText = 2, kUiArc = 3, kUiMap = 4, kUiGradient = 5, kUiGlow = 6, kUiHGradient = 7
+  kUiRect = 0, kUiImage = 1, kUiText = 2, kUiArc = 3, kUiMap = 4, kUiGradient = 5, kUiGlow = 6, kUiHGradient = 7, kUiPortrait = 8
 };
 struct UiInst {
   float rect[4];
@@ -127,6 +127,11 @@ struct FrameData {
   std::vector<UiInst> ui;
   std::vector<Batch> uiBatches;
   std::vector<ModelDraw> models;
+  // dialogue portrait: a live 3D character rendered into a small offscreen target with its own camera and lighting
+  bool portraitActive = false;
+  GlobalsUBO portraitGlobals{};
+  Vec4 portraitBg{0.10f, 0.115f, 0.14f, 1.0f};
+  std::vector<ModelDraw> portraitModels;   // bone palettes live in 'bones' like every other skinned draw
   std::vector<LightUBO> lights;   // up to kMaxLights dynamic point / spot lights; the renderer culls them into screen tiles
   std::vector<Mat4> bones;        // skinning palettes, kMaxBones matrices per skinned draw
   MaterialHandle worldMaterial;   // albedo array + normal/roughness array
@@ -162,6 +167,8 @@ struct RendererConfig {
 
 class Renderer {
  public:
+  static constexpr uint32_t kPortraitSize = 384;
+  TexHandle portraitTexture() const { return portraitTex_; }   // HDR image of the dialogue portrait (valid after init)
   bool init(const RendererConfig& cfg, const SurfaceFactory& surfaceFactory, const std::vector<const char*>& instExts);
   void shutdown();
 
@@ -233,7 +240,11 @@ class Renderer {
   void* arenaAlloc(FrameRes& fr, size_t size, VkDeviceSize* outOffset);
   VkDescriptorSet allocTexSet(VkImageView view, VkSampler samp);
   VkSampler getSampler(SamplerKind k);
-  void drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade);
+  void drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade,
+                  const std::vector<ModelDraw>* list = nullptr);
+  void createPortraitTarget();
+  void destroyPortraitTarget();
+  void writeGlobals(VkCommandBuffer cb, FrameRes& fr, const GlobalsUBO& g);
   void drawBatches(VkCommandBuffer cb, FrameRes& fr, const std::vector<Batch>& batches, const void* data, size_t stride,
                    VkPipeline pipe, VkPipelineLayout layout, uint32_t vertsPerInst, int setIndex);
 
@@ -305,6 +316,9 @@ class Renderer {
 
   std::vector<MeshRes> meshes_;
   std::vector<TexRes> textures_;
+  Image portraitColor_, portraitDepth_;
+  VkFramebuffer portraitFb_ = VK_NULL_HANDLE;
+  TexHandle portraitTex_;
   std::vector<ModelRes> models_;
   std::vector<VkDescriptorSet> materials_;
   TexHandle dummyTex_, flatNormalTex_, defaultOrmTex_, dummyArray_, flatNormalArray_;

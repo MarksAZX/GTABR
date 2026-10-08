@@ -116,6 +116,8 @@ struct Panel {
   bool open = false;
   float anim = 0;
   std::string title, text, portrait;
+  std::string archetype;            // character shown as a live 3D portrait (defaults to 'portrait', or the NPC being spoken to)
+  int npcId = -1;                   // pedestrian being spoken to (for their clothes)
   std::string role;                 // small tag under the name (Frentista, Mecânico...)
   float reveal = 0;                 // typewriter progress in characters
   std::vector<PanelOption> options;
@@ -361,6 +363,11 @@ class Game {
   void drawPanel(float dt);
   void drawWheel(float dt);
   void drawDebug();
+  void drawCrosshair();
+  void emitPortrait(gfx::FrameData& fd, float dt);
+  void dropCash(const Npc& n);
+  void updateCash(float dt);
+  void emitCash();
   InputLayout makeLayout() const;
   void handleUiPointers(const InputFrame& in);
   float uiScale() const;
@@ -410,8 +417,17 @@ class Game {
   CityEvent cityEvent_;
   float eventCooldown_ = 160.0f;
   std::deque<std::string> recentLines_;   // last spoken lines (no repeats)
+  struct CashDrop { Vec3 pos; int cents; float t; };
+  std::vector<CashDrop> cash_;
+  CharAnim portraitAnim_;
+  std::string portraitArch_;
+  float portraitT_ = 0;
+  bool portraitLive_ = false;
+  int talkNpc_ = -1;
   Job job_;
   int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
+  int runMode_ = 0;
+  float runIdleT_ = 0;
   float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit
   bool fightCtx_ = false;          // a fight is on: the jump button becomes dodge (tap) / block (hold)
   float strikePower_ = 1.0f;

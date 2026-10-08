@@ -489,3 +489,59 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
 }
 
 }  // namespace gtabr
+
+namespace gtabr {
+// Dialogue portrait: the speaker's real 3D model, idling and talking, framed head and shoulders under a soft key light.
+void Game::emitPortrait(gfx::FrameData& fd, float dt) {
+  portraitLive_ = false;
+  fd.portraitActive = false;
+  if (!panel_.open || panel_.archetype.empty() || !r_) return;
+  const ModelAsset* m = modelForArchetype(panel_.archetype, panel_.npcId >= 0 ? panel_.npcId : 0);
+  if (!m || !m->ok || !m->gpu.valid()) return;
+  if (portraitArch_ != panel_.archetype) { portraitAnim_ = CharAnim(); portraitArch_ = panel_.archetype; portraitT_ = 0; }
+  portraitT_ += dt;
+  Vec4 look{0, 0, 0, 0};
+  if (panel_.npcId >= 0 && panel_.archetype.find("jovem") == std::string::npos) {
+    for (const Npc& n : npcs_)
+      if (n.id == panel_.npcId && n.role == 0 && !n.police) {
+        float hue = hash01((uint32_t)n.id * 977 + 13) * kTau;
+        look = {hue, 0.75f + 0.55f * hash01((uint32_t)n.id * 131 + 5), 0.62f + 0.62f * hash01((uint32_t)n.id * 53 + 29), -1.0f};
+      }
+  }
+  size_t textLen = 0;
+  for (unsigned char ch : panel_.text) if ((ch & 0xC0) != 0x80) ++textLen;
+  bool speaking = panel_.reveal < (float)textLen;
+  portraitAnim_.talkTarget = speaking ? 1.0f : 0.25f;
+  portraitAnim_.headYawTarget = 0.18f * std::sin(portraitT_ * 0.7f);
+  const size_t before = fd.models.size();
+  AnimIn ai;
+  const float yaw = 3.14159265f + 0.30f;   // faces the camera, turned a little for a three-quarter view
+  emitCharacter(fd, *m, portraitAnim_, {0, 0, 0}, yaw, 1.0f, 0.0f, dt, true, look, ai);
+  if (fd.models.size() == before) return;
+  for (size_t i = before; i < fd.models.size(); ++i) { gfx::ModelDraw d = fd.models[i]; d.lod = 0; d.castShadow = false; fd.portraitModels.push_back(d); }
+  fd.models.resize(before);
+  // camera and studio lighting
+  gfx::GlobalsUBO g = fd.globals;
+  const Vec3 target{0.0f, 1.50f, 0.0f};
+  const Vec3 eye{0.0f, 1.55f, 1.25f};
+  Mat4 view = Mat4::lookAt(eye, target, {0, 1, 0});
+  Mat4 proj = Mat4::perspective(0.50f, 1.0f, 0.1f, 30.0f);
+  g.view = view; g.viewProj = proj * view;
+  g.camPos = {eye.x, eye.y, eye.z, realTime_};
+  g.camRight = {1, 0, 0, 0}; g.camUp = {0, 1, 0, 0}; g.camFwd = {0, 0, -1, 0};
+  Vec3 L = Vec3{-0.55f, 0.45f, 0.70f}.normalized();
+  g.sunDir = {L.x, L.y, L.z, 0.0f};
+  g.sunColor = {2.5f, 2.25f, 2.0f, 0.0f};
+  g.ambSky = {0.95f, 1.05f, 1.2f, 0}; g.ambGround = {0.35f, 0.31f, 0.28f, 0};
+  g.sky0 = {0.30f, 0.42f, 0.70f, 0}; g.sky1 = {0.75f, 0.80f, 0.88f, 0};
+  g.fog.w = 0.0f;
+  g.params.z = 0.0f; g.params.w = 0.0f;
+  g.cascade.w = 0.0f;
+  g.probeInfo.x = 0.0f;
+  g.lightInfo.x = 0.0f;
+  fd.portraitGlobals = g;
+  fd.portraitBg = {0.12f, 0.14f, 0.18f, 1.0f};
+  fd.portraitActive = true;
+  portraitLive_ = true;
+}
+}  // namespace gtabr

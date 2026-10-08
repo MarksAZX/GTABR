@@ -59,6 +59,18 @@ std::vector<float> whoosh(Synth& s, float len, float hz) {
   }
   return b;
 }
+// two quick bright pings: notes being collected
+std::vector<float> coinPing(Synth& s) {
+  auto b = s.buf(0.34f);
+  for (size_t i = 0; i < b.size(); ++i) {
+    float t = (float)i / s.rate;
+    float f = t < 0.09f ? 1568.0f : 2093.0f;
+    float tt = t < 0.09f ? t : t - 0.09f;
+    b[i] = (std::sin(2.0f * kPi * f * t) + 0.4f * std::sin(2.0f * kPi * f * 2.0f * t)) * std::exp(-tt * 16.0f) * 0.35f;
+  }
+  return b;
+}
+
 std::vector<float> clank(Synth& s, float len, float f0) {
   auto b = s.buf(len);
   const float partials[4] = {1.0f, 2.76f, 5.4f, 8.93f};
@@ -158,6 +170,7 @@ void Audio::synthesize() {
   samples_["punch"].data = thud(s, 0.22f, 95.0f, 0.5f, 26.0f);
   samples_["blunt"].data = thud(s, 0.3f, 70.0f, 0.7f, 18.0f);
   samples_["slash"].data = whoosh(s, 0.22f, 4200.0f);
+  samples_["cash"].data = coinPing(s);
   samples_["metal"].data = clank(s, 0.6f, 520.0f);
   samples_["swing"].data = whoosh(s, 0.3f, 1800.0f);
   samples_["reload"].data = click(s, 0.12f, 1800.0f);

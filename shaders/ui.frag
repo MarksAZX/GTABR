@@ -76,6 +76,12 @@ void main() {
   } else if (kind == 5) {  // vertical gradient
     vec4 gcol = mix(vColor, vColor2, clamp(vT.y, 0.0, 1.0));
     outColor = vec4(gcol.rgb, gcol.a * cover);
+  } else if (kind == 8) {  // 3D portrait: HDR render, tone mapped here (ACES fit), soft vignette
+    vec3 t = texture(uTex, uv).rgb * 1.15;
+    t = (t * (2.51 * t + 0.03)) / (t * (2.43 * t + 0.59) + 0.14);
+    t = pow(clamp(t, 0.0, 1.0), vec3(1.0 / 2.2));
+    float vg = 1.0 - 0.32 * dot(vLocal / max(vHalf, vec2(1e-3)), vLocal / max(vHalf, vec2(1e-3)));
+    outColor = vec4(t * vg * col.rgb, col.a * cover);
   } else if (kind == 7) {  // horizontal gradient
     vec4 gcol = mix(vColor, vColor2, clamp(vT.x, 0.0, 1.0));
     outColor = vec4(gcol.rgb, gcol.a * cover);

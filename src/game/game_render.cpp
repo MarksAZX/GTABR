@@ -375,6 +375,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
     }
   }
   emitBirds();
+  emitCash();
   emitRain();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");
@@ -417,6 +418,7 @@ void Game::buildScene(gfx::FrameData& fd) {
   emitWorld(fd);
   emitSprites(fd);
   emitModels(fd, lastDt_);
+  emitPortrait(fd, lastDt_);
   emitCombatVisuals(fd);
   flushSprites(fd);
 }

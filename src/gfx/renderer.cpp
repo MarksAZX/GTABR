@@ -141,7 +141,7 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VK_CHECK(vkCreateFence(dev, &fi, nullptr, &f.fence));
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VK_CHECK(vkCreateSemaphore(dev, &sci, nullptr, &f.imageAvailable));
-    f.arena = ctx_.createBuffer(kArenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+    f.arena = ctx_.createBuffer(kArenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
     f.lightBuf = ctx_.createBuffer(kLightBufSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
     std::memset(f.lightBuf.map, 0, (size_t)kLightBufSize);
     VkDescriptorSetLayout ls[3] = {layoutGlobalsA_, layoutGlobalsB_, layoutBones_};
@@ -733,6 +733,7 @@ void Renderer::destroyRenderTargets() {
     shadowFbs_[i] = VK_NULL_HANDLE;
     shadowLayerViews_[i] = VK_NULL_HANDLE;
   }
+  destroyPortraitTarget();
   if (sceneFb_) vkDestroyFramebuffer(dev, sceneFb_, nullptr);
   sceneFb_ = VK_NULL_HANDLE;
   ctx_.destroyImage(shadowMap_);
@@ -757,6 +758,51 @@ void Renderer::destroyRenderTargets() {
   if (sceneSampleSet_) vkFreeDescriptorSets(dev, pool_, 1, &sceneSampleSet_);
   if (compositeSet_) vkFreeDescriptorSets(dev, pool_, 1, &compositeSet_);
   sceneSampleSet_ = compositeSet_ = VK_NULL_HANDLE;
+}
+
+void Renderer::createPortraitTarget() {
+  VkDevice dev = ctx_.device;
+  const uint32_t n = kPortraitSize;
+  portraitColor_ = ctx_.createImage(n, n, 1, 1, hdrFormat_, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+  portraitDepth_ = ctx_.createImage(n, n, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                    depthFormat_ == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_ASPECT_DEPTH_BIT : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
+  VkImageView atts[2] = {portraitColor_.view, portraitDepth_.view};
+  VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+  fi.renderPass = scenePass_;   // same attachment formats as the scene, so the scene pipelines are compatible
+  fi.attachmentCount = 2; fi.pAttachments = atts; fi.width = n; fi.height = n; fi.layers = 1;
+  VK_CHECK(vkCreateFramebuffer(dev, &fi, nullptr, &portraitFb_));
+  VkSampler lin = getSampler(SamplerKind::ClampLinear);
+  TexRes tr;
+  tr.img = portraitColor_;
+  tr.sampler = lin;
+  tr.set = allocTexSet(portraitColor_.view, lin);
+  tr.alive = true;
+  if (portraitTex_.valid()) textures_[portraitTex_.id] = tr;
+  else { textures_.push_back(tr); portraitTex_ = TexHandle{(int)textures_.size() - 1}; }
+}
+
+void Renderer::destroyPortraitTarget() {
+  VkDevice dev = ctx_.device;
+  if (portraitFb_) vkDestroyFramebuffer(dev, portraitFb_, nullptr);
+  portraitFb_ = VK_NULL_HANDLE;
+  if (portraitColor_.image) ctx_.destroyImage(portraitColor_);
+  if (portraitDepth_.image) ctx_.destroyImage(portraitDepth_);
+  portraitColor_ = {}; portraitDepth_ = {};
+  if (portraitTex_.valid()) textures_[portraitTex_.id].alive = false;   // the image is gone; the slot keeps its handle for the next target
+}
+
+// Overwrites the globals block (arena offset 0, read by every pass) in command order, so a pass can use its own camera.
+void Renderer::writeGlobals(VkCommandBuffer cb, FrameRes& fr, const GlobalsUBO& g) {
+  VkMemoryBarrier b{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  b.srcAccessMask = VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
+  b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
+  vkCmdUpdateBuffer(cb, fr.arena.buf, 0, sizeof(GlobalsUBO), &g);
+  b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  b.dstAccessMask = VK_ACCESS_UNIFORM_READ_BIT;
+  vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &b,
+                       0, nullptr, 0, nullptr);
 }
 
 void Renderer::createRenderTargets() {
@@ -814,6 +860,7 @@ void Renderer::createRenderTargets() {
 
   VkSampler lin = getSampler(SamplerKind::ClampLinear);
   sceneSampleSet_ = allocTexSet(sceneColor_.view, lin);
+  createPortraitTarget();
 
   // blur chain
   auto mkLevel = [&](uint32_t w, uint32_t h) {
@@ -1073,13 +1120,15 @@ void Renderer::drawBatches(VkCommandBuffer cb, FrameRes& fr, const std::vector<B
   }
 }
 
-void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade) {
-  if (fd.models.empty()) return;
+void Renderer::drawModels(VkCommandBuffer cb, FrameRes& fr, const FrameData& fd, VkDeviceSize boneBase, bool shadow, int cascade,
+                          const std::vector<ModelDraw>* list) {
+  const std::vector<ModelDraw>& draws = list ? *list : fd.models;
+  if (draws.empty()) return;
   VkPipelineLayout pl = shadow ? plShadow_ : plMesh_;
   VkPipeline cur = VK_NULL_HANDLE;
   int curMat = -1;
   bool globalsBound = false;
-  for (const ModelDraw& d : fd.models) {
+  for (const ModelDraw& d : draws) {
     if (!d.model.valid() || d.model.id >= (int)models_.size()) continue;
     if (shadow && !d.castShadow) continue;
     const ModelRes& m = models_[d.model.id];
@@ -1235,6 +1284,28 @@ bool Renderer::renderFrame(const FrameData& fd) {
       drawModels(cb, fr, fd, boneBase, true, c);
     }
     vkCmdEndRenderPass(cb);
+  }
+
+  // ---- dialogue portrait: its own camera and lighting, rendered before the scene pass
+  if (fd.portraitActive && portraitFb_ && !fd.portraitModels.empty()) {
+    writeGlobals(cb, fr, fd.portraitGlobals);
+    VkClearValue pcv[2]{};
+    pcv[0].color = {{fd.portraitBg.x, fd.portraitBg.y, fd.portraitBg.z, 1.0f}};
+    pcv[1].depthStencil = {1.0f, 0};
+    VkRenderPassBeginInfo prb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    prb.renderPass = scenePass_;
+    prb.framebuffer = portraitFb_;
+    prb.renderArea = {{0, 0}, {kPortraitSize, kPortraitSize}};
+    prb.clearValueCount = 2;
+    prb.pClearValues = pcv;
+    vkCmdBeginRenderPass(cb, &prb, VK_SUBPASS_CONTENTS_INLINE);
+    VkViewport pvp{0, 0, (float)kPortraitSize, (float)kPortraitSize, 0, 1};
+    VkRect2D psc{{0, 0}, {kPortraitSize, kPortraitSize}};
+    vkCmdSetViewport(cb, 0, 1, &pvp);
+    vkCmdSetScissor(cb, 0, 1, &psc);
+    drawModels(cb, fr, fd, boneBase, false, 0, &fd.portraitModels);
+    vkCmdEndRenderPass(cb);
+    writeGlobals(cb, fr, gu);   // back to the main camera
   }
 
   // ---- scene pass

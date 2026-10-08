@@ -425,6 +425,7 @@ void Game::drawHud(float dt, const InputFrame& in) {
     drawMoney();
     drawFuelGauge();
     drawPrompt();
+    drawCrosshair();
     drawToasts(dt);
     drawTouchControls(in);
     // wanted level: three stars under the minimap; blinking while an officer sees the player, dim while searching
@@ -511,10 +512,13 @@ void Game::drawPanel(float dt) {
   float S = uiScale();
   float a = panel_.anim;
   uiRects_.clear();
-  ui_.rect(0, 0, screenW_, screenH_, C(0, 0, 0, 0.34f * a));
   const bool hc = settings_.highContrast;
   bool cards = false;   // shop-like: any option with product art or a price line
   for (const PanelOption& o : panel_.options) if (!o.art.empty() || (!o.sub.empty() && o.icon)) cards = true;
+  // plain conversation: no card, no dimming; just the face, the words and the answers over the scene
+  const bool bare = !cards && panel_.vehicleFuel < 0 && panel_.vehicleHealth < 0 && panel_.footer.empty();
+  const Color sh = C(0, 0, 0, 0.8f * a);
+  if (!bare) ui_.rect(0, 0, screenW_, screenH_, C(0, 0, 0, 0.34f * a));
   const bool hasPortrait = !panel_.portrait.empty();
   const bool speaker = hasPortrait || (!cards && !panel_.title.empty() && panel_.vehicleFuel < 0 && panel_.vehicleHealth < 0);   // a letter avatar stands in for anonymous pedestrians
   float cardW = std::min((cards ? 1180.0f : 1000.0f) * S, screenW_ - 56.0f * S);
@@ -545,13 +549,17 @@ void Game::drawPanel(float dt) {
   float maxH = screenH_ - 60 * S;
   if (total_h > maxH) { rowH = std::max(54 * S, rowH - (total_h - maxH) / std::max<size_t>(1, rowsN)); optH = rowsN * (rowH + gap) - gap; total_h = pad + headerH + 18 * S + gaugeH + optH + pad; }
   float x = (screenW_ - cardW) / 2, y = screenH_ - total_h - 26 * S + (1.0f - a) * 110 * S;
-  ui_.glow(x, y + 10 * S, cardW, total_h, 30 * S, 30 * S, C(0, 0, 0, 0.55f * a));
-  ui_.rect(x, y, cardW, total_h, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 28 * S, 1.2f * S, C(1, 1, 1, 0.15f * a));
+  if (!bare) {
+    ui_.glow(x, y + 10 * S, cardW, total_h, 30 * S, 30 * S, C(0, 0, 0, 0.55f * a));
+    ui_.rect(x, y, cardW, total_h, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 28 * S, 1.2f * S, C(1, 1, 1, 0.15f * a));
+  }
   // speaker ring overlapping the top edge
   if (speaker) {
     float cx = x + pad + ring / 2, cy = y + pad + ring * 0.22f;
-    ui_.circle(cx, cy, ring / 2 + 8 * S, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 2 * S, withAlpha(kAccent, 0.55f * a));
-    if (hasPortrait) ui_.art(("portrait_" + panel_.portrait).c_str(), cx - ring / 2, cy - ring / 2, ring, ring, C(1, 1, 1, a), ring / 2);
+    if (bare) ui_.circle(cx, cy, ring / 2 + 3 * S, C(0, 0, 0, 0), 2.5f * S, C(1, 1, 1, 0.85f * a));
+    else ui_.circle(cx, cy, ring / 2 + 8 * S, withAlpha(hc ? theme::kPanelHc : theme::kGlassHi, a), 2 * S, withAlpha(kAccent, 0.55f * a));
+    if (portraitLive_) ui_.portrait(r_->portraitTexture(), cx - ring / 2, cy - ring / 2, ring, ring, ring / 2);
+    else if (hasPortrait) ui_.art(("portrait_" + panel_.portrait).c_str(), cx - ring / 2, cy - ring / 2, ring, ring, C(1, 1, 1, a), ring / 2);
     else {
       ui_.circle(cx, cy, ring / 2, withAlpha(kAccent, 0.12f * a));
       std::string letter = panel_.title.substr(0, utf8Prefix(panel_.title, 1));
@@ -559,7 +567,8 @@ void Game::drawPanel(float dt) {
     }
   }
   float ty = y + pad - 6 * S;
-  ui_.text(true, panel_.title, x + textX, ty, 40 * S, C(1, 1, 1, a), Align::Left);
+  if (bare) ui_.text(true, panel_.title, x + textX, ty, 40 * S, C(1, 1, 1, a), Align::Left, sh, 0.12f);
+  else ui_.text(true, panel_.title, x + textX, ty, 40 * S, C(1, 1, 1, a), Align::Left);
   if (!panel_.role.empty()) {
     float tw = ui_.textWidth(true, panel_.title, 40 * S);
     float rw = ui_.textWidth(false, panel_.role, 19 * S) + 26 * S;
@@ -567,7 +576,11 @@ void Game::drawPanel(float dt) {
     ui_.text(false, panel_.role, x + textX + tw + 16 * S + rw / 2, ty + 16 * S, 19 * S, withAlpha(kAccent, a), Align::Center);
   }
   ty += nameH;
-  for (const std::string& l : lines) { ui_.text(false, l, x + textX, ty, 28 * S, C(1, 1, 1, 0.88f * a), Align::Left); ty += lineH; }
+  for (const std::string& l : lines) {
+    if (bare) ui_.text(false, l, x + textX, ty, 28 * S, C(1, 1, 1, 0.95f * a), Align::Left, sh, 0.12f);
+    else ui_.text(false, l, x + textX, ty, 28 * S, C(1, 1, 1, 0.88f * a), Align::Left);
+    ty += lineH;
+  }
   if (typing) {
     // a tap on the text finishes the line; a small caret shows it can be skipped
     uiRects_.push_back({Vec4(x, y, cardW, pad + headerH), 200});
@@ -613,7 +626,12 @@ void Game::drawPanel(float dt) {
     float ea = o.enabled ? 1.0f : 0.45f;
     bool ghost = !cards && i + 1 == n && o.closes && o.sub.empty() && !o.icon && n > 1;   // "Tchau / Fechar": quieter than real answers
     Color fill = pressed ? C(1, 1, 1, 0.20f * optA) : (ghost ? C(1, 1, 1, 0.025f * optA) : C(1, 1, 1, 0.06f * optA));
-    ui_.rect(rx, ry, rw, rowH, fill, rowH / 2 > 34 * S ? 26 * S : rowH / 2, 1.2f * S, C(1, 1, 1, (ghost ? 0.08f : 0.14f) * optA * ea));
+    if (bare) {
+      if (pressed) ui_.rect(rx, ry, rw, rowH, C(1, 1, 1, 0.14f * optA), 18 * S);
+      ui_.rect(rx + 8 * S, ry + rowH - 1.5f * S, rw - 16 * S, 1.2f * S, C(1, 1, 1, (ghost ? 0.10f : 0.22f) * optA * ea));
+    } else {
+      ui_.rect(rx, ry, rw, rowH, fill, rowH / 2 > 34 * S ? 26 * S : rowH / 2, 1.2f * S, C(1, 1, 1, (ghost ? 0.08f : 0.14f) * optA * ea));
+    }
     float ix = rx + 18 * S;
     float box = rowH - 18 * S;
     if (!o.art.empty()) {
@@ -781,4 +799,26 @@ void Game::buildUi(gfx::FrameData& fd, float dt) {
   ui_.end();
 }
 
+}  // namespace gtabr
+
+namespace gtabr {
+// Small aiming dot with a ring that opens while the weapon is recovering; only shown with a firearm raised on foot.
+void Game::drawCrosshair() {
+  const Player& p = player_;
+  if (!isFirearm(p.weapon) || p.vehicle >= 0 || p.down || p.swimming || p.reloadT >= 0) return;
+  bool aiming = p.aimHold > 0.0f || p.attackT >= 0.0f;
+  if (!aiming && !settings_.hints) return;
+  float S = uiScale();
+  float a = (1.0f - 0.85f * wheel_.anim) * (aiming ? 1.0f : 0.45f);
+  // where the shot would land: along the aim direction (or facing) from the player, projected back to the screen
+  Vec2 d = p.aimHold > 0.0f ? p.aimDir : Vec2{std::sin(p.yaw), -std::cos(p.yaw)};
+  Vec3 hit{p.pos.x + d.x * 14.0f, 1.2f, p.pos.y + d.y * 14.0f};
+  Vec2 sp; bool vis = false;
+  projectToScreen(hit, sp, vis);
+  if (!vis) return;
+  float sx = sp.x, sy = sp.y;
+  float open = (p.attackT >= 0.0f ? 7.0f : 0.0f) * S;
+  ui_.circle(sx, sy, 2.4f * S, C(1, 1, 1, 0.95f * a), 1.0f * S, C(0, 0, 0, 0.55f * a));
+  ui_.arc(sx, sy, 10 * S + open, 11.2f * S + open, 0.0f, kTau, C(1, 1, 1, 0.30f * a));
+}
 }  // namespace gtabr

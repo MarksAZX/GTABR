@@ -203,6 +203,7 @@ void Game::applyDamage(ActorRef target, const DamageInfo& dIn) {
       n.deadT = 0;
       stains_.push_back({{n.pos.x, n.y + 0.02f, n.pos.y}, 0.9f, 60.0f});
     }
+    if (!wasDown && byPlayer && !n.police) dropCash(n);
     if (!wasDown) requestAnim(n, kActKnockDown, 1.3f, false, true);
     audio_.play("body", p3, 0.8f);
     return;

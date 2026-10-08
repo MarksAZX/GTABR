@@ -89,6 +89,14 @@ void UiPainter::image(gfx::TexHandle tex, const UvRect& uv, float x, float y, fl
   u.radius = radius;
 }
 
+void UiPainter::portrait(gfx::TexHandle tex, float x, float y, float w, float h, float radius) {
+  if (!tex.valid()) return;
+  setTex(tex);
+  gfx::UiInst& u = push(x, y, w, h, gfx::kUiPortrait, 0xFFFFFFFFu);
+  u.uv[0] = 0; u.uv[1] = 0; u.uv[2] = 1; u.uv[3] = 1;
+  u.radius = radius;
+}
+
 void UiPainter::art(const char* name, float x, float y, float w, float h, Color c, float radius) {
   image(a_->artTex, a_->art(name), x, y, w, h, c, radius);
 }

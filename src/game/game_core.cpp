@@ -468,7 +468,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   time_ += dt;
 
   InputFrame gameIn = in;
-  if (panel_.open || wheel_.open || fadeAlpha_ > 0.6f) { gameIn.move = {}; gameIn.runHeld = false; }
+  if (panel_.open || wheel_.open || fadeAlpha_ > 0.6f) { gameIn.move = {}; gameIn.runHeld = false; gameIn.runPressed = false; }
 
   updatePlayer(dt, gameIn);
   updateCombat(dt, gameIn);
@@ -479,6 +479,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateTraffic(dt);
   updateLife(dt);
   updateJobs(dt);
+  updateCash(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
   if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;
@@ -711,7 +712,11 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   Vec2 camF2 = {std::sin(cam_.yaw()), -std::cos(cam_.yaw())};
   Vec2 camR2 = {std::cos(cam_.yaw()), std::sin(cam_.yaw())};
   Vec2 dir = camF2 * mv.y + camR2 * mv.x;
-  bool wantRun = in.runHeld && mag > 0.2f;
+  // run button: tap once to jog, again to sprint, a third time to stop (holding it still jogs)
+  if (in.runPressed) runMode_ = (runMode_ + 1) % 3;
+  runIdleT_ = mag > 0.1f ? 0.0f : runIdleT_ + dt;
+  if (runIdleT_ > 0.8f || p.vehicle >= 0 || p.swimming) runMode_ = 0;
+  bool wantRun = (in.runHeld || runMode_ >= 1) && mag > 0.2f;
   bool canRun = (p.stamina > 6.0f || p.runBoost > 0.0f) && p.staminaCooldown <= 0.0f;
   p.running = wantRun && canRun;
   // ---- water: wade in the shallows, swim once it is deeper than the chest (hysteresis avoids flicker)
@@ -733,13 +738,13 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     if (p.swimming) { spawnFoam(at - Vec3{std::sin(p.yaw), 0, -std::cos(p.yaw)} * 0.5f, 2, 0.45f); spawnSplash(at, 3, 0.7f); splashT_ = 0.22f; }
     else { spawnSplash(at, 3 + (int)(wade * 3), 0.5f + 0.4f * wade); if (wade > 0.3f) spawnFoam(at, 1, 0.35f); splashT_ = p.running ? 0.16f : 0.30f; }
   }
-  float maxSpeed = p.swimming ? (p.running ? 2.7f : 1.6f) : (p.running ? 6.4f : 3.1f) * (1.0f - 0.45f * wade);
+  float maxSpeed = p.swimming ? (p.running ? 2.7f : 1.6f) : (p.running ? (runMode_ == 2 ? 7.6f : 5.4f) : 3.0f) * (1.0f - 0.45f * wade);
   Vec2 desired = mag > 0.01f ? dir.normalized() * (maxSpeed * (p.running ? 1.0f : std::max(0.45f, mag))) : Vec2{0, 0};
-  float accel = mag > 0.01f ? 16.0f : 20.0f;
+  float accel = mag > 0.01f ? 11.0f : 15.0f;   // heavier: takes a moment to build up speed and to stop
   p.vel += (desired - p.vel) * expDecay(accel, dt);
   if (p.running) {
     if (p.runBoost > 0.0f) p.runBoost -= dt;
-    else p.stamina = std::max(0.0f, p.stamina - (p.swimming ? 14.0f : 21.0f) * dt);
+    else p.stamina = std::max(0.0f, p.stamina - (p.swimming ? 14.0f : (runMode_ == 2 ? 30.0f : 17.0f)) * dt);
     if (p.stamina <= 0.0f && p.runBoost <= 0.0f) { p.staminaCooldown = 1.6f; p.running = false; }
   } else {
     p.staminaCooldown = std::max(0.0f, p.staminaCooldown - dt);

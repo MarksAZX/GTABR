@@ -36,7 +36,7 @@ struct InputFrame {
   Vec2 look;                 // accumulated drag this frame (pixels)
   float zoom = 0;            // pinch delta (pixels, + = fingers apart)
   bool lookDragging = false;
-  bool runHeld = false;
+  bool runHeld = false, runPressed = false;
   bool interactPressed = false, enterExitPressed = false, cameraPressed = false, pausePressed = false;
   bool wheelHeld = false, wheelPressed = false, wheelReleased = false;
   Vec2 wheelPos;

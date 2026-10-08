@@ -111,7 +111,7 @@ InputFrame InputSystem::poll(const InputLayout& layout) {
   }
   // buttons
   f.interactPressed = pressedBtn_[1]; f.enterExitPressed = pressedBtn_[2]; f.cameraPressed = pressedBtn_[3]; f.pausePressed = pressedBtn_[5];
-  f.runHeld = heldBtn_[0];
+  f.runHeld = heldBtn_[0]; f.runPressed = pressedBtn_[0];
   f.attackPressed = pressedBtn_[6]; f.attackHeld = heldBtn_[6]; f.reloadPressed = pressedBtn_[7]; f.jumpPressed = pressedBtn_[8]; f.jumpHeld = heldBtn_[8];
   f.interactHeld = heldBtn_[1]; f.enterExitHeld = heldBtn_[2]; f.cameraHeld = heldBtn_[3]; f.pauseHeld = heldBtn_[5];
   f.wheelPressed = wheelPressed_;

@@ -9,6 +9,10 @@ namespace gtabr {
 void Game::openPanel(Panel p) {
   p.open = true;
   p.anim = 0;
+  if (p.archetype.empty()) {
+    if (!p.portrait.empty()) p.archetype = p.portrait;
+    else if (talkNpc_ >= 0 && talkNpc_ < (int)npcs_.size()) { p.archetype = npcs_[talkNpc_].archetype; p.npcId = npcs_[talkNpc_].id; }
+  }
   panel_ = std::move(p);
   // freeze pedestrians that are being spoken to
   uiRects_.clear();
@@ -18,6 +22,7 @@ void Game::closePanel() {
   if (!panel_.open) return;
   auto cb = std::move(panel_.onClose);
   panel_.open = false;
+  talkNpc_ = -1;
   panel_.options.clear();
   for (Npc& n : npcs_)
     if (n.state == NpcState::Talk) { n.state = n.stationary ? NpcState::Work : NpcState::Idle; n.stateTimer = 1.0f; }
@@ -322,6 +327,7 @@ void Game::openNpcPanel(int idx) {
   Npc& n = npcs_[idx];
   n.state = NpcState::Talk;
   n.path.clear();
+  talkNpc_ = idx;
   Panel p;
   auto setWaypoint = [this](int poi) {
     waypoint_.active = true;
