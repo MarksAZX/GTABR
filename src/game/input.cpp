@@ -26,7 +26,7 @@ void InputSystem::onTouch(int id, TouchAction a, float x, float y) {
     const InputLayout& L = lastLayout_;
     if (L.modal) t.role = Role::Ui;
     else {
-      const HudButton* btns[kBtn] = {&L.run, &L.interact, &L.enterExit, &L.camera, &L.wheel, &L.pause, &L.attack, &L.reload};
+      const HudButton* btns[kBtn] = {&L.run, &L.interact, &L.enterExit, &L.camera, &L.wheel, &L.pause, &L.attack, &L.reload, &L.jump};
       for (int i = 0; i < kBtn; ++i) {
         const HudButton& b = *btns[i];
         if (!b.visible) continue;
@@ -112,7 +112,7 @@ InputFrame InputSystem::poll(const InputLayout& layout) {
   // buttons
   f.interactPressed = pressedBtn_[1]; f.enterExitPressed = pressedBtn_[2]; f.cameraPressed = pressedBtn_[3]; f.pausePressed = pressedBtn_[5];
   f.runHeld = heldBtn_[0];
-  f.attackPressed = pressedBtn_[6]; f.attackHeld = heldBtn_[6]; f.reloadPressed = pressedBtn_[7];
+  f.attackPressed = pressedBtn_[6]; f.attackHeld = heldBtn_[6]; f.reloadPressed = pressedBtn_[7]; f.jumpPressed = pressedBtn_[8];
   f.interactHeld = heldBtn_[1]; f.enterExitHeld = heldBtn_[2]; f.cameraHeld = heldBtn_[3]; f.pauseHeld = heldBtn_[5];
   f.wheelPressed = wheelPressed_;
   f.wheelReleased = wheelReleased_;

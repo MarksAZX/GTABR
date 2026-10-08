@@ -58,13 +58,14 @@ InputLayout Game::makeLayout() const {
   L.reload = {A + Vec2{-70, -150} * S, 42.0f * S,
               !driving && isFirearm(player_.weapon) && player_.mag[player_.weapon] < weaponDef(player_.weapon).magazine &&
                   player_.reserve[player_.weapon] > 0};
+  L.jump = {A + Vec2{128, -52} * S, 42.0f * S, !driving && !player_.dead && !player_.swimming};
   L.camera = {A + Vec2{-270, 96} * S, 40.0f * S, true};
   L.wheel = {A + Vec2{-262, -44} * S, 46.0f * S, true};
   L.pause = {Vec2{screenW_ - 64.0f * S, 64.0f * S}, 34.0f * S, true};
   L.modal = panel_.open || menu_ != MenuState::None;
   if (L.modal) {
     L.run.visible = L.interact.visible = L.enterExit.visible = L.camera.visible = L.wheel.visible = L.pause.visible = false;
-    L.attack.visible = L.reload.visible = false;
+    L.attack.visible = L.reload.visible = L.jump.visible = false;
   }
   return L;
 }
@@ -115,6 +116,7 @@ void Game::drawTouchControls(const InputFrame& in) {
     ui_.circle(h.x, h.y, L.joyRadius * 0.42f, C(1, 1, 1, 0.14f * a), 0, 0);
   }
   glassButton(ui_, L.run.c, L.run.r, in.runHeld, false, driving ? "target" : "run", kAccent, a, 0.72f);
+  if (L.jump.visible) glassButton(ui_, L.jump.c, L.jump.r, in.jumpPressed, false, "arrow", kAccent, a, 0.62f);
   ui_.text(false, driving ? "FREIO" : "CORRER", L.run.c.x, L.run.c.y + L.run.r * 0.5f, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
   // primary action: attack with the current weapon (fist / melee / firearm)
   if (L.attack.visible) {

@@ -729,6 +729,19 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     if (p.runBoost > 0.0f) p.runBoost -= dt;
     p.stamina = std::min(100.0f, p.stamina + (p.staminaCooldown > 0 ? 5.0f : 15.0f) * dt);
   }
+  // ---- jump: a ballistic arc (about 0.95 m high, 0.84 s in the air) matched by the jump clip
+  if (in.jumpPressed && !p.airborne && !p.swimming && p.stamina > 8.0f && p.hitStun <= 0 && p.attackT < 0 && !p.down) {
+    p.airborne = true;
+    p.airV = 4.6f;
+    p.stamina = std::max(0.0f, p.stamina - 8.0f);
+    requestAnim(p, kActJump, 2.25f, false, false);
+    audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.18f);
+  }
+  if (p.airborne) {
+    p.air += p.airV * dt;
+    p.airV -= 11.0f * dt;
+    if (p.air <= 0.0f) { p.air = 0.0f; p.airV = 0.0f; p.airborne = false; audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.3f); }
+  }
   Vec2 before = p.pos;
   phys::moveCircle(world_, p.pos, p.vel * dt, 0.32f);
   // vehicles push the player

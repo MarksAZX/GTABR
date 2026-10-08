@@ -332,7 +332,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     // ---- player
     if (player_.vehicle < 0) {
       const ModelAsset* m = modelForArchetype("player", 0);
-      Vec3 pos{player_.pos.x, player_.y, player_.pos.y};
+      Vec3 pos{player_.pos.x, player_.y + player_.air, player_.pos.y};
       CharAnim& a = playerAnim_;
       a.swimming = player_.swimming;
       a.refuelTarget = fueling_.active ? 1.0f : 0.0f;

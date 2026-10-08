@@ -883,6 +883,23 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     }
     return 0;
   }
+  if (name == "jump") {
+    g.toggleCamera();
+    b.idle(50);
+    float maxAir = 0;
+    InputFrame jin; jin.jumpPressed = true; jin.move = {0, -1};
+    b.step(jin, 1);
+    for (int i = 0; i < 6; ++i) {
+      InputFrame mv; mv.move = {0, -1};
+      b.step(mv, 6);
+      maxAir = std::max(maxAir, g.player().air);
+      if (i == 1 || i == 3) b.shot("jump_" + std::to_string(i));
+    }
+    b.idle(30);
+    CHECK(maxAir > 0.6f && maxAir < 1.3f, "jump reaches a believable height");
+    CHECK(!g.player().airborne && g.player().air == 0.0f, "player lands again");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);
