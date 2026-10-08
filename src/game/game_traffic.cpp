@@ -210,6 +210,13 @@ void Game::updateTraffic(float dt) {
       continue;
     }
     if (v.wrecked) { VehicleInput none; none.handbrake = true; stepVehicle(v, none, dt, world_, vehicles_); continue; }
+    // stranded off the street (missed a bend, pushed into a yard): recycle it once the player is not right next to it
+    if (!world_.redges.empty()) {
+      float hw = 3.5f;
+      Vec2 q = world_.nearestRoadPointNet(v.pos, nullptr, &hw);
+      v.offRoadT = (q - v.pos).length() > hw + 1.0f ? v.offRoadT + dt : 0.0f;
+      if (v.offRoadT > 3.0f && dist > 35.0f && v.occupant < 0) { v.despawn = true; v.pos = {9999, 9999}; continue; }
+    }
     if (v.route.empty() || v.routeIdx >= v.route.size()) planTrafficRoute(v);
     // pure-pursuit target a few metres ahead on the lane path
     float look = 5.0f + std::fabs(v.speed) * 0.45f;

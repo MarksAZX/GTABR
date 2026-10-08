@@ -73,6 +73,7 @@ struct Vehicle {
   int driver = -1;          // npc index driving it (police), -1 none
   Vec2 aiTarget;
   float aiStuck = 0, aiReverse = 0;
+  float offRoadT = 0;   // traffic: seconds spent off the road network (recycled when stranded out of view)
   bool despawn = false;
   bool wrecked = false;
   float steerInput = 0;   // last steering input (turn signals)
