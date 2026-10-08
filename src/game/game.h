@@ -75,10 +75,10 @@ struct QualityPreset {
 };
 inline const QualityPreset& qualityPreset(int q) {
   static const QualityPreset k[4] = {
-      {"Baixo", 0.62f, 1024, 1, false, 70.0f, 1.8f, 4, 0.45f, 3, 0.0f, 0.0f},
-      {"Médio", 0.80f, 1536, 1, true, 95.0f, 1.3f, 8, 0.7f, 6, 0.0f, 0.5f},
-      {"Alto", 0.92f, 2048, 2, true, 125.0f, 1.0f, 12, 1.0f, 10, 0.55f, 0.8f},
-      {"Ultra", 1.0f, 2048, 2, true, 160.0f, 0.7f, 16, 1.0f, 20, 0.8f, 1.0f},
+      {"Baixo", 0.62f, 1024, 1, false, 70.0f, 1.8f, 6, 0.45f, 3, 0.0f, 0.0f},
+      {"Médio", 0.80f, 1536, 1, true, 95.0f, 1.3f, 20, 0.7f, 6, 0.0f, 0.5f},
+      {"Alto", 0.92f, 2048, 2, true, 125.0f, 1.0f, 48, 1.0f, 10, 0.55f, 0.8f},
+      {"Ultra", 1.0f, 2048, 2, true, 160.0f, 0.7f, 96, 1.0f, 20, 0.8f, 1.0f},
   };
   return k[q < 0 ? 0 : (q > 3 ? 3 : q)];
 }

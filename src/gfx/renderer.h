@@ -57,7 +57,8 @@ struct LightUBO {
   Vec4 colorInt;   // rgb colour * intensity
   Vec4 dirCone;    // xyz spot direction, w = cos(cone) or -2 for point lights
 };
-constexpr int kMaxLights = 16;
+constexpr int kMaxLights = 128;       // dynamic lights per frame (culled into screen tiles)
+constexpr int kTilesX = 16, kTilesY = 9, kTileCap = 32;
 constexpr int kMaxBones = 64;
 // Mirrors shaders/globals.glsl (std140).
 struct GlobalsUBO {
@@ -67,7 +68,7 @@ struct GlobalsUBO {
   Vec4 sky0, sky1, cascade, lightInfo;
   Vec4 probeRect;   // x0, z0, 1/width, 1/depth of the ambient probe grid (world metres)
   Vec4 probeInfo;   // x = enabled, y = ground layer height offset, z = rooftop layer height offset, w = unused
-  LightUBO lights[kMaxLights];
+  Vec4 lightGrid;   // x = light count, y = tiles per pixel (x), z = tiles per pixel (y), w = tiles in x
 };
 
 enum class TexFormat : uint32_t { RGBA8_SRGB = 0, ASTC6x6_SRGB = 1, RGBA8_UNORM = 2, R8_UNORM = 3, ASTC6x6_UNORM = 4, ASTC8x8_SRGB = 5 };
@@ -126,6 +127,7 @@ struct FrameData {
   std::vector<UiInst> ui;
   std::vector<Batch> uiBatches;
   std::vector<ModelDraw> models;
+  std::vector<LightUBO> lights;   // up to kMaxLights dynamic point / spot lights; the renderer culls them into screen tiles
   std::vector<Mat4> bones;        // skinning palettes, kMaxBones matrices per skinned draw
   MaterialHandle worldMaterial;   // albedo array + normal/roughness array
   float blur = 0, fade = 0, vignette = 0.28f, dim = 0;
@@ -141,6 +143,7 @@ struct FrameData {
   Vec2 sunUV{0.5f, 0.0f};
   Vec3 shaftColor{1.0f, 0.85f, 0.6f};
   void clear() {
+    lights.clear();
     worldMeshes.clear(); shadowMeshes.clear(); sprites.clear(); spriteBatches.clear(); silhouettes.clear();
     silhouetteBatches.clear(); decals.clear(); ui.clear(); uiBatches.clear(); models.clear(); bones.clear();
   }
@@ -208,6 +211,7 @@ class Renderer {
     VkFence fence = VK_NULL_HANDLE;
     VkSemaphore imageAvailable = VK_NULL_HANDLE;
     Buffer arena;
+    Buffer lightBuf;   // lights + per-tile light lists (storage buffer, binding 3 of globalsB)
     VkDescriptorSet globalsA = VK_NULL_HANDLE, globalsB = VK_NULL_HANDLE, bones = VK_NULL_HANDLE;
     VkDeviceSize arenaOffset = 0;
   };

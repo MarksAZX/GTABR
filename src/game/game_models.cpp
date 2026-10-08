@@ -465,9 +465,10 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
   // keep the most relevant lights within the preset budget
   std::sort(pendingLights_.begin(), pendingLights_.end(), [](const PendingLight& a, const PendingLight& b) { return a.dist < b.dist; });
   int n = std::min<int>((int)pendingLights_.size(), std::min(preset().maxLights, gfx::kMaxLights));
+  fd.lights.resize((size_t)n);
   for (int i = 0; i < n; ++i) {
     const PendingLight& L = pendingLights_[i];
-    gfx::LightUBO& u = fd.globals.lights[i];
+    gfx::LightUBO& u = fd.lights[i];
     u.posRadius = {L.pos.x, L.pos.y, L.pos.z, L.radius};
     u.colorInt = {L.color.x, L.color.y, L.color.z, 0};
     Vec3 d = L.dir.lengthSq() > 1e-4f ? L.dir.normalized() : Vec3{0, -1, 0};

@@ -8,6 +8,7 @@ namespace gfx {
 
 namespace {
 constexpr VkDeviceSize kArenaSize = 6 * 1024 * 1024;
+constexpr VkDeviceSize kLightBufSize = sizeof(LightUBO) * kMaxLights + 4 * kTilesX * kTilesY * (1 + kTileCap);
 
 VkShaderModule loadShader(VkCtx& ctx, const char* name, std::vector<VkShaderModule>& keep) {
   const uint32_t* code = nullptr;
@@ -61,11 +62,12 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   // descriptor pool
   VkDescriptorPoolSize ps[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1024},
                                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 16},
-                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8}};
+                               {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 8},
+                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8}};
   VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
   dpi.maxSets = 480;
-  dpi.poolSizeCount = 3;
+  dpi.poolSizeCount = 4;
   dpi.pPoolSizes = ps;
   VK_CHECK(vkCreateDescriptorPool(dev, &dpi, nullptr, &pool_));
 
@@ -82,7 +84,8 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   layoutGlobalsA_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr}});
   layoutGlobalsB_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr},
                               {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-                              {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+                              {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                              {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutEmpty_ = mkLayout({});
   layoutTex_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutTex2_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -135,6 +138,8 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     VK_CHECK(vkCreateSemaphore(dev, &sci, nullptr, &f.imageAvailable));
     f.arena = ctx_.createBuffer(kArenaSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+    f.lightBuf = ctx_.createBuffer(kLightBufSize, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true);
+    std::memset(f.lightBuf.map, 0, (size_t)kLightBufSize);
     VkDescriptorSetLayout ls[3] = {layoutGlobalsA_, layoutGlobalsB_, layoutBones_};
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     ai.descriptorPool = pool_;
@@ -163,6 +168,14 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
     w.dstSet = f.globalsB;
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
+    VkDescriptorBufferInfo lbi{f.lightBuf.buf, 0, kLightBufSize};
+    VkWriteDescriptorSet lw{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    lw.dstSet = f.globalsB;
+    lw.dstBinding = 3;
+    lw.descriptorCount = 1;
+    lw.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lw.pBufferInfo = &lbi;
+    vkUpdateDescriptorSets(dev, 1, &lw, 0, nullptr);
   }
 
   // 1x1 white dummy texture
@@ -210,6 +223,7 @@ void Renderer::shutdown() {
   if (shadowSampler_) vkDestroySampler(dev, shadowSampler_, nullptr);
   for (int i = 0; i < kFrames; ++i) {
     ctx_.destroyBuffer(frames_[i].arena);
+    ctx_.destroyBuffer(frames_[i].lightBuf);
     vkDestroyFence(dev, frames_[i].fence, nullptr);
     vkDestroySemaphore(dev, frames_[i].imageAvailable, nullptr);
   }
@@ -1134,9 +1148,44 @@ bool Renderer::renderFrame(const FrameData& fd) {
   VK_CHECK(vkBeginCommandBuffer(cb, &bi));
   fr.arenaOffset = 0;
 
+  GlobalsUBO gu = fd.globals;
+  // dynamic lights -> storage buffer: [128 x 3 vec4] then one list per screen tile (count + up to kTileCap light indices)
+  {
+    const int nl = std::min<int>((int)fd.lights.size(), kMaxLights);
+    uint8_t* base = (uint8_t*)fr.lightBuf.map;
+    std::memcpy(base, fd.lights.data(), sizeof(LightUBO) * (size_t)nl);
+    uint32_t* tiles = (uint32_t*)(base + sizeof(LightUBO) * kMaxLights);
+    const int stride = 1 + kTileCap;
+    for (int t = 0; t < kTilesX * kTilesY; ++t) tiles[t * stride] = 0;
+    Mat4 vp = fd.globals.viewProj;
+    float sx = std::sqrt(vp.at(0, 0) * vp.at(0, 0) + vp.at(0, 1) * vp.at(0, 1) + vp.at(0, 2) * vp.at(0, 2));
+    float sy = std::sqrt(vp.at(1, 0) * vp.at(1, 0) + vp.at(1, 1) * vp.at(1, 1) + vp.at(1, 2) * vp.at(1, 2));
+    for (int i = 0; i < nl; ++i) {
+      const LightUBO& L = fd.lights[i];
+      float x = L.posRadius.x, y = L.posRadius.y, z = L.posRadius.z, r = L.posRadius.w;
+      float cx = vp.at(0, 0) * x + vp.at(0, 1) * y + vp.at(0, 2) * z + vp.at(0, 3);
+      float cy = vp.at(1, 0) * x + vp.at(1, 1) * y + vp.at(1, 2) * z + vp.at(1, 3);
+      float cw = vp.at(3, 0) * x + vp.at(3, 1) * y + vp.at(3, 2) * z + vp.at(3, 3);
+      int tx0 = 0, tx1 = kTilesX - 1, ty0 = 0, ty1 = kTilesY - 1;
+      if (cw < -r) continue;                      // behind the camera
+      if (cw > r) {                               // otherwise the camera is inside the sphere: every tile
+        float ndx = cx / cw, ndy = cy / cw, rx = r * sx / cw * 1.15f, ry = r * sy / cw * 1.15f;
+        tx0 = std::max(0, (int)std::floor((ndx - rx) * 0.5f * kTilesX + kTilesX * 0.5f));
+        tx1 = std::min(kTilesX - 1, (int)std::floor((ndx + rx) * 0.5f * kTilesX + kTilesX * 0.5f));
+        ty0 = std::max(0, (int)std::floor((ndy - ry) * 0.5f * kTilesY + kTilesY * 0.5f));
+        ty1 = std::min(kTilesY - 1, (int)std::floor((ndy + ry) * 0.5f * kTilesY + kTilesY * 0.5f));
+      }
+      for (int ty = ty0; ty <= ty1; ++ty)
+        for (int tx = tx0; tx <= tx1; ++tx) {
+          uint32_t* tl = tiles + (ty * kTilesX + tx) * stride;
+          if (tl[0] < (uint32_t)kTileCap) { tl[1 + tl[0]] = (uint32_t)i; ++tl[0]; }   // lights come sorted by importance, so a full tile drops the least important
+        }
+    }
+    gu.lightGrid = {(float)nl, (float)kTilesX / (float)sceneW_, (float)kTilesY / (float)sceneH_, (float)kTilesX};
+  }
   VkDeviceSize goff;
   void* gdst = arenaAlloc(fr, sizeof(GlobalsUBO), &goff);  // offset 0
-  std::memcpy(gdst, &fd.globals, sizeof(GlobalsUBO));
+  std::memcpy(gdst, &gu, sizeof(GlobalsUBO));
   // skinning palettes (kMaxBones matrices per skinned draw, each block 256-byte aligned by the arena)
   VkDeviceSize boneBase = 0;
   if (!fd.bones.empty()) {

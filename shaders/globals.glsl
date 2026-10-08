@@ -26,8 +26,15 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 lightInfo;   // x = light count
   vec4 probeRect;   // x0, z0, 1/width, 1/depth of the ambient probe grid
   vec4 probeInfo;   // x = enabled, y = ground layer height, z = rooftop layer height
-  Light lights[16];
+  vec4 lightGrid;   // x = light count, y,z = tiles per pixel, w = tiles in x
 } g;
+#ifdef GL_FRAGMENT_SHADER
+// Dynamic lights (up to 128) and per-tile light lists, written by the renderer every frame. std430: 128 x 3 vec4, then tiles of 33 uints.
+layout(set = 0, binding = 3, std430) readonly buffer LightData {
+  vec4 lightVec[384];
+  uint tileData[];
+} lb;
+#endif
 
 const float PI = 3.14159265;
 
@@ -81,23 +88,29 @@ vec3 applyFog(vec3 col, vec3 worldPos) {
   return mix(col, fogCol, clamp(f, 0.0, 0.92));
 }
 
-// Point / spot light contribution (Lambert + GGX) with smooth windowed falloff.
+#ifdef GL_FRAGMENT_SHADER
+// Point / spot light contribution (Lambert + GGX) with smooth windowed falloff. Only the lights that touch this pixel's screen tile are visited.
 vec3 evalLights(vec3 P, vec3 N, vec3 V, vec3 albedo, vec3 f0, float rough) {
   vec3 acc = vec3(0.0);
-  int n = int(g.lightInfo.x);
-  for (int i = 0; i < 16; ++i) {
-    if (i >= n) break;
-    vec3 L = g.lights[i].posRadius.xyz - P;
+  int tilesX = int(g.lightGrid.w);
+  ivec2 tile = ivec2(gl_FragCoord.xy * g.lightGrid.yz);
+  tile = clamp(tile, ivec2(0), ivec2(tilesX - 1, 8));
+  uint base = uint(tile.y * tilesX + tile.x) * 33u;
+  uint cnt = min(lb.tileData[base], 32u);
+  for (uint k = 0u; k < cnt; ++k) {
+    uint idx = lb.tileData[base + 1u + k];
+    vec4 pr = lb.lightVec[idx * 3u], ci = lb.lightVec[idx * 3u + 1u], dc = lb.lightVec[idx * 3u + 2u];
+    vec3 L = pr.xyz - P;
     float d2 = dot(L, L);
-    float r = g.lights[i].posRadius.w;
+    float r = pr.w;
     if (d2 > r * r) continue;
     float d = sqrt(d2);
     L /= d;
     float win = clamp(1.0 - pow(d / r, 4.0), 0.0, 1.0);
     float att = win * win / (d2 + 1.0);
-    if (g.lights[i].dirCone.w > -1.5) {
-      float c = dot(-L, g.lights[i].dirCone.xyz);
-      att *= smoothstep(g.lights[i].dirCone.w, g.lights[i].dirCone.w + 0.12, c);
+    if (dc.w > -1.5) {
+      float c = dot(-L, dc.xyz);
+      att *= smoothstep(dc.w, dc.w + 0.12, c);
     }
     float NoL = max(dot(N, L), 0.0);
     if (NoL <= 0.0 || att <= 0.0) continue;
@@ -105,7 +118,8 @@ vec3 evalLights(vec3 P, vec3 N, vec3 V, vec3 albedo, vec3 f0, float rough) {
     float NoV = max(dot(N, V), 1e-3), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
     float a = rough * rough;
     vec3 spec = D_GGX(NoH, a) * V_SmithJointApprox(NoV, NoL, a) * F_Schlick(f0, VoH);
-    acc += (albedo / PI + spec) * g.lights[i].colorInt.rgb * NoL * att;
+    acc += (albedo / PI + spec) * ci.rgb * NoL * att;
   }
   return acc;
 }
+#endif
