@@ -371,7 +371,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       const ModelAsset* m = modelForArchetype(n.archetype, n.id);
       if (!m) continue;
       Vec3 pos{n.pos.x, n.y, n.pos.y};
-      float scale = 0.96f + 0.08f * hash01((uint32_t)n.id * 31 + 7);
+      float scale = (n.role == 0 ? 0.93f : 0.97f) + (n.role == 0 ? 0.14f : 0.06f) * hash01((uint32_t)n.id * 31 + 7);
       a.talkTarget = n.state == NpcState::Talk ? 1.0f : 0.0f;
       bool frentistaFuel = n.role == 1 && fueling_.active;
       a.refuelTarget = frentistaFuel ? 1.0f : 0.0f;
@@ -388,7 +388,13 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       if (n.state != NpcState::Chat && a.action == kActChat) animator_.stop(a);
       a.aimTarget = (n.police && isFirearm(n.weapon) && n.state == NpcState::Fight) ? 1.0f : 0.0f;
       a.crouchTarget = n.state == NpcState::Cower ? 0.9f : 0.0f;
-      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, {0, 0, 0, 0}, ai);
+      // every pedestrian gets their own clothes (hue / saturation / brightness) and build; staff, police and the neighbour keep their look
+      Vec4 look{0, 0, 0, 0};
+      if (n.role == 0 && !n.police) {
+        float hue = hash01((uint32_t)n.id * 977 + 13) * kTau;
+        look = {hue, 0.75f + 0.55f * hash01((uint32_t)n.id * 131 + 5), 0.62f + 0.62f * hash01((uint32_t)n.id * 53 + 29), -1.0f};
+      }
+      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, look, ai);
       npcModelDrawn_[n.id] = true;
     }
   }
@@ -417,7 +423,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     for (const Vec3& l : world_.lampLights) {
       float d = (l - cam_.focus()).length();
       if (d > 60.0f) continue;
-      pendingLights_.push_back({l, {0, -1, 0}, Vec3{6.5f, 5.2f, 3.4f} * day_.night, 16.0f, 0.35f, d});
+      pendingLights_.push_back({l, {0, -1, 0}, Vec3{170.0f, 120.0f, 62.0f} * day_.night * (1.0f - 0.35f * rain_), 24.0f, 0.30f, d});
       UvRect dot = assets_.icon("dot");
       if (dot.valid) {
         SpriteDef sd;
@@ -446,6 +452,10 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     u.colorInt = {L.color.x, L.color.y, L.color.z, 0};
     Vec3 d = L.dir.lengthSq() > 1e-4f ? L.dir.normalized() : Vec3{0, -1, 0};
     u.dirCone = {d.x, d.y, d.z, L.cone};
+  }
+  if (getenv("GTABR_LIGHTLOG") && ((int)(realTime_ * 30) % 60) == 0) {
+    LOGI("lights: pending %zu used %d maxLights %d night %.2f", pendingLights_.size(), n, preset().maxLights, day_.night);
+    for (int i = 0; i < std::min(n, 3); ++i) LOGI("  L%d pos %.1f %.1f %.1f r %.1f col %.1f %.1f %.1f cone %.2f dist %.1f", i, pendingLights_[i].pos.x, pendingLights_[i].pos.y, pendingLights_[i].pos.z, pendingLights_[i].radius, pendingLights_[i].color.x, pendingLights_[i].color.y, pendingLights_[i].color.z, pendingLights_[i].cone, pendingLights_[i].dist);
   }
   fd.globals.lightInfo = {(float)n, settings_.reduceMotion ? wind_ * 0.35f : wind_, rain_, flash_};
 }

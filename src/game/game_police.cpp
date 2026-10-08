@@ -28,16 +28,27 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
   Vec2 here = v.pos;
   Vec2 goal = target;
   float distGoal = (goal - here).length();
-  if (distGoal > 14.0f) {
-    // route along the generated street grid: next waypoint that is not already reached
-    std::vector<Vec2> route = world_.roadRoute(here, goal);
-    Vec2 next = goal;
-    for (const Vec2& w : route)
-      if ((w - here).length() > 6.0f) { next = w; break; }
-    goal = next;
+  Vec2 roadTarget = world_.nearestRoadPoint(target);
+  const bool targetOnRoad = (roadTarget - target).length() < 7.0f;
+  v.atRouteEnd = false;
+  if (distGoal > 14.0f || !targetOnRoad) {
+    // follow a right-hand lane path along the generated street grid to the street point closest to the target (re-planned when the
+    // destination moves or the path is used up); cars never cut across pavements or gardens
+    if (v.route.empty() || (v.routeDest - roadTarget).length() > 8.0f || v.routeIdx + 1 >= v.route.size()) {
+      v.route = laneRoute(here, roadTarget);
+      v.routeDest = roadTarget;
+      v.routeIdx = 0;
+    }
+    float look = 5.0f + std::fabs(v.speed) * 0.45f;
+    while (v.routeIdx + 1 < v.route.size() && (v.route[v.routeIdx + 1] - here).length() < look * 0.6f) ++v.routeIdx;
+    goal = v.route[std::min(v.routeIdx + 1, v.route.size() - 1)];
+    bool lastLeg = v.routeIdx + 2 >= v.route.size();
+    if (lastLeg && (v.route.back() - here).length() < 6.0f) { v.atRouteEnd = true; distGoal = 0; }   // arrived: brake to a stop
+    else distGoal = std::max(distGoal, 7.0f);   // do not brake for intermediate waypoints
   }
   Vec2 d = goal - here;
   float dist = d.length();
+  if (getenv("GTABR_AILOG") && ((int)(realTime_ * 30) % 30) == 0) LOGI("ai car %d at %.1f,%.1f yaw %.2f spd %.1f -> goal %.1f,%.1f (idx %zu/%zu dest %.1f,%.1f) reverse %.1f stuck %.1f", v.id, here.x, here.y, v.yaw, v.speed, goal.x, goal.y, v.routeIdx, v.route.size(), v.routeDest.x, v.routeDest.y, v.aiReverse, v.aiStuck);
   VehicleInput in;
   if (v.aiReverse > 0) {
     v.aiReverse -= dt;
@@ -275,7 +286,8 @@ void Game::updatePolice(float dt) {
       driveAi(v, v.aiTarget, spd, dt);
       float dt2 = (v.pos - v.aiTarget).length();
       // arrived (or the suspect is on foot nearby): stop and deploy the crew
-      bool deploy = (!chaseCar && dt2 < 9.0f) || (player_.vehicle < 0 && dp < 14.0f && sinceSeen_ < 2.0f) || (v.aiStuck > 1.0f && dt2 < 20.0f);
+      bool deploy = (!chaseCar && dt2 < 9.0f) || (player_.vehicle < 0 && dp < 14.0f && sinceSeen_ < 2.0f) || (v.aiStuck > 1.0f && dt2 < 20.0f) ||
+                    (v.atRouteEnd && dt2 < 45.0f);
       if (wanted_ == 0) deploy = false;
       if (deploy && std::fabs(v.speed) < 3.0f) {
         v.driver = -1;

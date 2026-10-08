@@ -514,6 +514,33 @@ void Game::spawnImpact(Vec3 pos, int count) {
   }
 }
 
+// Water: droplets thrown up where the body hits the surface, and soft foam puffs that linger and spread on it.
+void Game::spawnSplash(Vec3 pos, int count, float power) {
+  for (int i = 0; i < count; ++i) {
+    Particle* q = particles_.acquire();
+    if (!q) return;
+    q->pos = pos + Vec3{wRng_.range(-0.25f, 0.25f), 0.0f, wRng_.range(-0.25f, 0.25f)};
+    q->vel = {wRng_.range(-1.3f, 1.3f) * power, wRng_.range(1.4f, 3.4f) * power, wRng_.range(-1.3f, 1.3f) * power};
+    q->life = q->maxLife = wRng_.range(0.45f, 0.95f);
+    q->size = wRng_.range(0.07f, 0.15f);
+    q->color = rgba(0.86f, 0.94f, 1.0f, 0.9f);
+    q->gravity = 9.0f;
+  }
+}
+
+void Game::spawnFoam(Vec3 pos, int count, float size) {
+  for (int i = 0; i < count; ++i) {
+    Particle* q = particles_.acquire();
+    if (!q) return;
+    q->pos = pos + Vec3{wRng_.range(-0.35f, 0.35f), 0.0f, wRng_.range(-0.35f, 0.35f)};
+    q->vel = {wRng_.range(-0.35f, 0.35f), 0.0f, wRng_.range(-0.35f, 0.35f)};
+    q->life = q->maxLife = wRng_.range(1.1f, 1.9f);
+    q->size = size * wRng_.range(0.7f, 1.2f);
+    q->color = rgba(0.93f, 0.97f, 1.0f, 0.8f);
+    q->gravity = 0.0f;
+  }
+}
+
 void Game::updateEffects(float dt) {
   for (Tracer& t : tracers_) t.life -= dt;
   tracers_.erase(std::remove_if(tracers_.begin(), tracers_.end(), [](const Tracer& t) { return t.life <= 0; }), tracers_.end());

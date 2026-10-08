@@ -156,7 +156,7 @@ float buildTree3D(MeshBuilder& b, MeshBuilder* lod, Rng& rng, int species, const
       break;
     }
   }
-  for (const Crown& c : cs) crown(c);
+  for (const Crown& c : cs) { if (species == 5) crown(c, 8, 4, 0.2f); else crown(c); }
   b.clearXform();
 
   if (lod) {

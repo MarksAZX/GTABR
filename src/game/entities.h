@@ -81,6 +81,8 @@ struct Vehicle {
   bool traffic = false;
   std::vector<Vec2> route;
   size_t routeIdx = 0;
+  Vec2 routeDest;
+  bool atRouteEnd = false;   // reached the end of the lane route (police: stop and deploy the crew)
   float cruise = 9.0f, blockedT = 0, honkT = 0;
 };
 

@@ -29,6 +29,14 @@ void main() {
     float st = step(0.9975, hash(floor(sp))) * hash(floor(sp) + 3.1);
     col += vec3(0.8, 0.85, 1.0) * st * night * 0.6 * smoothstep(0.0, 0.25, dir.y);
   }
+  // moon: soft disc with a halo, opposite to the sun's day arc (sunDir already points at the moon during the night)
+  if (night > 0.2) {
+    float sdm = dot(dir, g.sunDir.xyz);
+    float disc = smoothstep(0.99935, 0.99975, sdm);
+    float halo = pow(max(sdm, 0.0), 220.0) * 0.35 + pow(max(sdm, 0.0), 24.0) * 0.05;
+    float craters = 0.82 + 0.18 * noise(dir.xz * 380.0 + dir.y * 220.0);
+    col += vec3(0.86, 0.92, 1.0) * (disc * 3.2 * craters + halo) * night;
+  }
   // clouds: a single scrolling layer projected on a plane
   if (dir.y > 0.0) {
     vec2 cp = dir.xz / (dir.y + 0.08) * 0.55 + vec2(g.camPos.w * 0.006, g.camPos.w * 0.002);

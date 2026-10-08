@@ -23,6 +23,25 @@ void main() {
     vec3 repaint = pc.tint.rgb * (0.35 + 1.3 * lum);
     albedo = mix(albedo, repaint, paintMask * pc.tint.a);
   }
+  // pedestrians: tint.a < 0 requests per-person clothing variation (tint.r = hue turn, g = saturation, b = value) that spares skin and hair
+  if (pc.tint.a < -0.5) {
+    vec3 c = albedo;
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float sat = (mx - mn) / max(mx, 1e-4);
+    bool skinLike = c.r >= c.g && c.g >= c.b && sat > 0.18 && sat < 0.70 && (c.g - c.b) > 0.25 * (c.r - c.b);
+    float clothes = skinLike ? 0.0 : 1.0;
+    float w = clothes * smoothstep(0.10, 0.28, sat);
+    float cs = cos(pc.tint.r), sn = sin(pc.tint.r);
+    // rotation about the grey axis (YIQ)
+    const mat3 toYiq = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
+    const mat3 fromYiq = mat3(1.0, 1.0, 1.0, 0.956, -0.272, -1.106, 0.621, -0.647, 1.703);
+    vec3 yiq = toYiq * c;
+    yiq.yz = vec2(yiq.y * cs - yiq.z * sn, yiq.y * sn + yiq.z * cs) * pc.tint.g;
+    vec3 shifted = max(fromYiq * yiq, vec3(0.0));
+    albedo = mix(c, shifted, w);
+    // brightness variety also for neutral garments (dark jeans vs grey, white vs cream)
+    albedo *= mix(1.0, pc.tint.b, clothes * 0.85);
+  }
   vec3 orm = texture(uORM, vUV).rgb;
   float rough = clamp(orm.g * pc.params.z, 0.05, 1.0);
   float metal = orm.b;

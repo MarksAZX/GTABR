@@ -509,6 +509,9 @@ class Game {
   void respawnPlayer();
   void spawnBlood(Vec3 p, Vec2 dir, int n);
   void spawnImpact(Vec3 p, int n);
+  void spawnSplash(Vec3 p, int n, float power);
+  void spawnFoam(Vec3 p, int n, float size);
+  float splashT_ = 0;
   void requestAnim(Player& p, int act, float speed = 1, bool upper = false, bool hold = false) { p.animReq = act; p.animReqSpeed = speed; p.animReqUpper = upper; p.animReqHold = hold; }
   void requestAnim(Npc& n, int act, float speed = 1, bool upper = false, bool hold = false) { n.animReq = act; n.animReqSpeed = speed; n.animReqUpper = upper; n.animReqHold = hold; }
   // ---- NPC behaviour (game_npc.cpp)
@@ -529,6 +532,7 @@ class Game {
   void spawnTraffic();
   bool spawnTrafficCar(bool farFromPlayer);
   void planTrafficRoute(Vehicle& v);
+  std::vector<Vec2> laneRoute(Vec2 here, Vec2 dest, Vec2 headingHint = {0, 0}) const;
   void updateTraffic(float dt);
   float trafficRespawnT_ = 0;
   bool menuStreamFirst_ = true;

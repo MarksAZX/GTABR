@@ -87,17 +87,26 @@ void main() {
     if (lum < 0.012 + 0.04 * rim) discard;
   }
   vec3 albedo = tex.rgb * vColor.rgb;
+  // macro variation over the ground so the tiling never reads as a repeating pattern (patchy lawn, worn asphalt, sun-bleached sand)
+  {
+    int gl = int(vUVL.z + 0.5);
+    if (gl <= MAT_PEDRA_PORT || gl == MAT_GRASS || gl == MAT_SAND || gl == MAT_DIRT) {
+      float macro = vnoise(vWorld.xz * 0.045) * 0.55 + vnoise(vWorld.xz * 0.16 + 3.0) * 0.30 + vnoise(vWorld.xz * 0.7 + 9.0) * 0.15;
+      if (gl == MAT_GRASS) albedo *= mix(vec3(0.74, 0.82, 0.66), vec3(1.18, 1.10, 0.84), macro);
+      else albedo *= mix(0.82, 1.14, macro);
+    }
+  }
   vec3 tn = vec3(nr.rg * 2.0 - 1.0, 0.0);
   tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
   vec3 N = perturb(Ng, vWorld, vUVL.xy, tn);
   float rough = clamp(nr.b, 0.04, 1.0);
+  int layerId = int(vUVL.z + 0.5);
   float ao = vColor.a * mix(1.0, nr.a, 0.85);
   // rain-darkened / wet ground: darker albedo, glossier on horizontal surfaces
   float wet = g.cascade.w * smoothstep(0.7, 0.95, Ng.y);
   albedo *= 1.0 - 0.35 * wet;
   rough = mix(rough, 0.12, wet * 0.85);
   // puddles on paved ground: mirror-like patches that reflect the sky, with raindrop ripples while it rains
-  int layerId = int(vUVL.z + 0.5);
   if (layerId <= 3 && wet > 0.05) {
     float pn = vnoise(vWorld.xz * 0.27) * 0.6 + vnoise(vWorld.xz * 0.85 + 7.0) * 0.4;
     float pud = clamp(g.cascade.w, 0.0, 1.0) * smoothstep(0.50, 0.60, pn) * smoothstep(0.85, 0.97, Ng.y);
@@ -137,6 +146,17 @@ void main() {
 
   vec3 col = direct + ambient + evalLights(vWorld, N, V, albedo, f0, rough);
   col += albedo * vEmissive * g.params.z * 6.0;   // shop signs / lamps glow at night
+  // lit windows at night: the dark glass areas of the facade textures glow warm, a different random subset per window cell
+  bool isFacade = (layerId >= MAT_HOUSE_YELLOW && layerId <= MAT_APT_BANDS) || layerId == MAT_HOUSE_PERIFERIA_A || layerId == MAT_HOUSE_PERIFERIA_B || layerId == MAT_APT_TOWER;
+  if (g.params.z > 0.05 && g.params.w < 0.5 && isFacade) {
+    float lumT = dot(tex.rgb, vec3(0.30, 0.59, 0.11));
+    float glass = smoothstep(0.075, 0.02, lumT) * step(tex.r * 0.9, tex.b + 0.01) * step(abs(Ng.y), 0.5);
+    vec2 cell = floor(vUVL.xy * vec2(5.0, 6.0));
+    float on = step(0.46, hash12(cell + float(layerId) * 3.7));
+    float flick = 0.75 + 0.25 * hash12(cell + 11.0);
+    vec3 warm = mix(vec3(1.0, 0.78, 0.48), vec3(0.75, 0.88, 1.0), step(0.82, hash12(cell + 5.0)));   // a few TV-blue rooms
+    col += warm * glass * on * flick * g.params.z * 2.4;
+  }
   col = applyFog(col, vWorld);
   outColor = vec4(col, 1.0);
 }

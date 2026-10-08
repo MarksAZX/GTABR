@@ -35,11 +35,13 @@ void main() {
   // vignette + subtle grain
   vec2 q = vUV - 0.5;
   c *= 1.0 - pc.a.z * smoothstep(0.3, 0.95, length(q * vec2(1.0, 1.2)));
-  c += (hash(vUV * 1000.0 + pc.b.w) - 0.5) * 0.012;
   c = mix(c, vec3(0.0), pc.a.y);
   c = clamp(c, 0.0, 1.0);
   // display encoding
   vec3 outc = pow(c, vec3(1.0 / 2.2));
-  if (pc.a.w > 0.5) outc = c;   // sRGB swapchain encodes in hardware (c is linear-ish display value)
+  // film grain after encoding (never amplified by the gamma curve), stronger in mid tones, almost absent in the darks
+  float gl = dot(outc, vec3(0.3, 0.59, 0.11));
+  outc += (hash(vUV * 1000.0 + pc.b.w) - 0.5) * 0.020 * smoothstep(0.02, 0.35, gl);
+  if (pc.a.w > 0.5) outc = clamp(c + (outc - pow(c, vec3(1.0 / 2.2))) * 0.6, 0.0, 1.0);   // sRGB swapchain encodes in hardware
   outColor = vec4(outc, 1.0);
 }

@@ -703,9 +703,18 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   else if (p.swimming && depth < 1.0f) p.swimming = false;
   if (p.swimming != wasSwimming) {
     audio_.play("splash", {p.pos.x, 0.2f, p.pos.y}, 0.8f);
+    spawnSplash({p.pos.x, world_.waterLevel + 0.15f, p.pos.y}, 28, 1.6f);
+    spawnFoam({p.pos.x, world_.waterLevel + 0.12f, p.pos.y}, 5, 0.55f);
     if (p.swimming) { p.aimHold = 0; p.attackT = -1; p.reloadT = -1; markProgress(kPgSwam); if (settings_.hints) toast("Nadando", "pin"); }
   }
   float wade = clamp(depth / 1.25f, 0.0f, 1.0f);
+  // splashing: feet kicking up spray in the shallows, strokes and a wake while swimming
+  splashT_ -= dt;
+  if (depth > 0.06f && !p.indoors && mag > 0.1f && splashT_ <= 0) {
+    Vec3 at{p.pos.x, world_.waterLevel + 0.12f, p.pos.y};
+    if (p.swimming) { spawnFoam(at - Vec3{std::sin(p.yaw), 0, -std::cos(p.yaw)} * 0.5f, 2, 0.45f); spawnSplash(at, 3, 0.7f); splashT_ = 0.22f; }
+    else { spawnSplash(at, 3 + (int)(wade * 3), 0.5f + 0.4f * wade); if (wade > 0.3f) spawnFoam(at, 1, 0.35f); splashT_ = p.running ? 0.16f : 0.30f; }
+  }
   float maxSpeed = p.swimming ? (p.running ? 2.7f : 1.6f) : (p.running ? 6.4f : 3.1f) * (1.0f - 0.45f * wade);
   Vec2 desired = mag > 0.01f ? dir.normalized() * (maxSpeed * (p.running ? 1.0f : std::max(0.45f, mag))) : Vec2{0, 0};
   float accel = mag > 0.01f ? 16.0f : 20.0f;

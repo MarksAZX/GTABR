@@ -6,6 +6,7 @@
 #include "../core/log.h"
 #include "../core/png.h"
 #include "../game/game.h"
+#include "../game/physics.h"
 
 using namespace gtabr;
 
@@ -120,13 +121,28 @@ struct Bot {
       bool last = i + 1 == route.size();
       if (!last) {
         Vec2 d = p - prev;
-        if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 1.5f; }
+        if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 2.4f; }
         if ((p - g.vehicles()[g.player().vehicle].pos).length() < 5.0f) { prev = route[i]; continue; }
         if (!driveTo(p, 4.5f, maxFrames, maxSpeed)) return false;
       } else if (!driveTo(p, tol, maxFrames, std::min(maxSpeed, 8.0f))) return false;
       prev = route[i];
     }
     return true;
+  }
+  // a spot 'dist' metres from 'target' on open ground with an unobstructed line to it (clear shot, nothing in the way)
+  Vec2 clearShotSpot(Vec2 target, float dist) {
+    const World& w = g.world();
+    for (int k = 0; k < 16; ++k) {
+      float a = k * kTau / 16.0f;
+      Vec2 dir{std::sin(a), std::cos(a)};
+      Vec2 p = target + dir * dist, q = p;
+      phys::depenetrateCircle(w, q, 0.4f);
+      if ((q - p).length() > 0.05f) continue;
+      if (w.waterDepth(p.x, p.y) > 0.05f) continue;
+      if (phys::raycast(w, p, (target - p).normalized(), dist, 1.3f) < dist - 0.4f) continue;
+      return p;
+    }
+    return target + Vec2{0, dist};
   }
   bool stopCar(int maxFrames = 120) {
     for (int i = 0; i < maxFrames; ++i) {
@@ -143,6 +159,48 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "crowd") {
+    // pedestrian variety: gather everybody within reach in front of the camera
+    b.idle(20);
+    std::vector<int> ids;
+    for (auto& n : g.npcs()) if (!n.interior && !n.police && n.role == 0 && ids.size() < 10) ids.push_back(n.id);
+    Vec2 c = g.player().pos;
+    g.toggleCamera();
+    for (size_t i = 0; i < ids.size(); ++i) {
+      Npc& n = g.npcs()[ids[i]];
+      n.pos = c + Vec2{-7.0f + 1.6f * (float)i, -6.0f - (float)(i % 3) * 1.2f};
+      n.state = NpcState::Idle; n.path.clear(); n.stateTimer = 100;
+      n.yaw = kPi;
+    }
+    g.teleportPlayer(c, kPi);
+    b.idle(60);
+    b.shot("crowd_third");
+    return 0;
+  }
+  if (name == "night") {
+    // night life: lamp pools, headlights, lit windows, moon
+    const World& W = g.world();
+    b.idle(10);
+    g.setTimeOfDay(22.0f, 0.0f);
+    g.setWeatherMode(1);
+    // stand 3 m beside a lamp near the middle of the city
+    Vec3 lamp = W.lampLights[W.lampLights.size() / 2];
+    LOGI("lamps: %zu, using one at %.1f,%.1f", W.lampLights.size(), lamp.x, lamp.z);
+    g.teleportPlayer({lamp.x, lamp.z}, 0);
+    b.idle(40);
+    b.shot("night_lamp_topdown");
+    g.toggleCamera();
+    b.idle(60);
+    b.shot("night_lamp_third");
+    // tall buildings for the windows
+    for (const auto& bl : W.blocks) if (bl.second == District::Centro) { g.teleportPlayer({bl.first.cx(), bl.first.z1 - 1.5f}, kPi); break; }
+    b.idle(60);
+    b.shot("night_windows_third");
+    g.teleportPlayer({W.poiGas.x, W.poiGas.z + 2}, 0);
+    b.idle(60);
+    b.shot("night_posto_third");
+    return 0;
+  }
   if (name == "stream") {
     // chunk residency: jumping across the city (and into a shop) makes the chunks around the player resident within a few
     // frames, and chunks far from it are released again; nothing is ever drawn from a destroyed buffer
@@ -201,7 +259,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
             if (std::fabs(across - r.c) < r.hw + 1.0f && along > r.a - 2 && along < r.b + 2) onRoad = true;
           }
           (void)rp;
-          if (!onRoad) ++offRoad;
+          if (!onRoad) { ++offRoad; if (offRoad % 8 == 1) LOGI("  off-road car %d at %.1f,%.1f speed %.1f yaw %.2f wrecked %d health %.0f", v.id, v.pos.x, v.pos.y, v.speed, v.yaw, (int)v.wrecked, v.health); }
         }
       }
     }
@@ -493,6 +551,21 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     g.teleportPlayer(start, yawFromDir(out));
     b.idle(10);
     CHECK(!g.player().swimming, "on the sand the player walks");
+    g.toggleCamera();
+    b.idle(40);
+    {
+      // wade in, photographing the spray in the shallows and the splash at the moment the player starts swimming
+      bool shotWade = false;
+      for (int i = 0; i < 1500 && !g.player().swimming; ++i) {
+        b.walkTo(g.player().pos + out * 0.6f, 0.1f, 2);
+        float dep = g.world().waterDepth(g.player().pos.x, g.player().pos.y);
+        if (!shotWade && dep > 0.5f) { b.shot("swim_wade"); shotWade = true; }
+      }
+      b.idle(6);
+      b.shot("swim_enter_splash");
+    }
+    g.toggleCamera();
+    b.idle(30);
     CHECK(b.walkTo(start + out * 30.0f, 1.0f, 900), "walked into the sea");
     CHECK(g.player().swimming, "deep water switches to swimming");
     CHECK(g.world().waterDepth(g.player().pos.x, g.player().pos.y) > 1.2f, "water depth detected under the player");
@@ -557,7 +630,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     }
     CHECK(victim >= 0, "found a pedestrian");
     Npc& v = g.npcs()[victim];
-    g.teleportPlayer(v.pos + Vec2{0.0f, 1.6f}, 0);
+    g.teleportPlayer(b.clearShotSpot(v.pos, 1.6f), 0);
     b.idle(3);
     float h0 = v.health;
     b.attackToward(v.pos, 120);
@@ -586,7 +659,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     }
     CHECK(target >= 0, "found a target for the firearm test");
     Npc& t = g.npcs()[target];
-    g.teleportPlayer(t.pos + Vec2{0.0f, 6.0f}, 0);
+    g.teleportPlayer(b.clearShotSpot(t.pos, 6.0f), 0);
     b.idle(3);
     int mag0 = p.mag[kWpnPistol];
     float th0 = t.health;
@@ -610,7 +683,18 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(g.wantedLevel() >= 1, "crime reported: wanted level");
     Vec2 crimeSpot = p.pos;
     int cops = 0;
-    for (int i = 0; i < 1800 && cops == 0; ++i) { b.idle(1); cops = g.aliveCops(); }
+    if (getenv("GTABR_DUMPROADS")) {
+      for (const RoadLine& r : g.world().roads) LOGI("road %s c=%.1f hw=%.1f [%.0f,%.0f] avenue %d", r.horizontal ? "H" : "V", r.c, r.hw, r.a, r.b, (int)r.avenue);
+      for (const Collider& c : g.world().colliders)
+        if (std::fabs((c.box.mn.x + c.box.mx.x) * 0.5f + 36.0f) < 10 && std::fabs((c.box.mn.z + c.box.mx.z) * 0.5f - 63.0f) < 10 && c.box.mn.x < 400)
+          LOGI("  collider kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y);
+    }
+    for (int i = 0; i < 1800 && cops == 0; ++i) {
+      b.idle(1); cops = g.aliveCops();
+      if (i % 300 == 0)
+        for (const Vehicle& v : g.vehicles())
+          if (v.police && !v.despawn) LOGI("  t=%ds police car %d at %.1f,%.1f spd %.1f siren %d aiTarget %.1f,%.1f (crime at %.1f,%.1f)", i / 30, v.id, v.pos.x, v.pos.y, v.speed, (int)v.siren, v.aiTarget.x, v.aiTarget.y, crimeSpot.x, crimeSpot.y);
+    }
     LOGI("officers on foot: %d after %.0f s", cops, 0.0f);
     CHECK(cops > 0, "police arrived and deployed officers");
     for (int i = 0; i < 900 && g.copsChasing() == 0; ++i) b.idle(1);
@@ -653,16 +737,20 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 120);
     g.equipWeapon(kWpnSmg);
     int kills = 0;
-    for (int round = 0; round < 6 && g.wantedLevel() < 3; ++round) {
-      int t = -1; float best = 1e9f;
+    for (int round = 0; round < 12 && g.wantedLevel() < 3; ++round) {
+      // victims with plenty of people around (witnesses report the crime); the test keeps going until the heat really rises
+      int t = -1; float bestScore = -1e9f;
       for (auto& n : g.npcs()) {
-        if (n.interior || n.state == NpcState::Dead || n.despawn) continue;
-        float d = (n.pos - p.pos).length();
-        if (d < best) { best = d; t = n.id; }
+        if (n.interior || n.state == NpcState::Dead || n.despawn || n.police || n.role != 0) continue;
+        int witnesses = 0;
+        for (auto& o : g.npcs()) if (&o != &n && !o.interior && !o.despawn && !o.police && o.state != NpcState::Dead && (o.pos - n.pos).length() < 14.0f) ++witnesses;
+        float score = witnesses * 3.0f - (n.pos - p.pos).length() * 0.02f;
+        if (score > bestScore) { bestScore = score; t = n.id; }
       }
       if (t < 0) break;
       Npc& n = g.npcs()[t];
-      if (best > 12.0f) { g.teleportPlayer(n.pos + Vec2{0.0f, 5.0f}, 0); b.idle(2); }
+      g.teleportPlayer(b.clearShotSpot(n.pos, 6.0f), 0);
+      b.idle(2);
       b.attackToward(n.pos, 40, true);
       if (n.state == NpcState::Dead) ++kills;
       b.idle(90);
@@ -684,9 +772,16 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
         InputFrame mv; mv.move = {n.dot(rt), n.dot(f)}; mv.runHeld = true;
         b.step(mv, 1);
       } else if (bd < 1e8f) {
-        b.attackToward(tgt, 1, true);   // armed stand-off: the officers answer a drawn firearm with fire
+        // armed stand-off: make sure there is open ground between us (a hedge or a tree would hide us from them), then keep firing
+        if (frames % 120 == 0 && g.copsChasing() == 0) { g.teleportPlayer(b.clearShotSpot(tgt, 12.0f), 0); b.idle(1); }
+        b.attackToward(tgt, 1, true);   // the officers answer a drawn firearm with fire
       } else b.idle(1);
       ++frames;
+      if (getenv("GTABR_COPLOG") && frames % 150 == 0) {
+        LOGI("  t=%ds wanted %d hp %.0f player %.0f,%.0f nearest %.1f", frames / 30, g.wantedLevel(), p.health, p.pos.x, p.pos.y, bd);
+        for (const Npc& c : g.npcs()) if (c.police && !c.despawn) LOGI("    cop %d at %.0f,%.0f state %d wpn %d hp %.0f d %.1f", c.id, c.pos.x, c.pos.y, (int)c.state, c.weapon, c.health, (c.pos - p.pos).length());
+        for (const Vehicle& v : g.vehicles()) if (v.police && !v.despawn) LOGI("    car %d at %.0f,%.0f spd %.1f siren %d driver %d", v.id, v.pos.x, v.pos.y, v.speed, (int)v.siren, v.driver);
+      }
       if (frames < 600 && frames % 30 == 0) {
         int armed = 0, pistols = g.audio().playedCount("pistol");
         for (const Npc& c : g.npcs()) if (c.police && !c.despawn && c.weapon != kWpnFists && c.weapon != kWpnBaton) ++armed;

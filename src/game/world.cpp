@@ -345,6 +345,17 @@ class Gen {
         if (side == N || side == S) r.x1 -= std::min(2.0f, r.w() * 0.2f); else r.z1 -= std::min(2.0f, r.h() * 0.2f);
         ground(RectF{lot.x0, lot.z0, lot.x1, lot.z1}, kH + 0.005f, rng_.chance(0.5f) ? mat::tile_floor : mat::concrete, 2.5f, {0.9f, 0.88f, 0.85f}, false);
         frontWall(lot, front, f.sideTint * 0.95f);
+        {
+          // hedge of shrubs behind the wall (leaves a gap at the gate side)
+          int nh = (int)(((side == N || side == S) ? lot.w() : lot.h()) / 3.0f);
+          for (int h = 1; h < nh; ++h) {
+            if (!rng_.chance(0.6f)) continue;
+            float tt = (float)h / nh;
+            float hx = (side == N || side == S) ? lot.x0 + lot.w() * tt : (side == W ? lot.x0 + 0.9f : lot.x1 - 0.9f);
+            float hz = (side == W || side == E) ? lot.z0 + lot.h() * tt : (side == N ? lot.z0 + 0.9f : lot.z1 - 0.9f);
+            tree(hx, hz, 2);
+          }
+        }
         if (rng_.chance(0.35f)) {
           // potted plant / small tree in the yard
           float px = (side == N || side == S) ? lot.x1 - 1.2f : lot.cx(), pz = (side == W || side == E) ? lot.z1 - 1.2f : lot.cz();
@@ -653,6 +664,16 @@ class Gen {
       if (pathH.inflated(1.4f).contains(x, z) || pathV.inflated(1.4f).contains(x, z) || centre.inflated(2.5f).contains(x, z)) continue;
       tree(x, z, k % 5 == 0 ? 1 : (k % 5 == 1 ? 2 : 0));
     }
+    // garden: shrub clumps and flower beds off the paths so the lawn is never empty
+    for (int k = 0; k < 16; ++k) {
+      float x = rng_.range(pl.x0 + 1.0f, pl.x1 - 1.0f), z = rng_.range(pl.z0 + 1.0f, pl.z1 - 1.0f);
+      if (pathH.inflated(1.0f).contains(x, z) || pathV.inflated(1.0f).contains(x, z) || centre.inflated(1.5f).contains(x, z)) continue;
+      tree(x, z, 2);
+    }
+    for (int k = 0; k < 6; ++k) {
+      float a = k * kTau / 6.0f + 0.5f;
+      prop("canteiro", pl.cx() + std::sin(a) * 10.5f, pl.cz() - std::cos(a) * 10.5f, a, true, 0.9f, 0.4f, 26);
+    }
     // kiosk (banca)
     RectF kiosk{pl.x0 + 1.0f, pl.z0 + 1.0f, pl.x0 + 5.0f, pl.z0 + 4.0f};
     Facade kf{mat::house_yellow, {0.95f, 0.7f, 0.3f}, 3.0f, false, 3.0f};
@@ -739,7 +760,7 @@ class Gen {
       }
     }
     {
-      Vec3 t = F.P(2.2f, 0.8f);
+      Vec3 t = F.P(30.4f, 0.8f);   // price totem in the far corner, clear of both lanes
       MeshBuilder p = mb(t.x, t.z, {0.3f, 0.3f, 0.34f});
       p.prism({t.x, kH, t.z}, 0.18f, 8.0f, 8, mat::metal);
       MeshBuilder s = mb(t.x, t.z, {1, 1, 1});
@@ -1428,7 +1449,7 @@ class Gen {
     w_.vehicleYaw[2] = 0;
     // pedestrians on the pavements, more where the city is denser
     static const char* arch[] = {"mulher_rosa", "homem_polo", "jovem_moletom", "mulher_vestido", "corredor", "vizinho"};
-    int target = std::min(30, (int)w_.blocks.size() * 2 + 4);
+    int target = std::min(46, (int)w_.blocks.size() * 2 + 10);
     for (int k = 0; k < target; ++k) {
       const auto& [r, d] = w_.blocks[rng_.irange(0, (int)w_.blocks.size() - 1)];
       int side = rng_.irange(0, 3);
@@ -1443,7 +1464,7 @@ class Gen {
     }
     // beach-goers
     if (w_.coastSide >= 0)
-      for (int k = 0; k < 6; ++k) {
+      for (int k = 0; k < 12; ++k) {
         Vec3 p = coastP(rng_.range((w_.coastSide % 2 == 0 ? w_.beach.x0 : w_.beach.z0) + 20, (w_.coastSide % 2 == 0 ? w_.beach.x1 : w_.beach.z1) - 20),
                         rng_.range(9.0f, beachDepth_ - 6.0f), 0.06f);
         w_.npcs.push_back({k % 2 ? "mulher_vestido" : "jovem_moletom", 0, p, rng_.range(0, kTau)});
