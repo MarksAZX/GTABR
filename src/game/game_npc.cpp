@@ -84,9 +84,34 @@ std::string Game::npcLine(Npc& n, int context) {
       {"Ei, você não é aquele que a polícia tá procurando?", "Sai daqui, não quero confusão com polícia.", "Vou chamar a polícia, hein!"},
       {"Ai... minha cabeça...", "O que aconteceu?", "Nunca mais saio de casa..."},
   };
-  const auto& l = lines[clamp(context, 0, (int)lines.size() - 1)];
-  n.lineIdx = (n.lineIdx + 1 + (int)(rng_.uni() * 2.0f)) % (int)l.size();
-  return l[n.lineIdx];
+  std::vector<std::string> pool;
+  for (const char* s : lines[clamp(context, 0, (int)lines.size() - 1)]) pool.push_back(s);
+  // situational lines: time of day, weather and the neighbourhood the speaker is in
+  if (context == 0 || context == 1) {
+    float hr = timeOfDay_;
+    if (context == 0) {
+      const char* hello = hr < 12.0f ? "Bom dia! Já tomou café?" : (hr < 18.0f ? "Boa tarde! Tá corrido o dia?" : "Boa noite! Tá tarde, hein?");
+      pool.push_back(hello);
+      pool.push_back(hr < 12.0f ? "Bom dia, vizinho!" : (hr < 18.0f ? "Boa tarde, tudo certo?" : "Boa noite, tudo bem?"));
+    } else {
+      if (rain_ > 0.3f) { pool.push_back("Essa chuva não para!"); pool.push_back("Melhor ter trazido o guarda-chuva."); pool.push_back("Tá tudo alagando na esquina."); }
+      else if (day_.night > 0.6f) { pool.push_back("Tá tarde pra andar sozinho por aí."); pool.push_back("A noite tá bonita hoje."); pool.push_back("Esse silêncio é raro por aqui."); }
+      else if (hr < 10.0f) { pool.push_back("O café da padaria é o melhor do bairro."); pool.push_back("Cedo assim a rua é só minha."); }
+      else if (hr >= 12.0f && hr < 14.0f) { pool.push_back("Tô indo almoçar, tá na hora."); pool.push_back("Hora do almoço, o mercado fica cheio."); }
+      std::string loc = locationName(n.pos, n.interior);
+      if (loc.find("Praia") != std::string::npos || loc.find("Orla") != std::string::npos) { pool.push_back("O mar tá lindo hoje."); pool.push_back("Vai dar um mergulho?"); pool.push_back("Cuidado com a correnteza."); }
+      if (loc.find("Parque") != std::string::npos) { pool.push_back("Adoro essa praça, é a mais sossegada."); pool.push_back("Olha os passarinhos ali."); }
+    }
+  }
+  // never repeat what was said in the last few exchanges
+  std::string line;
+  for (int tries = 0; tries < 10; ++tries) {
+    line = pool[(size_t)(rng_.uni() * pool.size()) % pool.size()];
+    if (std::find(recentLines_.begin(), recentLines_.end(), line) == recentLines_.end()) break;
+  }
+  recentLines_.push_back(line);
+  if (recentLines_.size() > 10) recentLines_.pop_front();
+  return line;
 }
 
 void Game::npcSay(Npc& n, const std::string& line, float secs) {
@@ -448,10 +473,15 @@ void Game::npcThink(Npc& n, float dt) {
         if (n.state != NpcState::Idle) break;
       }
       if (n.stateTimer <= 0) {
+        // daily rhythm: the streets empty out at night, fill around lunch and in the evening, people head for the points of interest
+        float hr = timeOfDay_;
+        bool lateNight = hr < 5.0f || hr >= 23.0f;
+        if (lateNight && !n.interior && rng_.chance(0.6f)) { n.stateTimer = rng_.range(10.0f, 26.0f); break; }
+        float poiChance = (hr >= 11.5f && hr < 14.5f) ? 0.6f : ((hr >= 17.0f && hr < 21.5f) ? 0.55f : 0.35f);
         // choose a destination: a point of interest of the neighbourhood or a random reachable spot
         for (int tries = 0; tries < 6; ++tries) {
           Vec2 dest;
-          if (!n.interior && !world_.poiList.empty() && rng_.chance(0.35f)) {
+          if (!n.interior && !world_.poiList.empty() && rng_.chance(poiChance)) {
             const Vec3& poi = world_.poiList[rng_.irange(0, (int)world_.poiList.size() - 1)];
             dest = Vec2{poi.x, poi.z} + Vec2{rng_.range(-3.0f, 3.0f), rng_.range(-3.0f, 3.0f)};
           } else if (!nav.randomPoint(rng_, dest)) break;

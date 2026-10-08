@@ -1078,6 +1078,35 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(lost < 8.0f, "a guarded frontal blow is mostly absorbed");
     return 0;
   }
+  if (name == "life") {
+    // city life: shop hours, event, birds
+    b.idle(30);
+    g.setTimeOfDay(23.5f, 0.0f);
+    bool anyClosed = false, convenienceOpen = true;
+    for (size_t i = 0; i < g.world().shops.size(); ++i) {
+      bool open = g.shopOpen((int)i);
+      if (g.world().shops[i].kind == ShopKind::Conveniencia) convenienceOpen = open;
+      else anyClosed |= !open;
+    }
+    CHECK(anyClosed, "the market, bakery and hardware store are closed at 23:30");
+    CHECK(convenienceOpen, "the convenience store stays open all night");
+    g.setTimeOfDay(10.0f, 0.0f);
+    bool allOpen = true;
+    for (size_t i = 0; i < g.world().shops.size(); ++i) allOpen &= g.shopOpen((int)i);
+    CHECK(allOpen, "everything is open at 10:00");
+    g.setTimeOfDay(8.5f, 0.0f);
+    CHECK(g.trafficFactor() > 1.2f, "rush hour thickens the traffic");
+    g.setTimeOfDay(3.0f, 0.0f);
+    CHECK(g.trafficFactor() < 0.5f, "the night streets are quiet");
+    g.setTimeOfDay(14.0f, 0.0f);
+    g.forceAccidentDebug();
+    b.idle(60);
+    CHECK(g.cityEventActive(), "a street event is running");
+    g.toggleCamera();
+    b.idle(30);
+    b.shot("life_accident");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

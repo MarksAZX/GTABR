@@ -207,6 +207,7 @@ void Game::drawMinimap() {
     for (const Pickup& k : pickups_)
       if (k.active) marker({k.pos.x, k.pos.z}, weaponDef(k.weapon).icon, C(1.0f, 0.85f, 0.4f, 0.95f), 20 * S, false);
     if (waypoint_.active) marker({waypoint_.pos.x, waypoint_.pos.z}, "pin", kRed, 34 * S, true);
+    if (cityEvent_.active) marker({cityEvent_.pos.x, cityEvent_.pos.z}, "car", theme::kWarn, 26 * S, true);
   }
   // player heading wedge + dot
   float heading = (player_.vehicle >= 0 ? vehicles_[player_.vehicle].yaw : player_.yaw) - yaw;

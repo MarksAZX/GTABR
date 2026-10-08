@@ -374,6 +374,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
       if (--cap <= 0) break;
     }
   }
+  emitBirds();
   emitRain();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");

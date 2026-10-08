@@ -141,6 +141,16 @@ enum Milestone { kPgFueled = 0, kPgBought, kPgRepaired, kPgSwam, kPgArmed, kPgSh
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
+// City life (game_life.cpp): ambient birds and one dynamic street event at a time.
+struct Bird { Vec3 pos; Vec2 dir{1, 0}; float phase = 0, speed = 6, alt = 18, orbit = 30, t = 0; bool flying = true; Vec2 home; };
+struct CityEvent {
+  bool active = false;
+  int kind = 0;                 // 0 = traffic accident
+  Vec3 pos;
+  float t = 0, life = 240;
+  std::vector<int> vehicles, npcs;
+};
+
 // Per-actor animation inputs: a pending one-shot request (consumed), lying on the floor, held weapon.
 struct AnimIn { int* req = nullptr; float reqSpeed = 1; bool reqUpper = false, reqHold = false; bool lying = false; int weapon = 0;
                 bool airborne = false, dead = false, combat = false; float airPhase = 0; float rollPitch = 0; };
@@ -217,6 +227,9 @@ class Game {
   void runCode(int code);          // pause-menu codes (cheats), each with a real effect
   bool menuIsOpen() const { return menu_ != MenuState::None; }
   std::string locationName(Vec2 p, bool indoors) const;
+  bool shopOpen(int shopId) const;            // opening hours follow the in-game clock
+  std::string shopHoursLabel(int shopId) const;
+  float trafficFactor() const;                 // density multiplier by the hour
   bool loadSettings();
   bool saveSettings() const;
   void startFueling(int vehicleIdx, int pumpId, int amountCents /*0 = fill*/);
@@ -227,6 +240,8 @@ class Game {
   void openShopPanel(int shopId);
   void debugOpenNpcPanel(int idx) { openNpcPanel(idx); }   // tests / tooling
   void debugClosePanel() { closePanel(); }
+  void forceAccidentDebug() { startAccident(); }
+  bool cityEventActive() const { return cityEvent_.active; }
   void debugHurtPlayer(float amount, Vec2 dir) { DamageInfo d; d.type = DamageType::Unarmed; d.amount = amount; d.dir = dir; d.knockback = 1.0f; d.attacker = {ActorKind::Npc, 0}; applyDamage({ActorKind::Player, 0}, d); }
   float hitstopLeft() const { return hitstop_; }
   bool fightContext() const { return fightCtx_; }
@@ -260,6 +275,10 @@ class Game {
   void updateVehicles(float dt, const InputFrame& in);
   void updateInteractions(const InputFrame& in);
   void updateParticles(float dt);
+  void updateLife(float dt);        // birds, pedestrian separation, dynamic events (game_life.cpp)
+  void emitBirds();
+  void startAccident();
+  void endCityEvent();
   void updateAmbientFx(float dt);   // wind-blown leaves, dust motes in sunlight, exhaust of moving cars
   void updateAdaptiveQuality(float dt);
   void applySettings();
@@ -360,6 +379,10 @@ class Game {
   float locT_ = 0;
   int lastMoney_ = 0, moneyDelta_ = 0;   // floating +/- money feedback
   float moneyDeltaT_ = 0;
+  std::vector<Bird> birds_;
+  CityEvent cityEvent_;
+  float eventCooldown_ = 160.0f;
+  std::deque<std::string> recentLines_;   // last spoken lines (no repeats)
   float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit
   bool fightCtx_ = false;          // a fight is on: the jump button becomes dodge (tap) / block (hold)
   float strikePower_ = 1.0f;

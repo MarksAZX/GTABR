@@ -477,6 +477,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateWanted(dt);
   updatePolice(dt);
   updateTraffic(dt);
+  updateLife(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
   if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;
@@ -1017,6 +1018,7 @@ void Game::collectInteractables() {
       it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair";
       it.sub = d.toInterior && d.shop >= 0 && d.shop < (int)world_.shops.size() ? world_.shops[d.shop].name : "Voltar à rua";
       it.icon = "door";
+      if (d.toInterior && d.shop >= 0 && !shopOpen(d.shop)) { it.enabled = false; it.label = "Fechado"; it.sub = shopHoursLabel(d.shop); it.icon = "lock"; }
       add(it);
     }
     if (player_.indoors) {
@@ -1078,6 +1080,7 @@ void Game::activateInteractable(const Interactable& it) {
       const DoorDef* d = nullptr;
       for (const DoorDef& x : world_.doors) if (x.id == it.id) d = &x;
       if (!d) break;
+      if (!it.enabled) { toast("Fechado|" + it.sub, "lock", rgba(0.93f, 0.72f, 0.40f)); break; }
       DoorDef door = *d;
       fadeTarget_ = 1.0f;
       fadeThen_ = [this, door]() {

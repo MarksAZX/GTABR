@@ -25,7 +25,7 @@ void Game::spawnTraffic() {
   vehicles_.erase(std::remove_if(vehicles_.begin(), vehicles_.end(), [](const Vehicle& v) { return v.traffic; }), vehicles_.end());
   if (getenv("GTABR_NOTRAFFIC")) return;
   static const int kCount[4] = {4, 7, 10, 14};
-  int n = kCount[clamp(settings_.quality, 0, 3)];
+  int n = std::max(2, (int)std::lround(kCount[clamp(settings_.quality, 0, 3)] * trafficFactor()));
   for (int i = 0; i < n; ++i) spawnTrafficCar(false);
 }
 
@@ -197,9 +197,14 @@ void Game::updateTraffic(float dt) {
   }
   // refill: recycled / destroyed cars come back in a street 90-190 m away from the player
   static const int kCount[4] = {4, 7, 10, 14};
-  int target = kCount[clamp(settings_.quality, 0, 3)];
+  int target = std::max(2, (int)std::lround(kCount[clamp(settings_.quality, 0, 3)] * trafficFactor()));
   int live = 0;
   for (const Vehicle& v : vehicles_) if (v.traffic && !v.despawn) ++live;
+  // the density follows the clock: at night the surplus drives off the map (only cars the player cannot see)
+  if (live > target + 1) {
+    for (Vehicle& v : vehicles_)
+      if (v.traffic && !v.despawn && (v.pos - player_.pos).length() > 75.0f) { v.despawn = true; --live; break; }
+  }
   if (live < target && !player_.indoors) {
     trafficRespawnT_ -= dt;
     if (trafficRespawnT_ <= 0) {
