@@ -76,6 +76,7 @@ struct ModelAsset {
   uint32_t lodTris[3] = {};
   float animRootScale = 1.0f;
   float armDown[2] = {0, 0};        // idle: rotation (about Z) bringing the A-pose arms down
+  Mat4 restHand;                    // right-hand bone frame in the rest pose (weapon grips are authored against it)
   Mat4 rootFix;                     // maps the rig space (exporter units/axes) onto the mesh space
   // vehicles (model space)
   Vec3 wheel[4];
@@ -131,6 +132,7 @@ struct CharAnim {
   float aimPitch = 0;
   // right hand frame in model space for held weapons
   Vec3 handPos, handDir, handSide;
+  Mat4 handMat;                          // full right-hand bone frame in model space (weapons follow its rotation)
   bool handValid = false;
   float accum = 0;                       // reduced-rate update accumulator
   bool valid = false;

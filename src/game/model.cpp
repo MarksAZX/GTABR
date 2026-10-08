@@ -88,7 +88,7 @@ void rebuildSkinWeights(ModelAsset& m, const std::vector<Mat4>& g) {
   const Skeleton& sk = m.skel;
   size_t nb = sk.names.size();
   std::vector<Vec3> jp(nb);
-  for (size_t b = 0; b < nb; ++b) jp[b] = (m.rootFix * g[b]).transformPoint({0, 0, 0});
+  for (size_t b = 0; b < nb; ++b) jp[b] = inverseGeneral(sk.invBind[b]).transformPoint({0, 0, 0});   // bind position in mesh space
   std::vector<std::vector<int>> kids(nb);
   for (size_t b = 0; b < nb; ++b)
     if (sk.parent[b] >= 0) kids[sk.parent[b]].push_back((int)b);
@@ -233,6 +233,41 @@ bool loadModel(const std::string& path, ModelAsset& m) {
       Mat4 l = m.skel.rest[b].matrix();
       g[b] = m.skel.parent[b] >= 0 ? g[m.skel.parent[b]] * l : l;
     }
+    // The auto-rigger can deliver the skeleton turned about Y relative to the mesh (joints spread along one horizontal
+    // axis, the body along the other). Detect the turn from the shoulder span and the foot direction, and fold it into
+    // invBind so joint positions and hand frames live in the mesh frame.
+    {
+      auto rotY = [](float a) { Mat4 r; r.at(0, 0) = std::cos(a); r.at(0, 2) = std::sin(a); r.at(2, 0) = -std::sin(a); r.at(2, 2) = std::cos(a); return r; };
+      Mat4 rf0 = inverseGeneral(g[0] * m.skel.invBind[0]);
+      auto jpos = [&](const char* nm) { int i = m.skel.find(nm); return i < 0 ? Vec3{0, 0, 0} : (rf0 * g[i]).transformPoint({0, 0, 0}); };
+      Vec3 sl = jpos("LeftArm"), sr = jpos("RightArm");
+      float mx = 0, mz = 0;
+      for (const gfx::ModelVertex& v : m.verts)
+        if (v.p[1] > 0.55f * m.bounds.mx.y && v.p[1] < 0.8f * m.bounds.mx.y) { mx = std::max(mx, std::fabs(v.p[0])); mz = std::max(mz, std::fabs(v.p[2])); }
+      bool meshLateralX = mx > mz;
+      bool jointLateralX = std::fabs(sl.x - sr.x) > std::fabs(sl.z - sr.z);
+      float turn = 0;
+      if (meshLateralX != jointLateralX) {
+        // candidates +-90: choose the one whose foot direction (toe - foot) points to where the foot mesh extends
+        Vec3 fo = jpos("LeftFoot"), to = jpos("LeftToeBase");
+        Vec3 c{0, 0, 0};
+        for (const gfx::ModelVertex& v : m.verts)
+          if (v.p[1] < 0.07f && ((v.p[0] - fo.x) * (v.p[0] - fo.x) + (v.p[2] - fo.z) * (v.p[2] - fo.z)) < 0.12f) c = c + Vec3{v.p[0], 0, v.p[2]};
+        float best = -1e9f;
+        for (float a : {1.5707963f, -1.5707963f}) {
+          Mat4 r = rotY(a);
+          Vec3 f2 = r.transformPoint(fo), t2 = r.transformPoint(to);
+          // foot centroid direction from the ankle versus rotated toe direction
+          float sc = (t2.x - f2.x) * (c.x - f2.x) + (t2.z - f2.z) * (c.z - f2.z);
+          if (sc > best) { best = sc; turn = a; }
+        }
+      }
+      LOGI("%s: skeleton turn %.0f deg (mesh lateral %s, joints lateral %s)", path.c_str(), turn * 57.29578f, meshLateralX ? "x" : "z", jointLateralX ? "x" : "z");
+      if (turn != 0) {
+        Mat4 ri = rotY(-turn);
+        for (Mat4& ib : m.skel.invBind) ib = ib * ri;
+      }
+    }
     m.rootFix = inverseGeneral(g[0] * m.skel.invBind[0]);
     float worst = 0;
     for (size_t b = 0; b < g.size(); ++b) {
@@ -240,18 +275,47 @@ bool loadModel(const std::string& path, ModelAsset& m) {
       for (int i = 0; i < 16; ++i) worst = std::max(worst, std::fabs(p.m[i] - ((i % 5 == 0) ? 1.0f : 0.0f)));
     }
     LOGI("%s: rig fix residual %.4f", path.c_str(), worst);
-    rebuildSkinWeights(m, g);
-    // A-pose -> relaxed arms for the procedural idle
+    // The source mesh is an A-pose while the skeleton hangs. Re-bind each arm chain at the mesh's own arm angle (rotate its
+    // bind frames about the shoulder), so the rest pose is a true relaxed pose and the joints sit inside the arms.
     const char* arms[2][2] = {{"LeftArm", "LeftHand"}, {"RightArm", "RightHand"}};
     for (int s = 0; s < 2; ++s) {
       int a = m.skel.find(arms[s][0]), h2 = m.skel.find(arms[s][1]);
       if (a < 0 || h2 < 0) continue;
       Vec3 pa = (m.rootFix * g[a]).transformPoint({0, 0, 0}), ph = (m.rootFix * g[h2]).transformPoint({0, 0, 0});
       Vec3 v = ph - pa;
-      float phi = std::atan2(v.x, -v.y);
-      float target = (pa.x < 0 ? -0.10f : 0.10f);
-      m.armDown[s] = (target - phi) * 1.3f;
+      float phiSkel = std::atan2(v.x, -v.y);
+      std::vector<std::pair<float, int>> lat;
+      for (size_t i = 0; i < m.verts.size(); ++i) {
+        float x = m.verts[i].p[0];
+        if ((x < 0) == (pa.x < 0) && m.verts[i].p[1] > 0.35f * m.bounds.mx.y) lat.push_back({std::fabs(x), (int)i});
+      }
+      size_t k = std::min<size_t>(lat.size(), 40);
+      float phiMesh = phiSkel;
+      if (k > 8) {
+        std::partial_sort(lat.begin(), lat.begin() + k, lat.end(), [](auto& A, auto& B) { return A.first > B.first; });
+        Vec3 tip{0, 0, 0};
+        for (size_t i = 0; i < k; ++i) tip = tip + Vec3{m.verts[lat[i].second].p[0], m.verts[lat[i].second].p[1], m.verts[lat[i].second].p[2]};
+        tip = tip * (1.0f / k);
+        phiMesh = std::atan2(tip.x - pa.x, -(tip.y - pa.y));
+      }
+      float alpha = phiMesh - phiSkel;   // rotation about Z taking the hanging chain onto the mesh arm
+      Mat4 rz;
+      rz.at(0, 0) = std::cos(alpha); rz.at(0, 1) = -std::sin(alpha); rz.at(1, 0) = std::sin(alpha); rz.at(1, 1) = std::cos(alpha);
+      Mat4 R = Mat4::translation(pa) * rz * Mat4::translation(pa * -1.0f);
+      for (size_t bI = 0; bI < g.size(); ++bI) {
+        int q = (int)bI;
+        bool under = false;
+        while (q >= 0) { if (q == a) { under = true; break; } q = m.skel.parent[q]; }
+        if (!under) continue;
+        m.skel.invBind[bI] = inverseGeneral(R * m.rootFix * g[bI]);
+      }
+      LOGI("%s arm%d: skeleton %.2f rad, mesh %.2f rad (re-bound)", path.c_str(), s, phiSkel, phiMesh);
+      float target = (pa.x < 0 ? -0.12f : 0.12f);
+      (void)target;
+      m.armDown[s] = 0.0f;
     }
+    rebuildSkinWeights(m, g);
+    { int bh = m.skel.find("RightHand"); if (bh >= 0) m.restHand = m.rootFix * g[bh]; }
   }
   m.ok = !m.idx.empty();
   return m.ok;
@@ -633,6 +697,7 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     if (a.handValid) {
       Vec3 hp = global_[bh].transformPoint({0, 0, 0}), fp = global_[bf].transformPoint({0, 0, 0});
       a.handPos = hp;
+      a.handMat = global_[bh];
       a.handDir = (hp - fp).normalized();
       // the palm side: the hand bone's local axis that is most perpendicular to the forearm
       Vec3 ax = Vec3{global_[bh].m[0], global_[bh].m[1], global_[bh].m[2]}.normalized();

@@ -159,6 +159,31 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "lineup") {
+    // every character model side by side, idle and walking, seen up close from both cameras
+    b.idle(20);
+    const char* arch[7] = {"player", "policial", "frentista", "atendente", "mecanico", "vizinho", "mulher_vestido"};
+    Vec2 c = g.player().pos;
+    float yaw = g.camera().yaw();
+    Vec2 fwd{std::sin(yaw), -std::cos(yaw)}, rgt{std::cos(yaw), std::sin(yaw)};
+    int k = 0;
+    for (auto& n : g.npcs()) {
+      if (n.interior || n.police || k >= 6) continue;
+      n.archetype = arch[k + 1];
+      n.role = 0; n.stationary = true; n.state = NpcState::Idle; n.stateTimer = 1e6f; n.path.clear();
+      n.pos = c + fwd * 3.2f + rgt * (-5.0f + 2.0f * k);
+      n.yaw = yawFromDir(-fwd);
+      ++k;
+    }
+    g.toggleCamera();
+    b.idle(70);
+    b.shot("lineup_idle");
+    // walking: send them forward along the camera axis
+    for (auto& n : g.npcs()) if (!n.interior && !n.police && n.stationary) { n.stationary = false; n.state = NpcState::Walk; n.path = {n.pos + fwd * 25.0f}; n.pathIdx = 0; n.speed = 1.4f; n.stateTimer = 1e6f; }
+    b.idle(25);
+    b.shot("lineup_walk");
+    return 0;
+  }
   if (name == "crowd") {
     // pedestrian variety: gather everybody within reach in front of the camera
     b.idle(20);
@@ -819,6 +844,23 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       b.idle(40);
     }
     (void)p;
+    return 0;
+  }
+  if (name == "held") {
+    // weapons carried at rest, walking and mid-swing, to judge the grip against the hand bone
+    g.toggleCamera();
+    b.idle(50);
+    for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 60);
+    const int order[4] = {kWpnBat, kWpnCrowbar, kWpnPistol, kWpnShotgun};
+    for (int k = 0; k < 4; ++k) {
+      g.equipWeapon(order[k]);
+      b.idle(40);
+      b.shot(std::string("held_idle_") + weaponDef(order[k]).key);
+      InputFrame mv; mv.move = {0, -1};
+      b.step(mv, 18);
+      b.shot(std::string("held_walk_") + weaponDef(order[k]).key);
+      b.idle(30);
+    }
     return 0;
   }
   if (name == "char") {

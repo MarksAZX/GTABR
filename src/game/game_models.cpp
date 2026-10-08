@@ -185,31 +185,34 @@ void Game::emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, V
   // held weapon, attached to the right hand
   if (in.weapon > 0 && weaponMeshes_.ok && a.handValid && dist < 45.0f) {
     const bool gun = isFirearm(in.weapon);
-    Vec3 fwd, up;
-    if (gun && a.aim > 0.3f) {
-      fwd = Vec3{0, std::sin(a.aimPitch), -std::cos(a.aimPitch)};
-      up = {0, 1, 0};
-    } else if (gun) {
-      // lowered: barrel follows the forearm, pointing at the ground ahead
-      fwd = (a.handDir + Vec3{0, 0, -0.5f}).normalized();
-      up = Vec3{0, 0, -1}.cross(fwd).cross(fwd) * -1.0f;
-      if (up.lengthSq() < 1e-4f) up = {0, 1, 0};
-    } else {
-      // melee: the weapon extends the fist forward/up and swings with the forearm
-      fwd = (a.handDir * 0.55f + Vec3{0, 0.65f, 0} + Vec3{0, 0, -0.35f}).normalized();
-      up = a.handDir * -1.0f;
-    }
-    Vec3 z = fwd * -1.0f;   // weapon space: barrel along -Z
-    Vec3 x = up.cross(z);
-    if (x.lengthSq() < 1e-5f) x = Vec3{1, 0, 0};
-    x = x.normalized();
-    Vec3 y = z.cross(x).normalized();
     Mat4 w;
-    w.at(0, 0) = x.x; w.at(1, 0) = x.y; w.at(2, 0) = x.z;
-    w.at(0, 1) = y.x; w.at(1, 1) = y.y; w.at(2, 1) = y.z;
-    w.at(0, 2) = z.x; w.at(1, 2) = z.y; w.at(2, 2) = z.z;
-    Vec3 hp = a.handPos + a.handDir * 0.04f;
-    w.at(0, 3) = hp.x; w.at(1, 3) = hp.y; w.at(2, 3) = hp.z;
+    auto frameFrom = [](Vec3 tip, Vec3 upHint, Vec3 origin) {
+      // weapon space: barrel / blade along -Z, up +Y
+      Vec3 z = tip * -1.0f;
+      Vec3 x = upHint.cross(z);
+      if (x.lengthSq() < 1e-5f) x = Vec3{1, 0, 0};
+      x = x.normalized();
+      Vec3 y = z.cross(x).normalized();
+      Mat4 f;
+      f.at(0, 0) = x.x; f.at(1, 0) = x.y; f.at(2, 0) = x.z;
+      f.at(0, 1) = y.x; f.at(1, 1) = y.y; f.at(2, 1) = y.z;
+      f.at(0, 2) = z.x; f.at(1, 2) = z.y; f.at(2, 2) = z.z;
+      f.at(0, 3) = origin.x; f.at(1, 3) = origin.y; f.at(2, 3) = origin.z;
+      return f;
+    };
+    if (gun && a.aim > 0.3f) {
+      // aiming: the arm chain was rotated onto the aim direction, so the barrel simply follows that direction at the palm
+      Vec3 fwd{0, std::sin(a.aimPitch), -std::cos(a.aimPitch)};
+      w = frameFrom(fwd, {0, 1, 0}, a.handPos + a.handDir * 0.05f);
+    } else {
+      // held at the side: authored once against the rest-pose hand frame, then carried by the hand bone through every clip
+      // (idle sway, walk swing, punch / slash, hit reactions). Melee points forward and slightly down; a lowered gun likewise.
+      Vec3 restPalm = m.restHand.transformPoint({0, 0, 0}) + Vec3{0, -0.045f, 0};
+      float out = restPalm.x < 0 ? -1.0f : 1.0f;
+      Vec3 tip = gun ? Vec3{out * 0.10f, -0.35f, -0.93f} : Vec3{out * 0.28f, 0.22f, -0.93f};   // melee: raised a little and angled out of the body
+      Mat4 rest = frameFrom(tip.normalized(), {0, 1, 0}, restPalm);
+      w = a.handMat * inverseGeneral(m.restHand) * rest;
+    }
     gfx::ModelDraw wd;
     wd.model = weaponMeshes_.mesh[in.weapon];
     wd.material = weaponMeshes_.material;
