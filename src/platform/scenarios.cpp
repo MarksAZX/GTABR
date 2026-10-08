@@ -1400,6 +1400,17 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     const ShopDef* market = nullptr;
     for (const ShopDef& sh : W.shops) if (sh.kind == ShopKind::Mercado) market = &sh;
     CHECK(market != nullptr, "the city has a market");
+    {
+      // walk around the parked car first (it may sit between the driver door and the shop)
+      const Vehicle* cr = &g.vehicles()[0];
+      for (const Vehicle& v : g.vehicles()) if ((v.pos - g.player().pos).length() < (cr->pos - g.player().pos).length()) cr = &v;
+      const Vehicle& car = *cr;
+      Vec2 cp = car.pos, fw = fwd2(car.yaw), to = v2(market->door) - cp;
+      Vec2 side{-fw.y, fw.x};
+      if (side.dot(to) < 0) side = side * -1.0f;
+      Vec2 me = g.player().pos - cp;
+      if (side.dot(me) < 0) b.walkTo(cp + fw * (fw.dot(to) >= 0 ? 3.6f : -3.6f) + side * 0.5f, 0.6f, 200);
+    }
     CHECK(b.walkTo(v2(market->door), 0.7f, 500), "walked to the market door");
     b.idle(5);
     const Interactable* doorIt = nullptr;
