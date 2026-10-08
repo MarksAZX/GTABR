@@ -12,7 +12,8 @@ namespace {
 const char* kCharModels[] = {"protagonista", "frentista", "atendente", "pedestre_mulher", "mecanico", "pedestre_homem", "policial"};
 const char* kCarModels[] = {"compacto", "sedan", "picape", "viatura"};
 const char* kClipFiles[kClipCount] = {"data/models/anim_idle.ganim", "data/models/anim_walk.ganim", "data/models/anim_run.ganim",
-                                     "data/models/anim_swim.ganim", "data/models/anim_swimidle.ganim"};
+                                     "data/models/anim_swim.ganim", "data/models/anim_swimidle.ganim", "data/models/anim_combat.ganim",
+                                     "data/models/anim_die.ganim", "data/models/anim_turnl.ganim", "data/models/anim_turnr.ganim"};
 
 uint32_t hashId(uint32_t x) {
   x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
@@ -60,7 +61,11 @@ void Game::queueModels() {
     }
   clips_.resize(kClipCount);
   bool clipsOk = true;
-  for (int i = 0; i < kClipCount; ++i) clipsOk &= loadClip(kClipFiles[i], clips_[i]);
+  for (int i = 0; i < kClipCount; ++i) {
+    bool ok = loadClip(kClipFiles[i], clips_[i]);
+    if (i < kClipRequired) clipsOk &= ok;
+    else if (!ok) LOGW("optional clip %s missing (the graph falls back)", kClipFiles[i]);
+  }
   if (!clipsOk) { clips_.clear(); LOGE("animation clips missing - characters fall back to sprites"); }
   else {
     clips_.resize(kClipCount + kActCount);
@@ -149,6 +154,14 @@ void Game::emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, V
                          bool fullRate, Vec4 tint, const AnimIn& in) {
   if (!m.ok || !m.gpu.valid()) return;
   float dist = (pos - cam_.eye()).length();
+  // animation graph parameters for this frame
+  a.airborne = in.airborne; a.airPhase = in.airPhase; a.dead = in.dead; a.combat = in.combat;
+  if (dt > 1e-4f) {
+    float raw = clamp(wrapAngle(yaw - a.lastYaw) / dt, -8.0f, 8.0f);
+    a.turnRate += (raw - a.turnRate) * expDecay(12.0f, dt);
+  }
+  a.lastYaw = yaw;
+  if (in.dead && in.req) *in.req = -1;   // a dead body is owned by the graph (death clip held on its last frame)
   // gameplay animation requests (attacks, hits, falls, reloads...)
   if (in.req && *in.req >= 0) {
     animator_.play(a, *in.req, in.reqSpeed, in.reqUpper, in.reqHold);
@@ -156,7 +169,7 @@ void Game::emitCharacter(gfx::FrameData& fd, const ModelAsset& m, CharAnim& a, V
     fullRate = true;
   }
   // characters that came into view while lying down start in the final knocked-down pose
-  if (in.lying && a.action != kActKnockDown) {
+  if (in.lying && !in.dead && a.action != kActKnockDown) {
     animator_.play(a, kActKnockDown, 1.0f, false, true);
     a.actT = animator_.actionDuration(kActKnockDown);
     a.actW = 1.0f;
@@ -345,6 +358,8 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       ai.req = &player_.animReq; ai.reqSpeed = player_.animReqSpeed; ai.reqUpper = player_.animReqUpper; ai.reqHold = player_.animReqHold;
       ai.lying = player_.down && player_.animReq < 0 && a.action != kActKnockDown && player_.dead;
       ai.weapon = player_.weapon;
+      ai.airborne = player_.airborne; ai.airPhase = player_.airT / 0.836f; ai.dead = player_.dead;
+      ai.combat = (player_.weapon > 0 && !isFirearm(player_.weapon)) || player_.attackT >= 0 || player_.comboWindow > 0;
       if (m && visible(pos, 2.0f)) emitCharacter(fd, *m, a, pos, player_.yaw, 1.0f, player_.speed, dt, true, {0, 0, 0, 0}, ai);
       interactPulse_ = std::max(0.0f, interactPulse_ - dt);
     }
@@ -386,6 +401,8 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       ai.req = &nm.animReq; ai.reqSpeed = nm.animReqSpeed; ai.reqUpper = nm.animReqUpper; ai.reqHold = nm.animReqHold;
       ai.lying = (n.state == NpcState::Down || n.state == NpcState::Dead) && n.animReq < 0;
       ai.weapon = n.weapon;
+      ai.dead = n.state == NpcState::Dead;
+      ai.combat = n.state == NpcState::Fight && !isFirearm(n.weapon);
       a.talkTarget = (n.state == NpcState::Talk || n.state == NpcState::CallPolice) ? 1.0f : 0.0f;
       if (n.state == NpcState::Chat && a.action != kActChat && animator_.hasAction(kActChat)) animator_.play(a, kActChat, a.rateScale, true);
       if (n.state != NpcState::Chat && a.action == kActChat) animator_.stop(a);

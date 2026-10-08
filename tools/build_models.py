@@ -33,6 +33,8 @@ CLIPS = {"idle": "protagonista_idle.glb", "walk": "protagonista_walk.glb", "run"
          "punch": "protagonista_punch.glb", "kick": "protagonista_kick.glb", "hit": "protagonista_hit.glb",
          "knockdown": "protagonista_knockdown.glb", "standup": "protagonista_standup.glb", "slash": "protagonista_slash.glb",
          "reload": "protagonista_reload.glb", "chat": "protagonista_chat.glb", "jump": "protagonista_jump.glb",
+         "combat": "protagonista_combat.glb", "die": "protagonista_die.glb", "turnl": "protagonista_turnl.glb", "turnr": "protagonista_turnr.glb",
+         "hitgun": "protagonista_hitgun.glb", "swing": "protagonista_swing.glb",
          "swim": "protagonista_swim.glb", "swimidle": "protagonista_swimidle.glb"}
 
 

@@ -112,7 +112,7 @@ struct Player {
   bool entering = false, exiting = false;
   float hurtTimer = 0;
   float y = 0;
-  float air = 0, airV = 0;   // jump height above the ground and its vertical speed
+  float air = 0, airV = 0, airT = 0;   // jump height above the ground, its vertical speed and the time since take-off
   bool airborne = false;
   bool indoors = false;
   bool swimming = false;   // in deep water (sea): swim locomotion, no weapons, no cars

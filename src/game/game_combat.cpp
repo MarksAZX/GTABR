@@ -141,7 +141,7 @@ void Game::applyDamage(ActorRef target, const DamageInfo& d) {
       p.knockVel += d.dir * d.knockback;
       bool heavy = d.knockback > 3.5f || d.type == DamageType::RunOver;
       if (heavy && !p.down) { p.down = true; p.downT = 2.2f; p.attackT = -1; requestAnim(p, kActKnockDown, 1.4f, false, true); }
-      else if (!p.down) { p.hitStun = 0.35f; p.attackT = -1; requestAnim(p, kActHit, 1.6f, true); }
+      else if (!p.down) { p.hitStun = 0.35f; p.attackT = -1; requestAnim(p, d.type == DamageType::Bullet && animator_.hasAction(kActHitGun) ? kActHitGun : kActHit, d.type == DamageType::Bullet ? 2.0f : 1.6f, true); }
     }
     return;
   }
@@ -202,7 +202,7 @@ void Game::applyDamage(ActorRef target, const DamageInfo& d) {
     n.downT = d.type == DamageType::RunOver ? 4.0f : 2.4f;
     requestAnim(n, kActKnockDown, 1.4f, false, true);
   } else {
-    requestAnim(n, kActHit, 1.6f, true);
+    requestAnim(n, d.type == DamageType::Bullet && animator_.hasAction(kActHitGun) ? kActHitGun : kActHit, d.type == DamageType::Bullet ? 2.0f : 1.6f, true);
     // fight back or run: decided by personality, what hit us and who did it
     bool armedAttacker = d.type == DamageType::Bullet || (byPlayer && player_.weapon != kWpnFists);
     bool fightBack = n.police || (!armedAttacker && n.bravery > 0.55f) || (n.state == NpcState::Fight);
@@ -251,7 +251,9 @@ void Game::respawnPlayer() {
 // ------------------------------------------------------------------------------------------------ melee
 void Game::startMelee(ActorRef who, int kind) {
   // kind: 1 punch, 2 kick, 3 weapon swing; durations follow the clips (played faster for responsiveness)
-  int act = kind == 2 ? kActKick : (kind == 3 ? kActSlash : kActPunch);
+  int wid = who.kind == ActorKind::Player ? player_.weapon : (who.kind == ActorKind::Npc ? npcs_[who.index].weapon : 0);
+  bool blunt = weaponDef(wid).dmgType == DamageType::Blunt && animator_.hasAction(kActSwing);
+  int act = kind == 2 ? kActKick : (kind == 3 ? (blunt ? kActSwing : kActSlash) : kActPunch);
   float speed = kind == 2 ? 1.5f : (kind == 3 ? 1.35f : 2.2f);
   float dur = animator_.actionDuration(act) / speed;
   dur = clamp(dur, 0.35f, 1.1f);

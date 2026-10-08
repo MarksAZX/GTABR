@@ -458,15 +458,35 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   float vRun = run.groundSpeed > 1.0f ? run.groundSpeed : 3.6f;
   vWalk *= m.animRootScale;
   vRun *= m.animRootScale;
-  // 1D blend tree on the real ground speed
-  float tw[kClipCount] = {0, 0, 0, 0, 0};
-  bool canSwim = clips_->size() > kClipSwimIdle && (*clips_)[kClipSwim].frames > 1 && (*clips_)[kClipSwimIdle].frames > 1;
+  auto have = [&](int i) { return i < (int)clips_->size() && (*clips_)[i].frames > 1; };
+  bool canSwim = have(kClipSwim) && have(kClipSwimIdle);
+  // ---- animation graph, base layer: pick the state, start a timed cross-fade from a snapshot of the pose on a change
+  {
+    int want = (a.dead && have(kClipDie)) ? kStDead : ((a.airborne && hasAction(kActJump)) ? kStAir : ((a.swimming && canSwim) ? kStSwim : kStGround));
+    if (want != a.state) {
+      // fade lengths: quick into the air and into death, a calm one into / out of the water, a soft landing
+      static const float into[kStCount] = {0.18f, 0.40f, 0.08f, 0.14f};
+      a.prevState = a.state;
+      a.state = want;
+      a.stateT = 0;
+      a.fadeDur = (want == kStGround && a.prevState == kStAir) ? 0.16f : (want == kStGround && a.prevState == kStSwim ? 0.40f : into[want]);
+      a.fade = 0;
+      a.snapValid = a.valid;
+      if (a.snapValid) a.snap = a.lastPose;
+      else { a.fade = 1.0f; if (want == kStDead) a.stateT = 999.0f; }   // first sight of someone already dead: lie in the final pose
+    }
+    a.stateT += dt;
+    if (a.fade < 1.0f) a.fade = std::min(1.0f, a.fade + dt / std::max(0.02f, a.fadeDur));
+  }
+  // 1D blend tree on the real ground speed (a ready stance replaces the idle while armed / fighting)
+  float tw[kClipCount] = {};
+  const int idleI = (a.combat && have(kClipCombat)) ? kClipCombat : kClipIdle;
   if (a.swimming && canSwim) {
     // in deep water: tread water when still, swim stroke when moving
     float k = clamp(speed / 1.2f, 0.0f, 1.0f);
     tw[kClipSwimIdle] = 1 - k; tw[kClipSwim] = k;
-  } else if (speed < 0.08f) tw[kClipIdle] = 1;
-  else if (speed < vWalk) { float k = clamp((speed - 0.08f) / std::max(0.1f, vWalk * 0.55f), 0.0f, 1.0f); tw[kClipIdle] = 1 - k; tw[kClipWalk] = k; }
+  } else if (speed < 0.08f) tw[idleI] = 1;
+  else if (speed < vWalk) { float k = clamp((speed - 0.08f) / std::max(0.1f, vWalk * 0.55f), 0.0f, 1.0f); tw[idleI] = 1 - k; tw[kClipWalk] = k; }
   else { float k = clamp((speed - vWalk) / std::max(0.1f, vRun - vWalk), 0.0f, 1.0f); tw[kClipWalk] = 1 - k; tw[kClipRun] = k; }
   float blendRate = expDecay(9.0f, dt);
   float sum = 0;
@@ -484,6 +504,16 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   a.t[kClipWalk] = phase * walk.duration;
   a.t[kClipRun] = std::fmod(phase * 2.0f, 1.0f) * run.duration;   // the walk clip holds two full gait cycles
   a.t[kClipIdle] = std::fmod(a.t[kClipIdle] + dt * a.rateScale, (*clips_)[kClipIdle].duration);
+  if (have(kClipCombat)) a.t[kClipCombat] = std::fmod(a.t[kClipCombat] + dt * a.rateScale, (*clips_)[kClipCombat].duration);
+  // in-place turn steps: the lower body steps with the clip while the body yaws towards its target
+  {
+    float want = (std::fabs(a.turnRate) > 0.9f && speed < 0.35f && have(kClipTurnL) && have(kClipTurnR)) ? clamp(a.turnRate / 3.0f, -1.0f, 1.0f) : 0.0f;
+    a.turn += (want - a.turn) * expDecay(want != 0 ? 10.0f : 6.0f, dt);
+    if (std::fabs(a.turn) > 0.02f) {
+      int ti = a.turn > 0 ? kClipTurnL : kClipTurnR;
+      a.t[ti] = std::fmod(a.t[ti] + dt * (0.8f + 0.8f * std::fabs(a.turn)), (*clips_)[ti].duration);
+    }
+  }
   if (canSwim) {
     a.t[kClipSwim] = std::fmod(a.t[kClipSwim] + dt * clamp(0.6f + speed / 2.0f, 0.6f, 1.5f), (*clips_)[kClipSwim].duration);
     a.t[kClipSwimIdle] = std::fmod(a.t[kClipSwimIdle] + dt, (*clips_)[kClipSwimIdle].duration);
@@ -507,7 +537,10 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
       else a.actFading = true;
     }
     float target = a.actFading ? 0.0f : 1.0f;
-    a.actW += (target - a.actW) * expDecay(a.actFading ? 9.0f : 14.0f, dt);
+    // authored blend rates (1/s): snappy strikes and reactions, gentler gestures and get-ups
+    static const float kRateIn[kActCount] = {22, 20, 26, 12, 10, 18, 9, 6, 14, 26, 16};
+    static const float kRateOut[kActCount] = {12, 10, 10, 8, 8, 10, 8, 6, 9, 10, 9};
+    a.actW += (target - a.actW) * expDecay(a.actFading ? kRateOut[a.action] : kRateIn[a.action], dt);
     if (a.actFading && a.actW < 0.01f) { a.action = -1; a.actW = 0; }
   }
   if (a.prevAction >= 0) {
@@ -561,6 +594,37 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     first = false;
   }
   if (first) pose_ = sk.rest;
+  // graph states that own the whole body
+  if (a.state == kStAir && hasAction(kActJump) && (int)m.clipMap.size() > kClipCount + kActJump) {
+    const AnimClip& c = (*clips_)[kClipCount + kActJump];
+    samplePose(sk, c, m.clipMap[kClipCount + kActJump], clamp(a.airPhase, 0.0f, 0.999f) * c.duration, m.animRootScale, pose_);
+  } else if (a.state == kStDead && (int)clips_->size() > kClipDie && (*clips_)[kClipDie].frames > 1 && (int)m.clipMap.size() > kClipDie) {
+    const AnimClip& c = (*clips_)[kClipDie];
+    samplePose(sk, c, m.clipMap[kClipDie], std::min(a.stateT, c.duration - 1e-3f), m.animRootScale, pose_);
+  }
+  // timed cross-fade from the frozen snapshot of the previous state (eased)
+  if (a.fade < 1.0f && a.snapValid) {
+    float k = smootherstep(a.fade);
+    for (size_t b = 0; b < nb && b < a.snap.size(); ++b) {
+      pose_[b].t = lerp(a.snap[b].t, pose_[b].t, k);
+      pose_[b].r = nlerp(a.snap[b].r, pose_[b].r, k);
+      pose_[b].s = lerp(a.snap[b].s, pose_[b].s, k);
+    }
+  }
+  for (size_t b = 0; b < nb && b < a.lastPose.size(); ++b) a.lastPose[b] = pose_[b];
+  // in-place turn steps (legs only)
+  if (std::fabs(a.turn) > 0.02f && a.state == kStGround) {
+    int ti = a.turn > 0 ? kClipTurnL : kClipTurnR;
+    if ((int)m.clipMap.size() > ti) {
+      samplePose(sk, (*clips_)[ti], m.clipMap[ti], a.t[ti], m.animRootScale, tmp_);
+      float k = std::min(1.0f, std::fabs(a.turn) * 1.4f);
+      for (size_t b = 0; b < nb; ++b) {
+        const std::string& n = sk.names[b];
+        if (n.find("Leg") == std::string::npos && n.find("Foot") == std::string::npos && n.find("Toe") == std::string::npos) continue;
+        pose_[b].r = nlerp(pose_[b].r, tmp_[b].r, k);
+      }
+    }
+  }
   // action clips over locomotion (upper-body mask keeps the legs walking)
   auto upperBone = [&](size_t b) {
     const std::string& n = sk.names[b];

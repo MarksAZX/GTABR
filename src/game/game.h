@@ -139,7 +139,8 @@ enum Milestone { kPgFueled = 0, kPgBought, kPgRepaired, kPgSwam, kPgArmed, kPgSh
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
 // Per-actor animation inputs: a pending one-shot request (consumed), lying on the floor, held weapon.
-struct AnimIn { int* req = nullptr; float reqSpeed = 1; bool reqUpper = false, reqHold = false; bool lying = false; int weapon = 0; };
+struct AnimIn { int* req = nullptr; float reqSpeed = 1; bool reqUpper = false, reqHold = false; bool lying = false; int weapon = 0;
+                bool airborne = false, dead = false, combat = false; float airPhase = 0; };
 
 class Game {
  public:

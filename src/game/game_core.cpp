@@ -733,11 +733,12 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   if (in.jumpPressed && !p.airborne && !p.swimming && p.stamina > 8.0f && p.hitStun <= 0 && p.attackT < 0 && !p.down) {
     p.airborne = true;
     p.airV = 4.6f;
+    p.airT = 0.0f;
     p.stamina = std::max(0.0f, p.stamina - 8.0f);
-    requestAnim(p, kActJump, 2.25f, false, false);
     audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.18f);
   }
   if (p.airborne) {
+    p.airT += dt;
     p.air += p.airV * dt;
     p.airV -= 11.0f * dt;
     if (p.air <= 0.0f) { p.air = 0.0f; p.airV = 0.0f; p.airborne = false; audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.3f); }

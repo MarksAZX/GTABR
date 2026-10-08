@@ -891,6 +891,33 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(!g.player().airborne && g.player().air == 0.0f, "player lands again");
     return 0;
   }
+  if (name == "graph") {
+    // animation graph: death clip, ready stance, blunt swing, hit reaction and the jump arc
+    g.toggleCamera();
+    b.idle(40);
+    Vec2 c = g.player().pos;
+    int id = g.debugSpawnNpc("mecanico", c + Vec2{2.2f, 4.0f}, 0.0f, false);
+    b.idle(30);
+    for (auto& n : g.npcs()) if (n.id == id) n.state = NpcState::Dead;
+    b.idle(14); b.shot("graph_die_a");
+    b.idle(22); b.shot("graph_die_b");
+    b.idle(70); b.shot("graph_die_c");
+    for (int w = 1; w < kWeaponCount; ++w) g.giveWeapon(w, 30);
+    g.equipWeapon(kWpnBat);
+    b.idle(45); b.shot("graph_combat_idle");
+    InputFrame in; in.attackPressed = true; in.attackHeld = true;
+    b.step(in, 1); in.attackPressed = false;
+    b.step(in, 6); b.shot("graph_swing_a");
+    b.step(in, 8); b.shot("graph_swing_b");
+    b.idle(40);
+    InputFrame jin; jin.jumpPressed = true;
+    b.step(jin, 1);
+    b.idle(6); b.shot("graph_jump_a");
+    b.idle(10); b.shot("graph_jump_b");
+    b.idle(12); b.shot("graph_jump_c");
+    b.idle(20); b.shot("graph_landed");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

@@ -103,19 +103,35 @@ void buildWheelMesh(std::vector<gfx::ModelVertex>& v, std::vector<uint32_t>& idx
 // 256x128 albedo (left tyre, right rim) and matching ORM texture data.
 void buildWheelTextures(std::vector<uint8_t>& albedo, std::vector<uint8_t>& orm, uint32_t& w, uint32_t& h);
 
-enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipSwim = 3, kClipSwimIdle = 4, kClipCount = 5 };
+// Base clips: the first five are required, the rest are optional (the graph falls back when they are missing).
+enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipSwim = 3, kClipSwimIdle = 4, kClipCombat = 5, kClipDie = 6, kClipTurnL = 7, kClipTurnR = 8, kClipCount = 9, kClipRequired = 5 };
+// Base layer states of the animation graph.
+enum AnimState { kStGround = 0, kStSwim = 1, kStAir = 2, kStDead = 3, kStCount = 4 };
 // One-shot action clips (Meshy library, same skeleton), stored after the locomotion clips.
-enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActJump, kActCount };
+enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActJump, kActHitGun, kActSwing, kActCount };
 inline const char* actionFile(int a) {
-  static const char* k[kActCount] = {"punch", "kick", "hit", "knockdown", "standup", "slash", "reload", "chat", "jump"};
+  static const char* k[kActCount] = {"punch", "kick", "hit", "knockdown", "standup", "slash", "reload", "chat", "jump", "hitgun", "swing"};
   return k[a];
 }
 
 // Per-character animation state: locomotion blend tree (idle/walk/run by real speed, stride matched) plus
 // procedural layers applied in model space (talk gestures, reach/interact, refuel, crouch into a car, turn lean, head look).
 struct CharAnim {
-  float t[kClipCount] = {0, 0, 0, 0, 0};   // clip time (s)
-  float w[kClipCount] = {1, 0, 0, 0, 0};   // smoothed weights
+  float t[kClipCount] = {};                // clip time (s)
+  float w[kClipCount] = {1};               // smoothed weights of the ground / swim blend trees
+  // ---- animation graph (base layer): a state machine with timed cross-fades from a frozen snapshot of the previous pose
+  int state = kStGround, prevState = kStGround;
+  float stateT = 0;                        // seconds in the current state
+  float fade = 1, fadeDur = 0.2f;          // transition progress (1 = finished) and its duration
+  bool snapValid = false;
+  std::array<Xform, gfx::kMaxBones> lastPose;   // base pose of the previous evaluation (snapshot source)
+  std::array<Xform, gfx::kMaxBones> snap;       // pose frozen at the start of the current transition
+  // parameters written by the game every frame
+  bool airborne = false, dead = false, combat = false;
+  float airPhase = 0;                      // 0..1 through the jump arc (clip time follows the physics)
+  float turnRate = 0;                      // rad/s the body is turning (drives the in-place turn steps)
+  float turn = 0;                          // smoothed turn weight (signed)
+  float lastYaw = 0;                       // for the turn rate
   bool swimming = false;                   // locomotion uses the swim / tread-water clips
   float rateScale = 1.0f;                // per-NPC variation
   float talk = 0, reach = 0, refuel = 0, crouch = 0, wave = 0;
