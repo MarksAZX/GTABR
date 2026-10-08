@@ -1144,6 +1144,20 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     return 0;
   }
   if (name == "island") {
+    if (getenv("GTABR_NODES")) {
+      const World& W0 = g.world();
+      for (size_t i = 0; i < W0.rnodes.size(); ++i) {
+        const RoadNode& n = W0.rnodes[i];
+        if (std::fabs(n.p.x - 40) < 30 && std::fabs(n.p.y - 205) < 30) {
+          std::string ks; for (int e : n.edges) ks += std::to_string((int)W0.redges[e].kind) + "/" + std::to_string((int)W0.redges[e].pts.size()) + " ";
+          LOGI("node %zu at %.1f,%.1f edges %s", i, n.p.x, n.p.y, ks.c_str());
+        }
+      }
+      std::vector<int> ids; W0.queryColliders(30, 192, 46, 214, ids);
+      for (int id : ids) { const Collider& c = W0.colliders[id]; LOGI("col kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y); }
+      Vec2 q = W0.nearestRoadPointNet({37.8f, 199.9f}); LOGI("nearest road to stuck car: %.1f,%.1f landDist %.1f", q.x, q.y, W0.landDist(37.8f, 199.9f));
+      return true;
+    }
     // the island layout: map raster dump + views of the towns, a country road and the beach
     b.idle(20);
     const World& W = g.world();

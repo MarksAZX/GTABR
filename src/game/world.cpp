@@ -1984,7 +1984,23 @@ std::vector<Vec2> World::roadRoute(Vec2 a, Vec2 b) const {
       else for (size_t i = bi + 1; i-- > 0;) o.push_back(r.pts[i]);
     };
     if (ea == eb) {
+      // same edge: follow its polyline between the two points (a straight chord would cut through the bend)
+      const RoadEdge& r = redges[ea];
+      auto segOf = [&](Vec2 q) {
+        size_t bi = 0; float bd = 1e18f;
+        for (size_t i = 0; i + 1 < r.pts.size(); ++i) {
+          Vec2 s0 = r.pts[i], ab = r.pts[i + 1] - s0;
+          float L2 = ab.lengthSq();
+          float t = L2 > 1e-6f ? clamp((q - s0).dot(ab) / L2, 0.0f, 1.0f) : 0.0f;
+          float d = ((s0 + ab * t) - q).lengthSq();
+          if (d < bd) { bd = d; bi = i; }
+        }
+        return bi;
+      };
+      size_t ia = segOf(pa), ib = segOf(pb);
       out.push_back(pa);
+      if (ia < ib) for (size_t i = ia + 1; i <= ib; ++i) out.push_back(r.pts[i]);
+      else if (ib < ia) for (size_t i = ia; i > ib; --i) out.push_back(r.pts[i]);
       out.push_back(pb);
       out.push_back(b);
       return out;
