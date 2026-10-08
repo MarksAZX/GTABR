@@ -1,7 +1,8 @@
 #version 450
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
-layout(set = 1, binding = 2) uniform sampler2D uAo;   // r = ambient visibility, g = sky mask (half resolution)
+layout(set = 1, binding = 2) uniform sampler2D uAo;
+layout(set = 1, binding = 3) uniform sampler2D uDepth;   // scene depth (nearest)   // r = ambient visibility, g = sky mask (half resolution)
 layout(push_constant) uniform PC {
   vec4 a;      // x = wheel/menu blur, y = fade to black, z = vignette, w = sRGB target
   vec4 b;      // x = exposure, y = bloom strength, z = bloom threshold, w = time
@@ -9,6 +10,8 @@ layout(push_constant) uniform PC {
   vec4 gain;   // rgb gain (highlights), w = contrast
   vec4 fx;     // x = AO strength, y = light-shaft intensity, zw = sun position in uv
   vec4 sunCol; // rgb = shaft colour, w = unused
+  vec4 proj;   // near, far, tan(fov/2)*aspect, tan(fov/2)
+  vec4 refl;   // xyz = world up in the camera basis (x right, y down, z forward), w = wetness (0 = no reflections)
 } pc;
 layout(location = 0) in vec2 vUV;
 layout(location = 0) out vec4 outColor;
@@ -23,12 +26,61 @@ vec3 aces(vec3 v) {
   return clamp(o * (a / b), 0.0, 1.0);
 }
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+float linZ(float d) { return pc.proj.x * pc.proj.y / (pc.proj.y - d * (pc.proj.y - pc.proj.x)); }
+vec3 viewPos(vec2 uv, float z) { return vec3((uv.x * 2.0 - 1.0) * pc.proj.z * z, (uv.y * 2.0 - 1.0) * pc.proj.w * z, z); }
+
+// Screen-space reflection of the HDR scene on up-facing wet ground: march the mirrored view ray against the depth buffer.
+vec3 wetReflection(vec2 uv, float d, vec3 P) {
+  vec2 px = 1.0 / vec2(textureSize(uDepth, 0));
+  vec3 pr = viewPos(uv + vec2(px.x, 0), linZ(texture(uDepth, uv + vec2(px.x, 0)).r));
+  vec3 pl = viewPos(uv - vec2(px.x, 0), linZ(texture(uDepth, uv - vec2(px.x, 0)).r));
+  vec3 pu = viewPos(uv + vec2(0, px.y), linZ(texture(uDepth, uv + vec2(0, px.y)).r));
+  vec3 pd = viewPos(uv - vec2(0, px.y), linZ(texture(uDepth, uv - vec2(0, px.y)).r));
+  vec3 dx = abs(pr.z - P.z) < abs(P.z - pl.z) ? pr - P : P - pl;
+  vec3 dy = abs(pu.z - P.z) < abs(P.z - pd.z) ? pu - P : P - pd;
+  vec3 N = normalize(cross(dy, dx));
+  if (dot(N, -P) < 0.0) N = -N;
+  float upness = dot(N, pc.refl.xyz);
+  if (upness < 0.92) return vec3(0.0);
+  vec3 I = normalize(P);
+  vec3 R = reflect(I, N);
+  if (R.z <= 0.02) return vec3(0.0);            // towards the camera: nothing on screen to reflect
+  float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(-I, N), 0.0, 1.0), 5.0);
+  float step0 = 0.35 + 0.05 * P.z;                // metres per step, growing with distance
+  float jitter = hash(uv * vec2(1920.0, 1080.0) + pc.b.w);
+  vec3 pos = P;
+  float t = step0 * (0.4 + 0.6 * jitter);
+  for (int i = 0; i < 22; ++i) {
+    pos = P + R * t;
+    if (pos.z < pc.proj.x) break;
+    vec2 suv = vec2(pos.x / (pos.z * pc.proj.z), pos.y / (pos.z * pc.proj.w)) * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
+    float sd = texture(uDepth, suv).r;
+    if (sd < 0.99999) {
+      float sz = linZ(sd);
+      float diff = pos.z - sz;
+      if (diff > 0.0 && diff < 0.5 + 0.12 * pos.z) {
+        vec3 col = texture(uScene, suv).rgb;
+        vec2 e = abs(suv - 0.5) * 2.0;
+        float edge = 1.0 - smoothstep(0.78, 1.0, max(e.x, e.y));
+        float fade = 1.0 - float(i) / 22.0;
+        return min(col, vec3(24.0)) * fres * edge * fade * pc.refl.w;
+      }
+    }
+    t += step0 * (1.0 + 0.12 * float(i));
+  }
+  return vec3(0.0);
+}
 
 void main() {
   // lens: slight chromatic aberration towards the edges (cheap, only 2 extra taps of the scene)
   vec2 qc = vUV - 0.5;
   vec2 ca = qc * (0.0016 * dot(qc, qc) * 4.0);
   vec3 hdr = vec3(texture(uScene, vUV + ca).r, texture(uScene, vUV).g, texture(uScene, vUV - ca).b);
+  if (pc.refl.w > 0.02) {
+    float dd = texture(uDepth, vUV).r;
+    if (dd < 0.99999) hdr += wetReflection(vUV, dd, viewPos(vUV, linZ(dd)));
+  }
   // ambient occlusion: darkens crevices and contact areas, less on bright direct light (it only models ambient)
   float ao = texture(uAo, vUV).r;
   float lum0 = dot(hdr, vec3(0.2126, 0.7152, 0.0722));

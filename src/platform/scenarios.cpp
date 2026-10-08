@@ -970,6 +970,29 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     }
     return 0;
   }
+  if (name == "wetroad") {
+    // rainy night on an avenue: wet asphalt reflecting lamps, signs and cars
+    const World& w = g.world();
+    Vec2 at{0, 0};
+    float bestD = 1e9f;
+    for (const RoadLine& rl : w.roads) {
+      float mid = (rl.a + rl.b) * 0.5f;
+      Vec2 pt = rl.horizontal ? Vec2{mid, rl.c} : Vec2{rl.c, mid};
+      float dd = (pt - g.player().pos).length();
+      if (dd < bestD && rl.avenue) { bestD = dd; at = pt; }
+    }
+    g.teleportPlayer(at, 0.0f);
+    g.toggleCamera();
+    g.setTimeOfDay(21.0f, 0.0f);
+    g.setWeatherMode(3);
+    b.idle(300);
+    b.shot("wetroad_a");
+    InputFrame in; in.look = {200.0f, 0};
+    b.step(in, 12);
+    b.idle(20);
+    b.shot("wetroad_b");
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

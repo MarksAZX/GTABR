@@ -32,6 +32,7 @@ struct Settings {
   bool shadows = true;
   float drawDistance = 1.0f;   // multiplies the preset draw distance (props, NPCs, vehicles, HLOD switch)
   bool bloom = true;
+  bool reflections = true;   // screen-space reflections on wet ground (Alto / Ultra)
   bool weatherFx = true;       // rain streaks / splashes (the weather itself still affects light and ground)
   float brightness = 1.0f;     // exposure multiplier
   bool showFps = false;

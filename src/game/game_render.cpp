@@ -196,6 +196,11 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   fd.tanHalfX = fd.tanHalfY * aspect;
   fd.aoStrength = qp.ao * (1.0f - 0.5f * ind);
   fd.aoRadius = 0.9f;
+  fd.wetness = (settings_.reflections && qp.ao > 0.0f) ? wetness_ * (1.0f - ind) : 0.0f;
+  {
+    Vec3 U{0, 1, 0};
+    fd.upView = {U.dot(cam_.right()), -U.dot(cam_.up()), U.dot(cam_.forward())};
+  }
   {
     // the sun on screen: project a far point along the sun direction
     Vec3 sp = cam_.eye() + L * 2000.0f;

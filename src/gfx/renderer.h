@@ -139,6 +139,9 @@ struct FrameData {
   // screen-space AO + volumetric light shafts (both need the scene depth)
   float nearZ = 1.0f, farZ = 520.0f, tanHalfX = 1.0f, tanHalfY = 0.5f;
   float aoStrength = 0.0f, aoRadius = 0.9f;        // 0 = pass skipped
+  // screen-space reflections on wet ground
+  float wetness = 0.0f;                            // 0 = pass skipped
+  Vec3 upView{0, 1, 0};                            // world up expressed in the camera basis (x right, y screen-down, z forward)
   float shaftIntensity = 0.0f;                     // 0 = no light shafts
   Vec2 sunUV{0.5f, 0.0f};
   Vec3 shaftColor{1.0f, 0.85f, 0.6f};
@@ -281,7 +284,7 @@ class Renderer {
   // descriptors / pipelines
   VkDescriptorPool pool_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout layoutGlobalsA_ = VK_NULL_HANDLE, layoutGlobalsB_ = VK_NULL_HANDLE, layoutEmpty_ = VK_NULL_HANDLE,
-                        layoutTex_ = VK_NULL_HANDLE, layoutTex2_ = VK_NULL_HANDLE, layoutTex3_ = VK_NULL_HANDLE,
+                        layoutTex_ = VK_NULL_HANDLE, layoutTex2_ = VK_NULL_HANDLE, layoutTex3_ = VK_NULL_HANDLE, layoutTex4_ = VK_NULL_HANDLE,
                         layoutBones_ = VK_NULL_HANDLE;
   VkPipelineLayout plWorld_ = VK_NULL_HANDLE, plSprite_ = VK_NULL_HANDLE, plShadow_ = VK_NULL_HANDLE, plMesh_ = VK_NULL_HANDLE,
                    plUi_ = VK_NULL_HANDLE, plBlur_ = VK_NULL_HANDLE, plComposite_ = VK_NULL_HANDLE, plAo_ = VK_NULL_HANDLE;

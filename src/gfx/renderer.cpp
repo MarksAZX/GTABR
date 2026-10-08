@@ -93,6 +93,10 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   layoutTex3_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
                           {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
                           {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+  layoutTex4_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                          {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutBones_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT, nullptr}});
 
   auto mkPl = [&](std::vector<VkDescriptorSetLayout> sets, uint32_t pcSize, VkShaderStageFlags pcStages) {
@@ -111,7 +115,7 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex3_}, 96, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutEmpty_, layoutTex4_}, 128, VK_SHADER_STAGE_FRAGMENT_BIT);
   plAo_ = mkPl({layoutEmpty_, layoutTex2_}, 32, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
@@ -233,7 +237,7 @@ void Renderer::shutdown() {
   for (auto p : pipes) if (p) vkDestroyPipeline(dev, p, nullptr);
   VkPipelineLayout pls[] = {plWorld_, plSprite_, plShadow_, plMesh_, plUi_, plBlur_, plComposite_, plAo_};
   for (auto p : pls) if (p) vkDestroyPipelineLayout(dev, p, nullptr);
-  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_, layoutTex3_, layoutBones_};
+  VkDescriptorSetLayout dls[] = {layoutGlobalsA_, layoutGlobalsB_, layoutEmpty_, layoutTex_, layoutTex2_, layoutTex3_, layoutTex4_, layoutBones_};
   for (auto l : dls) if (l) vkDestroyDescriptorSetLayout(dev, l, nullptr);
   for (auto m : shaderModules_) vkDestroyShaderModule(dev, m, nullptr);
   VkRenderPass rps[] = {shadowPass_, scenePass_, blurPass_, compositePass_, aoPass_};
@@ -871,8 +875,10 @@ void Renderer::createRenderTargets() {
     aoBlurSet_ = allocSet(layoutTex2_, {depthInfo, VkDescriptorImageInfo{lin, aoA_.view, RO}});
   }
   // composite set: scene + final blurred level + AO / sky mask
-  compositeSet_ = allocSet(layoutTex3_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
-                                         VkDescriptorImageInfo{lin, aoB_.view, RO}});
+  VkDescriptorImageInfo depthSample = aoSupported_ ? VkDescriptorImageInfo{nearS, sceneDepth_.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}
+                                                   : VkDescriptorImageInfo{lin, aoB_.view, RO};
+  compositeSet_ = allocSet(layoutTex4_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
+                                         VkDescriptorImageInfo{lin, aoB_.view, RO}, depthSample});
 }
 
 void Renderer::bindProbeSets() {
@@ -1367,13 +1373,15 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
-    float pcv[24] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
+    float pcv[32] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
                      fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,
                      fd.globals.camPos.w,
                      fd.lift.x, fd.lift.y, fd.lift.z, fd.lift.w, fd.gain.x, fd.gain.y, fd.gain.z, fd.gain.w,
                      doAo ? fd.aoStrength : 0.0f, doAo ? fd.shaftIntensity : 0.0f, fd.sunUV.x, fd.sunUV.y,
-                     fd.shaftColor.x, fd.shaftColor.y, fd.shaftColor.z, 0.0f};
-    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 96, pcv);
+                     fd.shaftColor.x, fd.shaftColor.y, fd.shaftColor.z, 0.0f,
+                     fd.nearZ, fd.farZ, fd.tanHalfX, fd.tanHalfY,
+                     fd.upView.x, fd.upView.y, fd.upView.z, aoSupported_ ? fd.wetness : 0.0f};
+    vkCmdPushConstants(cb, plComposite_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 128, pcv);
     vkCmdDraw(cb, 3, 1, 0, 0);
     if (!fd.uiBatches.empty()) {
       float upc[4] = {(float)outW_, (float)outH_, outIsSrgb_ ? 1.0f : 0.0f, 0};
