@@ -211,6 +211,10 @@ class Game {
   void setupGlobals(gfx::FrameData& fd);
  public:
   void setTimeOfDay(float h, float rate) { timeOfDay_ = h; dayRate_ = rate; }
+  void setWeatherMode(int mode);
+  int weatherMode() const { return weatherMode_; }
+  float rainAmount() const { return rain_; }
+  float wetness() const { return wetness_; }
   float timeOfDay() const { return timeOfDay_; }
   void setQuality(int q) { settings_.quality = q; applySettings(); }
  private:
@@ -250,7 +254,7 @@ class Game {
   gfx::TexHandle mapTex_;
   float mapExtent_ = 96.0f;
   uint32_t worldSeed_ = 1;      // seed of the current city (saved per slot)
-  float lodDistance_ = 110.0f;  // chunks farther than this draw their HLOD mesh
+  float lodDistance_ = 1e9f;  // chunks farther than this draw their HLOD mesh
   CameraRig cam_;
   InputSystem input_;
   InputFrame scripted_;
@@ -338,6 +342,11 @@ class Game {
   float dayRate_ = 1.0f / 60.0f; // game hours per real second (a full day in 24 minutes)
   float cloudCover_ = 0.42f;
   float wetness_ = 0.0f;
+  // weather (see game_weather.cpp)
+  int weatherMode_ = 0;           // 0 automatic, 1 clear, 2 rain, 3 storm
+  float weatherTarget_ = 0.0f, rain_ = 0.0f, wind_ = 0.3f, weatherTimer_ = 90.0f, flash_ = 0.0f, flashTimer_ = 8.0f, thunderIn_ = 0.0f;
+  int rainHandle_ = 0;
+  Rng wRng_{0xBADC0FFEE0DDF00Dull};   // weather has its own stream so it never perturbs gameplay randomness
   DayLighting day_;
   Vec3 shadowFocus_;
   float shadowRadius_ = 70.0f;
@@ -356,6 +365,9 @@ class Game {
   int archIndex(const std::string& a) const;
   void buildSpriteTables();
   float pitchHighWeight() const;
+  void updateWeather(float dt);
+  void applyWeatherToLighting(DayLighting& d) const;
+  void emitRain();
   void addSprite(const SpriteDef* d, Vec3 pos, float scale, float alpha, bool mirror, uint32_t rgb, bool silhouette, bool secondary,
                  float emissive = 0.0f);
   // ---- combat (game_combat.cpp)
@@ -423,6 +435,7 @@ class Game {
   float lastReportT_ = -100.0f, lastReportSev_ = 0;
   Vec2 lastReportPos_;
   int sirenHandle_ = 0;
+  int surfHandle_ = 0;   // ambient breaking waves near the coast
   float deathT_ = 0;
   float slowMo_ = 1.0f;
   float muzzleT_ = 0;

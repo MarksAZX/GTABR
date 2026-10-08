@@ -384,7 +384,7 @@ void Game::updatePlayerAttack(float dt, const InputFrame& in) {
   p.comboWindow = std::max(0.0f, p.comboWindow - dt);
   p.aimHold = std::max(0.0f, p.aimHold - dt);
   p.hitStun = std::max(0.0f, p.hitStun - dt);
-  if (p.dead || p.vehicle >= 0 || p.entering || p.exiting || p.down) { p.attackT = -1; p.reloadT = -1; p.aimHold = 0; return; }
+  if (p.dead || p.vehicle >= 0 || p.entering || p.exiting || p.down || p.swimming) { p.attackT = -1; p.reloadT = -1; p.aimHold = 0; return; }
   const WeaponDef& w = weaponDef(p.weapon);
   const bool firearm = w.magazine > 0;
 

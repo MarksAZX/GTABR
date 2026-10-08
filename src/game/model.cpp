@@ -390,8 +390,13 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   vWalk *= m.animRootScale;
   vRun *= m.animRootScale;
   // 1D blend tree on the real ground speed
-  float tw[kClipCount] = {0, 0, 0};
-  if (speed < 0.08f) tw[kClipIdle] = 1;
+  float tw[kClipCount] = {0, 0, 0, 0, 0};
+  bool canSwim = clips_->size() > kClipSwimIdle && (*clips_)[kClipSwim].frames > 1 && (*clips_)[kClipSwimIdle].frames > 1;
+  if (a.swimming && canSwim) {
+    // in deep water: tread water when still, swim stroke when moving
+    float k = clamp(speed / 1.2f, 0.0f, 1.0f);
+    tw[kClipSwimIdle] = 1 - k; tw[kClipSwim] = k;
+  } else if (speed < 0.08f) tw[kClipIdle] = 1;
   else if (speed < vWalk) { float k = clamp((speed - 0.08f) / std::max(0.1f, vWalk * 0.55f), 0.0f, 1.0f); tw[kClipIdle] = 1 - k; tw[kClipWalk] = k; }
   else { float k = clamp((speed - vWalk) / std::max(0.1f, vRun - vWalk), 0.0f, 1.0f); tw[kClipWalk] = 1 - k; tw[kClipRun] = k; }
   float blendRate = expDecay(9.0f, dt);
@@ -410,6 +415,10 @@ void Animator::update(CharAnim& a, const ModelAsset& m, float speed, float dt, b
   a.t[kClipWalk] = phase * walk.duration;
   a.t[kClipRun] = std::fmod(phase * 2.0f, 1.0f) * run.duration;   // the walk clip holds two full gait cycles
   a.t[kClipIdle] = std::fmod(a.t[kClipIdle] + dt * a.rateScale, (*clips_)[kClipIdle].duration);
+  if (canSwim) {
+    a.t[kClipSwim] = std::fmod(a.t[kClipSwim] + dt * clamp(0.6f + speed / 2.0f, 0.6f, 1.5f), (*clips_)[kClipSwim].duration);
+    a.t[kClipSwimIdle] = std::fmod(a.t[kClipSwimIdle] + dt, (*clips_)[kClipSwimIdle].duration);
+  }
   // procedural layers ease toward their targets
   float lr = expDecay(7.0f, dt);
   a.talk += (a.talkTarget - a.talk) * lr;

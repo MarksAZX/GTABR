@@ -106,6 +106,7 @@ struct Player {
   float hurtTimer = 0;
   float y = 0;
   bool indoors = false;
+  bool swimming = false;   // in deep water (sea): swim locomotion, no weapons, no cars
   int weapon = 0;          // equipped WeaponId
   // ---- combat
   bool owned[kWeaponCount] = {true};

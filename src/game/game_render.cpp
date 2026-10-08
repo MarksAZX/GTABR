@@ -130,6 +130,7 @@ void Game::setupGlobals(gfx::FrameData& fd) {
 
   // ---- time of day
   day_ = computeDayLighting(timeOfDay_, cloudCover_);
+  applyWeatherToLighting(day_);
   sunDir_ = day_.sunDir;
   const QualityPreset& qp = preset();
   float ind = indoorBlend_;
@@ -321,6 +322,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
       }
     }
   }
+  emitRain();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");
   if (dot.valid) {

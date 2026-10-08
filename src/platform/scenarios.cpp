@@ -143,6 +143,104 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if (name == "tour") {
+    // visual review of the city: a handful of representative spots from both cameras
+    const World& W = g.world();
+    struct Spot { const char* tag; Vec2 pos; float yaw; };
+    std::vector<Spot> spots;
+    spots.push_back({"spawn", {W.spawnPlayer.x, W.spawnPlayer.z}, W.spawnYaw});
+    spots.push_back({"posto", {W.poiGas.x, W.poiGas.z + 4}, 0});
+    spots.push_back({"mercado", {W.poiMarketDoor.x, W.poiMarketDoor.z - 3}, 0});
+    Vec2 c{0, 0};
+    for (const auto& bl : W.blocks) if (bl.second == District::Centro) { c = {bl.first.cx(), bl.first.z0 + 1.2f}; break; }
+    spots.push_back({"centro", c, 0});
+    for (const auto& bl : W.blocks) if (bl.second == District::Residencial) { spots.push_back({"residencial", {bl.first.cx(), bl.first.z1 - 1.2f}, kPi}); break; }
+    for (const auto& bl : W.blocks) if (bl.second == District::Industrial) { spots.push_back({"industrial", {bl.first.cx(), bl.first.z1 - 1.2f}, kPi}); break; }
+    spots.push_back({"avenida", W.nearestRoadPoint({W.spawnPlayer.x + 40, W.spawnPlayer.z + 40}), 0});
+    b.idle(20);
+    for (const Spot& sp : spots) {
+      g.teleportPlayer(sp.pos, sp.yaw);
+      b.idle(25);
+      b.shot(std::string("tour_") + sp.tag + "_topdown");
+      g.toggleCamera();
+      b.idle(50);
+      b.shot(std::string("tour_") + sp.tag + "_third");
+      g.toggleCamera();
+      b.idle(35);
+    }
+    return 0;
+  }
+  if (name == "weather") {
+    // rain and storm: grey light, wet ground with puddles, falling drops, wind and lightning
+    b.idle(20);
+    g.setTimeOfDay(15.0f, 0.0f);
+    g.setWeatherMode(3);
+    b.idle(240);
+    CHECK(g.rainAmount() > 0.5f, "the weather turned to rain");
+    CHECK(g.wetness() > 0.3f, "the ground is getting wet");
+    b.shot("rain_topdown");
+    g.toggleCamera();
+    b.idle(60);
+    b.shot("rain_third");
+    for (int i = 0; i < 90; ++i) b.idle(1);
+    b.shot("rain_third2");
+    g.setTimeOfDay(21.5f, 0.0f);
+    b.idle(30);
+    b.shot("rain_night");
+    g.setWeatherMode(1);
+    b.idle(900);
+    CHECK(g.rainAmount() < 0.2f, "the weather cleared");
+    return g_failures;
+  }
+  if (name == "swim") {
+    // walk from the sand into the sea: the player must switch to swimming, move slower and come back out
+    const World& W = g.world();
+    if (W.coastSide < 0) { LOGW("this seed has no coast"); return 0; }
+    Vec2 out = W.coastSide == 0 ? Vec2{0, -1} : (W.coastSide == 1 ? Vec2{1, 0} : (W.coastSide == 2 ? Vec2{0, 1} : Vec2{-1, 0}));
+    Vec2 start{W.poiBeach.x, W.poiBeach.z};
+    g.teleportPlayer(start, yawFromDir(out));
+    b.idle(10);
+    CHECK(!g.player().swimming, "on the sand the player walks");
+    CHECK(b.walkTo(start + out * 30.0f, 1.0f, 900), "walked into the sea");
+    CHECK(g.player().swimming, "deep water switches to swimming");
+    CHECK(g.world().waterDepth(g.player().pos.x, g.player().pos.y) > 1.2f, "water depth detected under the player");
+    float maxSwim = 0;
+    InputFrame in; in.move = {0, 1};
+    for (int i = 0; i < 60; ++i) { b.step(in, 1); maxSwim = std::max(maxSwim, g.player().speed); }
+    LOGI("swim speed %.2f m/s, y %.2f", maxSwim, g.player().y);
+    CHECK(maxSwim < 2.0f && maxSwim > 0.8f, "swimming is slower than walking");
+    g.toggleCamera();
+    b.idle(45);
+    b.shot("swim_third");
+    g.toggleCamera();
+    b.idle(45);
+    b.shot("swim_topdown");
+    in = InputFrame(); in.enterExitPressed = true; b.step(in, 1); b.idle(10);
+    CHECK(g.player().vehicle < 0, "cannot get into a car while swimming");
+    CHECK(b.walkTo(start, 1.0f, 1500), "swam back to the beach");
+    CHECK(!g.player().swimming, "back on the sand the player walks again");
+    return g_failures;
+  }
+  if (name == "beach") {
+    // visual review of the coast: sand, promenade, sea, waves and foam (morning / sunset / night)
+    const World& W = g.world();
+    if (W.coastSide < 0) { LOGW("this seed has no coast"); return 0; }
+    float yawSea = W.coastSide == 0 ? 0.0f : (W.coastSide == 1 ? kPi * 0.5f : (W.coastSide == 2 ? kPi : -kPi * 0.5f));
+    g.teleportPlayer({W.poiBeach.x, W.poiBeach.z}, yawSea);
+    const float hours[3] = {10.0f, 17.8f, 21.5f};
+    const char* tags[3] = {"dia", "por_do_sol", "noite"};
+    for (int i = 0; i < 3; ++i) {
+      g.setTimeOfDay(hours[i], 0.0f);
+      b.idle(20);
+      b.shot(std::string("beach_") + tags[i] + "_topdown");
+      g.toggleCamera();
+      b.idle(50);
+      b.shot(std::string("beach_") + tags[i] + "_third");
+      g.toggleCamera();
+      b.idle(40);
+    }
+    return 0;
+  }
   if (name == "start") {
     b.idle(40);
     b.shot("01_topdown");
@@ -286,13 +384,26 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       Vec2 tgt = p.pos; float bd = 1e9f;
       for (const Npc& c : g.npcs()) if (c.police && !c.despawn && c.state != NpcState::Dead && (c.pos - p.pos).length() < bd) { bd = (c.pos - p.pos).length(); tgt = c.pos; }
       for (const Vehicle& v : g.vehicles()) if (v.police && !v.despawn && (v.pos - p.pos).length() < bd) { bd = (v.pos - p.pos).length(); tgt = v.pos; }
-      if (bd > 14.0f && bd < 1e8f) {
+      if (bd < 1e8f && (bd > 30.0f || bd < 8.0f)) {
+        // close in when far, back off when they run at us
         float yaw = g.camera().yaw();
         Vec2 f{std::sin(yaw), -std::cos(yaw)}, rt{std::cos(yaw), std::sin(yaw)}, n = (tgt - p.pos).normalized();
+        if (bd < 8.0f) n = n * -1.0f;
         InputFrame mv; mv.move = {n.dot(rt), n.dot(f)}; mv.runHeld = true;
         b.step(mv, 1);
+      } else if (bd < 1e8f) {
+        b.attackToward(tgt, 1, true);   // armed stand-off: the officers answer a drawn firearm with fire
       } else b.idle(1);
       ++frames;
+      if (frames < 600 && frames % 30 == 0) {
+        int armed = 0, pistols = g.audio().playedCount("pistol");
+        for (const Npc& c : g.npcs()) if (c.police && !c.despawn && c.weapon != kWpnFists && c.weapon != kWpnBaton) ++armed;
+        LOGI("  f=%d hp %.0f dead %d wanted %d cops %d armed %d pistolSounds %d nearest %.1f", frames, p.health, (int)p.dead, g.wantedLevel(), g.aliveCops(), armed, pistols, bd);
+      }
+      if (frames % 450 == 0) {
+        LOGI("  t=%ds wanted %d player %.0f,%.0f hp %.0f cops %d chasing %d nearest %.0f m", frames / 30, g.wantedLevel(), p.pos.x, p.pos.y, p.health, g.aliveCops(), g.copsChasing(), bd);
+        for (const Vehicle& v : g.vehicles()) if (v.police && !v.despawn) LOGI("    car %.0f,%.0f spd %.1f siren %d tgt %.0f,%.0f", v.pos.x, v.pos.y, v.speed, (int)v.siren, v.aiTarget.x, v.aiTarget.y);
+      }
     }
     LOGI("player health %.0f -> %.0f (dead %d) after %.1f s of police response, cops %d", h0, p.health, (int)p.dead, frames / 30.0f, g.aliveCops());
     CHECK(g.audio().playedCount("pistol") > 0, "police fired their weapons");

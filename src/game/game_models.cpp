@@ -11,7 +11,8 @@ namespace gtabr {
 namespace {
 const char* kCharModels[] = {"protagonista", "frentista", "atendente", "pedestre_mulher", "mecanico", "pedestre_homem", "policial"};
 const char* kCarModels[] = {"compacto", "sedan", "picape", "viatura"};
-const char* kClipFiles[kClipCount] = {"data/models/anim_idle.ganim", "data/models/anim_walk.ganim", "data/models/anim_run.ganim"};
+const char* kClipFiles[kClipCount] = {"data/models/anim_idle.ganim", "data/models/anim_walk.ganim", "data/models/anim_run.ganim",
+                                     "data/models/anim_swim.ganim", "data/models/anim_swimidle.ganim"};
 
 uint32_t hashId(uint32_t x) {
   x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16;
@@ -330,6 +331,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       const ModelAsset* m = modelForArchetype("player", 0);
       Vec3 pos{player_.pos.x, player_.y, player_.pos.y};
       CharAnim& a = playerAnim_;
+      a.swimming = player_.swimming;
       a.refuelTarget = fueling_.active ? 1.0f : 0.0f;
       a.talkTarget = (panel_.open && !panel_.portrait.empty() && !fueling_.active) ? 0.6f : 0.0f;
       a.reachTarget = interactPulse_ > 0 ? 1.0f : 0.0f;
@@ -445,7 +447,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     Vec3 d = L.dir.lengthSq() > 1e-4f ? L.dir.normalized() : Vec3{0, -1, 0};
     u.dirCone = {d.x, d.y, d.z, L.cone};
   }
-  fd.globals.lightInfo = {(float)n, 0, 0, 0};
+  fd.globals.lightInfo = {(float)n, wind_, rain_, flash_};
 }
 
 }  // namespace gtabr

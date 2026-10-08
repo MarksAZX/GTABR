@@ -42,6 +42,7 @@ constexpr int house_periferia_a = 36;
 constexpr int house_periferia_b = 37;
 constexpr int brick_raw = 38;
 constexpr int apt_tower = 39;
-constexpr int kCount = 40;
+constexpr int bark = 40;
+constexpr int kCount = 41;
 }  // namespace mat
 }  // namespace gtabr

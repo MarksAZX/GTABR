@@ -101,7 +101,7 @@ void buildWheelMesh(std::vector<gfx::ModelVertex>& v, std::vector<uint32_t>& idx
 // 256x128 albedo (left tyre, right rim) and matching ORM texture data.
 void buildWheelTextures(std::vector<uint8_t>& albedo, std::vector<uint8_t>& orm, uint32_t& w, uint32_t& h);
 
-enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipCount = 3 };
+enum ClipId { kClipIdle = 0, kClipWalk = 1, kClipRun = 2, kClipSwim = 3, kClipSwimIdle = 4, kClipCount = 5 };
 // One-shot action clips (Meshy library, same skeleton), stored after the locomotion clips.
 enum ActionId { kActPunch = 0, kActKick, kActHit, kActKnockDown, kActStandUp, kActSlash, kActReload, kActChat, kActCount };
 inline const char* actionFile(int a) {
@@ -112,8 +112,9 @@ inline const char* actionFile(int a) {
 // Per-character animation state: locomotion blend tree (idle/walk/run by real speed, stride matched) plus
 // procedural layers applied in model space (talk gestures, reach/interact, refuel, crouch into a car, turn lean, head look).
 struct CharAnim {
-  float t[kClipCount] = {0, 0, 0};       // clip time (s)
-  float w[kClipCount] = {1, 0, 0};       // smoothed weights
+  float t[kClipCount] = {0, 0, 0, 0, 0};   // clip time (s)
+  float w[kClipCount] = {1, 0, 0, 0, 0};   // smoothed weights
+  bool swimming = false;                   // locomotion uses the swim / tread-water clips
   float rateScale = 1.0f;                // per-NPC variation
   float talk = 0, reach = 0, refuel = 0, crouch = 0, wave = 0;
   float lean = 0, headYaw = 0;

@@ -91,6 +91,51 @@ std::vector<float> siren(Synth& s) {
   }
   return b;
 }
+std::vector<float> surf(Synth& s) {
+  // breaking waves: low-passed noise swelling every ~3 s (6 s loop, two waves)
+  auto b = s.buf(6.0f);
+  float lp = 0, lp2 = 0;
+  for (size_t i = 0; i < b.size(); ++i) {
+    float t = (float)i / s.rate;
+    float ph = std::fmod(t, 3.0f) / 3.0f;
+    float env = 0.25f + 0.75f * std::pow(std::sin(ph * kPi), 3.0f) * std::exp(-ph * 1.2f);
+    lp += (s.noise() - lp) * 0.08f;
+    lp2 += (lp - lp2) * 0.15f;
+    b[i] = lp2 * env * 2.2f;
+  }
+  // fade the loop seam
+  size_t f = (size_t)(s.rate * 0.05f);
+  for (size_t i = 0; i < f; ++i) { float k = (float)i / f; b[i] *= k; b[b.size() - 1 - i] *= k; }
+  return b;
+}
+std::vector<float> rainLoop(Synth& s) {
+  // steady hiss: high-passed noise with slow variation (4 s loop)
+  auto b = s.buf(4.0f);
+  float lp = 0, prev = 0;
+  for (size_t i = 0; i < b.size(); ++i) {
+    float t = (float)i / s.rate;
+    float n = s.noise();
+    lp += (n - lp) * 0.55f;
+    float hp = lp - prev * 0.6f;
+    prev = lp;
+    b[i] = hp * (0.5f + 0.15f * std::sin(t * 2.1f) + 0.1f * std::sin(t * 5.3f));
+  }
+  size_t f = (size_t)(s.rate * 0.05f);
+  for (size_t i = 0; i < f; ++i) { float k = (float)i / f; b[i] *= k; b[b.size() - 1 - i] *= k; }
+  return b;
+}
+std::vector<float> thunder(Synth& s) {
+  auto b = s.buf(3.4f);
+  float lp = 0, lp2 = 0;
+  for (size_t i = 0; i < b.size(); ++i) {
+    float t = (float)i / s.rate;
+    lp += (s.noise() - lp) * 0.02f;
+    lp2 += (lp - lp2) * 0.05f;
+    float env = (1.0f - std::exp(-t * 14.0f)) * std::exp(-t * 1.1f) * (0.65f + 0.35f * std::sin(t * 9.0f + std::sin(t * 3.0f) * 2.0f));
+    b[i] = lp2 * env * 14.0f;
+  }
+  return b;
+}
 }  // namespace
 
 void Audio::synthesize() {
@@ -111,6 +156,12 @@ void Audio::synthesize() {
   samples_["body"].data = thud(s, 0.4f, 60.0f, 0.6f, 12.0f);
   samples_["siren"].data = siren(s);
   samples_["siren"].loop = true;
+  samples_["splash"].data = whoosh(s, 0.55f, 900.0f);
+  samples_["surf"].data = surf(s);
+  samples_["surf"].loop = true;
+  samples_["rain"].data = rainLoop(s);
+  samples_["rain"].loop = true;
+  samples_["thunder"].data = thunder(s);
 }
 
 bool Audio::init() {

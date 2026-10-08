@@ -154,6 +154,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   fd_ = &fd;
   fd.clear();
   timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
+  updateWeather(dtReal);
   fd.blur = 0; fd.fade = 0; fd.dim = 0;
 
   // smoothed frame time for adaptive quality + FPS counter
@@ -272,7 +273,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   if (in.pausePressed && !panel_.open) { menu_ = MenuState::Pause; return; }
   if (in.cameraPressed && !wheel_.open) toggleCamera();
   if (!panel_.open && !wheel_.open && fadeAlpha_ < 0.5f) {
-    if (in.enterExitPressed) tryEnterExit();
+    if (in.enterExitPressed && !player_.swimming) tryEnterExit();
     if (in.interactPressed && focusValid_) { activateInteractable(focus_); interactPulse_ = 0.7f; }
   }
 
@@ -291,6 +292,22 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updateNpcs(dt);
   updateWanted(dt);
   updatePolice(dt);
+  // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
+  if (world_.coastSide >= 0) {
+    Vec2 pp = player_.pos;
+    Vec3 src;
+    switch (world_.coastSide) {
+      case 0: src = {pp.x, 0.3f, -world_.shoreline}; break;
+      case 1: src = {world_.shoreline, 0.3f, pp.y}; break;
+      case 2: src = {pp.x, 0.3f, world_.shoreline}; break;
+      default: src = {-world_.shoreline, 0.3f, pp.y}; break;
+    }
+    float d = (Vec2{src.x, src.z} - pp).length();
+    float vol = player_.indoors ? 0.0f : clamp(1.0f - d / 90.0f, 0.0f, 1.0f) * 0.55f;
+    if (vol > 0.01f && !surfHandle_) surfHandle_ = audio_.loopStart("surf", src, vol);
+    else if (surfHandle_ && vol <= 0.01f) { audio_.loopStop(surfHandle_); surfHandle_ = 0; }
+    else if (surfHandle_) audio_.loopUpdate(surfHandle_, src, vol);
+  }
   updateParticles(dt);
 
   // fuelling
@@ -497,13 +514,23 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   bool wantRun = in.runHeld && mag > 0.2f;
   bool canRun = (p.stamina > 6.0f || p.runBoost > 0.0f) && p.staminaCooldown <= 0.0f;
   p.running = wantRun && canRun;
-  float maxSpeed = p.running ? 6.4f : 3.1f;
+  // ---- water: wade in the shallows, swim once it is deeper than the chest (hysteresis avoids flicker)
+  float depth = p.indoors ? 0.0f : world_.waterDepth(p.pos.x, p.pos.y);
+  bool wasSwimming = p.swimming;
+  if (!p.swimming && depth > 1.25f) p.swimming = true;
+  else if (p.swimming && depth < 1.0f) p.swimming = false;
+  if (p.swimming != wasSwimming) {
+    audio_.play("splash", {p.pos.x, 0.2f, p.pos.y}, 0.8f);
+    if (p.swimming) { p.aimHold = 0; p.attackT = -1; p.reloadT = -1; toast("Nadando", "pin"); }
+  }
+  float wade = clamp(depth / 1.25f, 0.0f, 1.0f);
+  float maxSpeed = p.swimming ? (p.running ? 2.7f : 1.6f) : (p.running ? 6.4f : 3.1f) * (1.0f - 0.45f * wade);
   Vec2 desired = mag > 0.01f ? dir.normalized() * (maxSpeed * (p.running ? 1.0f : std::max(0.45f, mag))) : Vec2{0, 0};
   float accel = mag > 0.01f ? 16.0f : 20.0f;
   p.vel += (desired - p.vel) * expDecay(accel, dt);
   if (p.running) {
     if (p.runBoost > 0.0f) p.runBoost -= dt;
-    else p.stamina = std::max(0.0f, p.stamina - 21.0f * dt);
+    else p.stamina = std::max(0.0f, p.stamina - (p.swimming ? 14.0f : 21.0f) * dt);
     if (p.stamina <= 0.0f && p.runBoost <= 0.0f) { p.staminaCooldown = 1.6f; p.running = false; }
   } else {
     p.staminaCooldown = std::max(0.0f, p.staminaCooldown - dt);
@@ -553,7 +580,11 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   float stride = p.running ? 2.5f : 1.55f;
   if (p.speed > 0.25f) p.animTime += p.speed * dt / stride;
   float hy = world_.heightAt(p.pos.x, p.pos.y);
-  p.y += (hy - p.y) * expDecay(18.0f, dt);
+  if (p.swimming) {
+    // body floats with the chest at the surface; a gentle bob follows the swell
+    hy = world_.waterLevel - 1.15f + 0.06f * std::sin(time_ * 1.9f + p.pos.x * 0.3f);
+  }
+  p.y += (hy - p.y) * expDecay(p.swimming ? 6.0f : 18.0f, dt);
   p.indoors = world_.inInterior(p.pos.x, p.pos.y);
   p.health = std::min(100.0f, p.health + 0.4f * dt);   // slow natural recovery
 }

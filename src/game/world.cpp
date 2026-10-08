@@ -6,6 +6,7 @@
 #include <map>
 
 #include "material_ids.h"
+#include "props3d.h"
 
 namespace gtabr {
 
@@ -104,10 +105,18 @@ class Gen {
 
   void decor(DecorKind k, const std::string& base, int dirs, Vec3 pos, float yaw, float scale = 1.0f, bool collide = false, float colR = 0.3f,
              float colH = 2.0f, int species = -1, int model = -1) {
-    DecorInstance d;
-    d.kind = k; d.base = base; d.dirCount = dirs; d.pos = pos; d.yaw = yaw; d.scale = scale; d.mirror = rng_.chance(0.5f);
-    d.species = species; d.model = model;
-    w_.decor.push_back(d);
+    if (species >= 0) {
+      MeshBuilder b = mb(pos.x, pos.z);
+      MeshBuilder l = lodb(pos.x, pos.z);
+      buildTree3D(b, &l, rng_, species, pos, yaw, scale);
+    } else if (model >= 0) {
+      MeshBuilder b = mb(pos.x, pos.z);
+      buildProp3D(b, rng_, model, pos, yaw, scale);
+    } else {
+      DecorInstance d;   // sprite fallback (no 3D model for this one)
+      d.kind = k; d.base = base; d.dirCount = dirs; d.pos = pos; d.yaw = yaw; d.scale = scale; d.mirror = rng_.chance(0.5f);
+      w_.decor.push_back(d);
+    }
     if (collide) collider(AABB({pos.x - colR, pos.y, pos.z - colR}, {pos.x + colR, pos.y + colH, pos.z + colR}), k == DecorKind::Tree ? ColKind::Tree : ColKind::Prop);
   }
   // type: 0 broadleaf, 1 palm, 2 shrub. 3D species: 0 mangueira, 1 ipe amarelo, 2 ipe roxo, 3 coqueiro, 4 palmeira imperial, 5 arbusto,
@@ -133,7 +142,8 @@ class Gen {
   void prop(const char* name, float x, float z, float yaw, bool collide = true, float r = 0.35f, float h = 1.0f, int model = -1) {
     if (inFurniture_) for (const RectF& q : noTree_) if (q.contains(x, z)) return;
     static const std::pair<const char*, int> ids[] = {{"lixeira", 0}, {"banco", 1}, {"bomba", 3}, {"orelhao", 4}, {"hidrante", 5}, {"cone", 6},
-                                                      {"vaso", 10}, {"caixas", 11}, {"pneus", 12}, {"tambor", 13}};
+                                                      {"vaso", 10}, {"caixas", 11}, {"pneus", 12}, {"tambor", 13}, {"semaforo", 16}, {"correio", 17}, {"onibus", 18}, {"outdoor", 19},
+                                                      {"pare", 20}, {"carrinho", 21}, {"banca", 22}, {"bicicleta", 23}, {"canteiro", 26}};
     if (model < 0)
       for (auto& p : ids) if (std::string(p.first) == name) model = p.second;
     decor(DecorKind::Prop, std::string("prop_") + name, 8, {x, w_.heightAt(x, z), z}, yaw, 1.0f, collide, r, h, -1, model);
@@ -158,7 +168,7 @@ class Gen {
         b.wall(x0, z0, x1, z1, 0.0f, h, frontLayer, 0.003f, 0.997f, 1.0f - vFrac, 1.0f, 0.8f, 1.0f);
       } else {
         b.setTint(sideLayer_ == mat::brick_raw ? Vec3{1, 1, 1} : tint);
-        b.wall(x0, z0, x1, z1, 0.0f, h, sideLayer_, 0, len / 4.0f, 0, h / 4.0f, 0.78f, 1.0f);
+        { float tl = sideLayer_ == mat::brick_raw ? 1.1f : 4.0f; b.wall(x0, z0, x1, z1, 0.0f, h, sideLayer_, 0, len / tl, 0, h / tl, 0.78f, 1.0f); }
       }
     };
     wallSeg(S, r.x0, r.z1, r.x1, r.z1);
@@ -631,7 +641,7 @@ class Gen {
     }
     for (int k = 0; k < 6; ++k) {
       float a = k * kTau / 6 + kPi / 6;
-      prop("banco", pl.cx() + std::sin(a) * 7.5f, pl.cz() - std::cos(a) * 7.5f, a + kPi, true, 0.8f, 0.9f);
+      prop("banco", pl.cx() + std::sin(a) * 7.5f, pl.cz() - std::cos(a) * 7.5f, -a, true, 0.8f, 0.9f);
     }
     prop("lixeira", pl.x0 + 1.0f, pl.cz() - 3.0f, 0, true, 0.4f, 1.0f);
     prop("lixeira", pl.x1 - 1.0f, pl.cz() + 3.0f, 0, true, 0.4f, 1.0f);
@@ -852,6 +862,8 @@ class Gen {
     return {std::min(a.x, b.x), std::min(a.z, b.z), std::max(a.x, b.x), std::max(a.z, b.z)};
   }
 
+  float seaYaw() const { switch (w_.coastSide) { case 0: return kPi; case 1: return kPi * 0.5f; case 2: return 0.0f; default: return -kPi * 0.5f; } }
+
   void beachAndSea() {
     if (w_.coastSide < 0) return;
     bool alongX = w_.coastSide == 0 || w_.coastSide == 2;
@@ -868,13 +880,18 @@ class Gen {
       MeshBuilder b = mb(kb.cx(), kb.cz(), {0.85f, 0.85f, 0.82f});
       b.box(AABB({kb.x0, 0, kb.z0}, {kb.x1, kH + 0.25f, kb.z1}), mat::concrete, mat::concrete, 2.0f);
     }
+    const float sy = seaYaw();
     for (float s = sA + 6.0f; s < sB - 4.0f; s += 18.0f) {
       Vec3 p = coastP(s, 1.6f);
-      tree(p.x, p.z, 1, 3);
+      tree(p.x, p.z, 1, rng_.chance(0.7f) ? 3 : 4);
       Vec3 l = coastP(s + 9.0f, 0.6f);
-      lampAt(l.x, l.z, w_.coastSide == 0 ? N : (w_.coastSide == 1 ? E : (w_.coastSide == 2 ? S : W)), true);
+      lampAt(l.x, l.z, w_.coastSide == 0 ? N : (w_.coastSide == 1 ? E : (w_.coastSide == 2 ? S : W)), true, 100 + (int)(s / 400));
       Vec3 bnc = coastP(s + 4.5f, prom - 1.2f);
-      prop("banco", bnc.x, bnc.z, alongX ? (w_.coastSide == 0 ? 0.0f : kPi) : (w_.coastSide == 1 ? kPi * 0.5f : -kPi * 0.5f), true, 0.8f, 0.9f, 1);
+      prop("banco", bnc.x, bnc.z, sy, true, 0.8f, 0.9f, 1);
+      Vec3 bin = coastP(s + 7.0f, prom - 1.0f);
+      prop("lixeira", bin.x, bin.z, 0, true, 0.3f, 1.0f);
+      if (rng_.chance(0.35f)) { Vec3 fb = coastP(s + 12.0f, 2.2f); prop("canteiro", fb.x, fb.z, sy + kPi * 0.5f, true, 0.9f, 0.4f, 26); }
+      if (rng_.chance(0.3f)) { Vec3 bk = coastP(s + 2.0f, prom - 0.9f); decor(DecorKind::Prop, "prop_bike", 8, {bk.x, kH, bk.z}, sy + kPi * 0.5f, 1.0f, false, 0.5f, 1.0f, -1, 23); }
     }
     // sand: slopes gently down to the water line
     float sandFrom = prom, sandTo = beachDepth_;
@@ -885,51 +902,60 @@ class Gen {
     // wet sand band at the water line
     RectF wet = coastR(sA, sandTo - 3.0f, sB, sandTo);
     ground(wet, 0.065f, mat::sand, 4.0f, {0.72f, 0.68f, 0.62f}, false);
-    // beach furniture: umbrellas with chairs, lifeguard tower, kiosks (barracas), volleyball net
-    for (float s = sA + 10.0f; s < sB - 10.0f; s += rng_.range(9.0f, 15.0f)) {
+    // coastal vegetation on the back of the sand: coconut palms, beach almonds and low shrubs
+    for (float s = sA + 4.0f; s < sB - 4.0f; s += rng_.range(7.0f, 13.0f)) {
+      Vec3 v = coastP(s, prom + rng_.range(1.5f, 4.5f));
+      float r = rng_.uni();
+      if (r < 0.4f) tree(v.x, v.z, 1, 3);
+      else if (r < 0.65f) tree(v.x, v.z, 0, 6);
+      else tree(v.x, v.z, 2);
+    }
+    // beach furniture: parasol clusters with chairs and towels, surfboards, volleyball nets, lifeguard towers, kiosks
+    for (float s = sA + 10.0f; s < sB - 10.0f; s += rng_.range(6.0f, 11.0f)) {
       float t = rng_.range(prom + 6.0f, sandTo - 8.0f);
       Vec3 p = coastP(s, t);
       decor(DecorKind::Prop, "prop_guardasol", 8, {p.x, 0.06f, p.z}, rng_.range(0, kTau), 1.0f, true, 0.12f, 2.4f, -1, 7);
-      for (int c = 0; c < 2; ++c) {
-        Vec3 q = coastP(s - 0.9f + c * 1.8f, t + 1.4f);
-        decor(DecorKind::Prop, "prop_cadeira", 8, {q.x, 0.06f, q.z}, (alongX ? (w_.coastSide == 2 ? 0.0f : kPi) : 0.0f) + rng_.range(-0.4f, 0.4f), 1.0f,
-              false, 0.3f, 0.8f, -1, 8);
+      int nch = rng_.irange(1, 3);
+      for (int c = 0; c < nch; ++c) {
+        Vec3 q = coastP(s - 0.9f + c * 1.2f, t + rng_.range(1.0f, 1.8f));
+        decor(DecorKind::Prop, "prop_cadeira", 8, {q.x, 0.06f, q.z}, sy + rng_.range(-0.5f, 0.5f), 1.0f, false, 0.3f, 0.8f, -1, 8);
+      }
+      if (rng_.chance(0.7f)) {
+        Vec3 q = coastP(s + rng_.range(1.5f, 2.5f), t + rng_.range(-0.5f, 1.2f));
+        decor(DecorKind::Prop, "prop_toalha", 8, {q.x, 0.06f, q.z}, rng_.range(0, kTau), 1.0f, false, 0.4f, 0.1f, -1, 24);
+      }
+      if (rng_.chance(0.25f)) {
+        Vec3 q = coastP(s - rng_.range(1.5f, 3.0f), t - 0.8f);
+        decor(DecorKind::Prop, "prop_prancha", 8, {q.x, 0.06f, q.z}, rng_.range(0, kTau), 1.0f, false, 0.2f, 1.9f, -1, 25);
       }
     }
     for (float s = sA + 30.0f; s < sB - 20.0f; s += 70.0f) {
       Vec3 p = coastP(s, prom + 3.5f);
-      decor(DecorKind::Prop, "prop_quiosque", 8, {p.x, 0.06f, p.z}, alongX ? (w_.coastSide == 0 ? kPi : 0.0f) : 0.0f, 1.0f, true, 1.6f, 3.0f, -1, 9);
+      decor(DecorKind::Prop, "prop_quiosque", 8, {p.x, 0.06f, p.z}, sy, 1.0f, true, 1.6f, 3.0f, -1, 9);
       w_.poiList.push_back(coastP(s, prom + 6.0f, 0.06f));
       Vec3 lg = coastP(s + 30.0f, sandTo - 10.0f);
-      decor(DecorKind::Prop, "prop_salvavidas", 8, {lg.x, 0.06f, lg.z}, 0, 1.0f, true, 1.0f, 3.5f, -1, 15);
+      decor(DecorKind::Prop, "prop_salvavidas", 8, {lg.x, 0.06f, lg.z}, sy, 1.0f, true, 1.0f, 3.5f, -1, 15);
     }
     w_.poiBeach = coastP((sA + sB) * 0.5f, sandTo - 6.0f, 0.06f);
     w_.poiList.push_back(w_.poiBeach);
     w_.pickupSpots.push_back(coastP(sA + 40.0f, prom + 2.5f, 0.06f));
-    // the sea: a tessellated water surface; v carries the distance from the shore (waves / foam in the shader)
-    const float seaDepth = 140.0f;
-    for (float s = sA - 60.0f; s < sB + 60.0f; s += World::kChunk) {
-      float s1 = std::min(s + World::kChunk, sB + 60.0f);
-      for (float d = 0; d < seaDepth;) {
-        float step = d < 24.0f ? 3.0f : (d < 60.0f ? 8.0f : 20.0f);
-        float d1 = std::min(seaDepth, d + step);
-        for (float ss = s; ss < s1 - 1e-3f; ss += step) {
-          float ss1 = std::min(s1, ss + step);
-          Vec3 a = coastP(ss, sandTo + d), b = coastP(ss1, sandTo + d), c = coastP(ss1, sandTo + d1), e = coastP(ss, sandTo + d1);
-          a.y = b.y = c.y = e.y = w_.waterLevel;
-          // depth colour baked in the vertex tint: turquoise in the shallows, deep blue offshore
-          auto tintAt = [&](float dd) {
-            float k = clamp(dd / 45.0f, 0.0f, 1.0f);
-            return lerp(Vec3{0.32f, 0.78f, 0.74f}, Vec3{0.05f, 0.22f, 0.38f}, k);
-          };
-          MeshBuilder m = mb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f, tintAt(d));
-          bool flip = w_.coastSide == 1 || w_.coastSide == 2;
-          // quad winding so the normal points up
-          if (flip == (w_.coastSide == 2 || w_.coastSide == 1))
-            m.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
-          (void)tintAt;
-        }
-        d = d1;
+    // the sea: a tessellated water surface; uv.y carries the distance from the shore (waves / foam in the shader).
+    // The lateral step is uniform so neighbouring strips share vertices (no cracks once the waves displace them).
+    const float seaDepth = 150.0f, lat = 4.0f;
+    std::vector<float> rows{0.0f};
+    for (float d = 0; d < seaDepth - 1e-3f;) { d += d < 24.0f ? 3.0f : (d < 60.0f ? 6.0f : 15.0f); rows.push_back(std::min(d, seaDepth)); }
+    for (float s = sA - 60.0f; s < sB + 60.0f - 1e-3f; s += lat) {
+      float ss1 = std::min(s + lat, sB + 60.0f);
+      for (size_t r = 0; r + 1 < rows.size(); ++r) {
+        float d0 = rows[r], d1 = rows[r + 1];
+        Vec3 a0 = coastP(s, sandTo + d0), b0 = coastP(ss1, sandTo + d0), c0 = coastP(ss1, sandTo + d1), e0 = coastP(s, sandTo + d1);
+        a0.y = b0.y = c0.y = e0.y = w_.waterLevel;
+        MeshBuilder m = mb((a0.x + c0.x) * 0.5f, (a0.z + c0.z) * 0.5f, {1, 1, 1});
+        Vec2 ua{s / 6.0f, d0}, ub{ss1 / 6.0f, d0}, uc{ss1 / 6.0f, d1}, ud{s / 6.0f, d1};
+        // winding: pick the order whose normal points up
+        Vec3 n = (e0 - a0).cross(b0 - a0);
+        if (n.y > 0) m.quad(a0, e0, c0, b0, ua, ud, uc, ub, mat::water);
+        else m.quad(a0, b0, c0, e0, ua, ub, uc, ud, mat::water);
       }
     }
     // the sea floor near the shore (seen through shallow water): darker sand sloping down
@@ -939,14 +965,94 @@ class Gen {
   }
 
   // ---- street furniture ------------------------------------------------------------------------------
-  void lampAt(float x, float z, Side faceRoad, bool promenade = false) {
+  struct PoleRef { float x, z, cx, cz; int edge; };   // cx,cz = direction of the crossarm (along the street)
+  std::vector<PoleRef> poles_;
+  void lampAt(float x, float z, Side faceRoad, bool promenade = false, int edge = -1) {
     for (const RectF& r : noTree_) if (r.contains(x, z)) return;
     // concrete pole with a curved arm (3D prop model 2); the light anchor is the lamp head over the road
     float dx = 0, dz = 0;
     switch (faceRoad) { case N: dz = -1; break; case S: dz = 1; break; case W: dx = -1; break; default: dx = 1; break; }
-    float yaw = std::atan2(dx, -dz);
+    float yaw = std::atan2(dx, dz);
     decor(DecorKind::Prop, "prop_poste", 8, {x, w_.heightAt(x, z), z}, yaw, promenade ? 0.85f : 1.0f, true, 0.18f, 7.0f, -1, 2);
     w_.lampLights.push_back({x + dx * 1.7f, 7.0f, z + dz * 1.7f});
+    poles_.push_back({x, z, std::cos(yaw), -std::sin(yaw), edge});
+  }
+
+  // Overhead service wires hanging in catenaries between consecutive poles of the same kerb.
+  void wires() {
+    std::map<int, std::vector<PoleRef>> byEdge;
+    for (const PoleRef& p : poles_) if (p.edge >= 0) byEdge[p.edge].push_back(p);
+    for (auto& [edge, v] : byEdge) {
+      std::sort(v.begin(), v.end(), [](const PoleRef& a, const PoleRef& b) { return a.x + a.z < b.x + b.z; });
+      for (size_t i = 0; i + 1 < v.size(); ++i) {
+        const PoleRef &a = v[i], &c = v[i + 1];
+        float d = std::sqrt((c.x - a.x) * (c.x - a.x) + (c.z - a.z) * (c.z - a.z));
+        if (d > 40.0f || d < 4.0f) continue;
+        MeshBuilder b = mb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f, {0.07f, 0.07f, 0.08f});
+        for (float off : {-0.7f, 0.0f, 0.7f}) {
+          Vec3 p0{a.x + a.cx * off, 6.62f, a.z + a.cz * off}, p1{c.x + c.cx * off, 6.62f, c.z + c.cz * off};
+          float sag = 0.017f * d + (off == 0.0f ? 0.1f : 0.0f);
+          Vec3 prev = p0;
+          for (int k = 1; k <= 6; ++k) {
+            float t = k / 6.0f;
+            Vec3 q = lerp(p0, p1, t);
+            q.y -= sag * 4.0f * t * (1.0f - t);
+            b.frustum(prev, q, 0.02f, 0.02f, 3, mat::metal, false, false);
+            prev = q;
+          }
+        }
+      }
+    }
+  }
+
+  // Traffic lights / stop signs, mailboxes and bus stops around every junction, plus billboards on the big avenues.
+  void junctionProps() {
+    for (size_t i = 0; i < xs_.size(); ++i)
+      for (size_t j = 0; j < zs_.size(); ++j) {
+        float cx = xs_[i], cz = zs_[j], hx = hwx_[i], hz = hwz_[j];
+        bool big = avX_[i] || avZ_[j];
+        for (int c = 0; c < 4; ++c) {
+          float sx = (c & 1) ? 1.0f : -1.0f, sz = (c & 2) ? 1.0f : -1.0f;
+          float px = cx + sx * (hx + 0.7f), pz = cz + sz * (hz + 0.7f);
+          bool inside = px < w_.land.x0 + 2 || px > w_.land.x1 - 2 || pz < w_.land.z0 + 2 || pz > w_.land.z1 - 2;
+          if (inside) continue;
+          bool blocked = false;
+          for (const RectF& r : noTree_) if (r.contains(px, pz)) blocked = true;
+          if (blocked) continue;
+          float yaw = std::atan2(-sx, -sz);
+          if (big && (c == 0 || c == 3)) prop("semaforo", px, pz, yaw, true, 0.1f, 3.6f, 16);
+          else if (!big && (c == 1 || c == 2)) prop("pare", px, pz, yaw, true, 0.08f, 2.6f, 20);
+          else if (rng_.chance(0.35f)) prop(rng_.chance(0.5f) ? "correio" : "hidrante", px + sx * 0.8f, pz + sz * 0.8f, yaw, true, 0.25f, 1.1f);
+        }
+      }
+  }
+
+  void blockExtras(const RectF& B, District d) {
+    // bus stop on the avenues / commercial streets, billboards, newsstands, bikes and carts
+    if ((d == District::Centro || d == District::Comercial || d == District::Orla) && rng_.chance(0.5f)) {
+      bool north = rng_.chance(0.5f);
+      float x = B.x0 + B.w() * rng_.range(0.3f, 0.7f);
+      float z = north ? B.z0 + 1.5f : B.z1 - 1.5f;
+      bool ok = true;
+      for (const RectF& r : noTree_) if (r.contains(x, z)) ok = false;
+      if (ok) {
+        prop("onibus", x, z, north ? kPi : 0.0f, true, 1.5f, 2.5f, 18);
+        w_.poiList.push_back({x, kH, z});
+      }
+    }
+    if (rng_.chance(0.3f)) {
+      float x = B.x0 + B.w() * rng_.range(0.2f, 0.8f), z = B.z1 - 1.3f;
+      bool ok = true;
+      for (const RectF& r : noTree_) if (r.contains(x, z)) ok = false;
+      if (ok) prop("banca", x, z, 0.0f, true, 1.3f, 2.4f, 22);
+    }
+    if (d == District::Industrial || d == District::Comercial) {
+      float x = B.x0 + B.w() * rng_.range(0.25f, 0.75f);
+      prop("outdoor", x, B.z0 + 1.0f, 0.0f, true, 2.0f, 6.0f, 19);
+    }
+    for (int k = 0; k < 2; ++k)
+      if (rng_.chance(0.25f)) prop("bicicleta", B.x0 + rng_.range(5, B.w() - 5), B.z0 + 2.0f, rng_.range(0, kTau), false, 0.4f, 1.0f, 23);
+    if (rng_.chance(0.2f)) prop("carrinho", B.x1 - 1.5f, B.z0 + rng_.range(6, B.h() - 6), rng_.range(0, kTau), false, 0.4f, 0.9f, 21);
   }
 
   bool inFurniture_ = false;
@@ -956,15 +1062,17 @@ class Gen {
       for (const RectF& r : noTree_) if (r.contains(x, z)) return false;
       return true;
     };
+    int blockIdx = 0;
     for (auto& [B, dist] : w_.blocks) {
+      ++blockIdx;
       auto along = [&](float a, float b, const std::function<void(float)>& fn, float step, float off) {
         for (float t = a + off; t < b - 2; t += step) fn(t);
       };
       const float lampOff = 0.45f;
-      along(B.x0 + 3, B.x1 - 3, [&](float x) { lampAt(x, B.z0 + lampOff, N); }, 24.0f, 4.0f);
-      along(B.x0 + 3, B.x1 - 3, [&](float x) { lampAt(x + 7, B.z1 - lampOff, S); }, 24.0f, 4.0f);
-      along(B.z0 + 3, B.z1 - 3, [&](float z) { lampAt(B.x0 + lampOff, z + 3, W); }, 24.0f, 5.0f);
-      along(B.z0 + 3, B.z1 - 3, [&](float z) { lampAt(B.x1 - lampOff, z + 9, E); }, 24.0f, 5.0f);
+      along(B.x0 + 3, B.x1 - 3, [&](float x) { lampAt(x, B.z0 + lampOff, N, false, blockIdx * 4); }, 24.0f, 4.0f);
+      along(B.x0 + 3, B.x1 - 3, [&](float x) { lampAt(x + 7, B.z1 - lampOff, S, false, blockIdx * 4 + 1); }, 24.0f, 4.0f);
+      along(B.z0 + 3, B.z1 - 3, [&](float z) { lampAt(B.x0 + lampOff, z + 3, W, false, blockIdx * 4 + 2); }, 24.0f, 5.0f);
+      along(B.z0 + 3, B.z1 - 3, [&](float z) { lampAt(B.x1 - lampOff, z + 9, E, false, blockIdx * 4 + 3); }, 24.0f, 5.0f);
       float step = dist == District::Residencial ? 14.0f : 18.0f;
       along(B.x0 + 3, B.x1 - 3, [&](float x) { if (treeOk(x, B.z0 + 1.6f)) tree(x, B.z0 + 1.6f, rng_.chance(0.2f) ? 1 : 0); }, step, 9.0f);
       along(B.x0 + 3, B.x1 - 3, [&](float x) { if (treeOk(x, B.z1 - 1.6f)) tree(x, B.z1 - 1.6f, rng_.chance(0.2f) ? 1 : 0); }, step, 2.0f);
@@ -974,9 +1082,12 @@ class Gen {
       if (rng_.chance(0.5f)) prop("lixeira", B.x0 + rng_.range(6, B.w() - 6), B.z0 + 1.0f, 0, true, 0.35f, 1.0f);
       if (rng_.chance(0.3f)) prop("hidrante", B.x1 - 1.0f, B.z0 + rng_.range(6, B.h() - 6), 0, true, 0.2f, 0.8f);
       if (rng_.chance(0.2f)) prop("orelhao", B.x0 + 1.0f, B.z1 - rng_.range(6, B.h() - 6), kPi * 0.5f, true, 0.4f, 2.0f);
+      blockExtras(B, dist);
       // weapon pickup spots on quieter pavements
       if (rng_.chance(0.35f)) w_.pickupSpots.push_back({B.x0 + rng_.range(8, B.w() - 8), kH, B.z1 - 1.2f});
     }
+    junctionProps();
+    wires();
     inFurniture_ = false;
   }
 
@@ -1033,10 +1144,10 @@ class Gen {
       }
     }
     // ground around the land so the horizon is closed (except the sea side)
-    ground({Ld.x0 - 30, Ld.z0 - 30, Ld.x1 + 30, Ld.z0}, kH, mat::grass, 6.0f);
-    ground({Ld.x0 - 30, Ld.z1, Ld.x1 + 30, Ld.z1 + 30}, kH, mat::grass, 6.0f);
-    ground({Ld.x0 - 30, Ld.z0, Ld.x0, Ld.z1}, kH, mat::grass, 6.0f);
-    ground({Ld.x1, Ld.z0, Ld.x1 + 30, Ld.z1}, kH, mat::grass, 6.0f);
+    if (w_.coastSide != 0) ground({Ld.x0 - 30, Ld.z0 - 30, Ld.x1 + 30, Ld.z0}, kH, mat::grass, 6.0f);
+    if (w_.coastSide != 2) ground({Ld.x0 - 30, Ld.z1, Ld.x1 + 30, Ld.z1 + 30}, kH, mat::grass, 6.0f);
+    if (w_.coastSide != 3) ground({Ld.x0 - 30, Ld.z0, Ld.x0, Ld.z1}, kH, mat::grass, 6.0f);
+    if (w_.coastSide != 1) ground({Ld.x1, Ld.z0, Ld.x1 + 30, Ld.z1}, kH, mat::grass, 6.0f);
   }
 
   // ---- shops and interiors -------------------------------------------------------------------------------
