@@ -19,8 +19,10 @@
 #include "ui.h"
 #include "../core/audio.h"
 #include "model.h"
+#include "decor_models.h"
 #include "weapons.h"
 #include "timeofday.h"
+#include "weather.h"
 #include "world.h"
 
 namespace gtabr {
@@ -33,6 +35,20 @@ struct Settings {
   bool dynamicRes = true;   // lower the render scale when the frame time is over budget
   float hudScale = 1.0f;
   bool showFps = false;
+  float volume = 0.9f;
+  float resolution = 1.0f;
+  float renderDistance = 1.0f;
+  float vegetation = 1.0f;
+  bool effects = true;
+  bool dayCycle = true;
+  int fpsLimit = 30;
+  float controlScale = 1.0f, controlOpacity = 0.8f;
+  bool fixedJoystick = false, leftHanded = false;
+  int weatherMode=0; // automatic / clear / rain
+  bool ambientOcclusion=true;
+  bool subtitles = true, soundCaptions = false, highContrast = false, reducedMotion = false;
+  int reflections = 1; // 0 off, 1 analytic sky, 2 coastal screen-space reflections
+  Vec2 controlPos[9] = {{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1}};
 };
 
 // Graphics presets: every field changes real work done per frame.
@@ -60,6 +76,7 @@ inline const QualityPreset& qualityPreset(int q) {
 
 struct Toast { std::string text; float t = 0; float dur = 2.6f; uint32_t color = 0xFFFFFFFFu; const char* icon = nullptr; };
 
+struct WaterRing {Vec3 pos;float age=0,life=1.8f,strength=0.4f;};
 struct Particle { Vec3 pos, vel; float life = 0, maxLife = 1, size = 1; uint32_t color = 0xFFFFFFFFu; float gravity = 0; };
 
 enum class IKind { Npc, Vehicle, Door, Product, FuelPump, Workshop };
@@ -97,7 +114,8 @@ struct Panel {
   int scroll = 0;
 };
 
-enum class MenuState { None, Pause, Settings };
+enum class MenuState { None, Main, Slots, Confirm, Pause, Settings, Map, Inventory, Codes, Controls };
+struct SaveSlot { bool exists = false; bool valid = false, recovered = false; uint32_t seed = 0; int money = 0; float playtime = 0; std::string date, location; };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
@@ -112,12 +130,14 @@ class Game {
     std::string saveDir;
     bool newGame = false;
     uint32_t seed = 0;   // city seed for a new game (0 = pick one)
+    bool mainMenu = true;
   };
   bool init(const Init& i);
   void shutdown();
   void onTouch(int id, TouchAction a, float x, float y) { input_.onTouch(id, a, x, y); }
   // Advances the simulation and fills 'fd' (draw lists + HUD). dt in seconds (real time).
   void frame(float dt, gfx::FrameData& fd);
+  void handleBack();
   void onBackground();  // app paused: persist state
   bool wantsQuit() const { return quit_; }
   void setScreenSize(float w, float h) { screenW_ = w; screenH_ = h; }
@@ -141,6 +161,8 @@ class Game {
   }
   const World& world() const { return world_; }
   Panel& panel() { return panel_; }
+  bool uiButtonBounds(int id,Vec4& bounds) const {for(const auto& item:uiRects_)if(item.second==id){bounds=item.first;return true;}return false;}
+  InputLayout controlLayout() const {return makeLayout();}
   std::vector<Interactable>& focusList() { return nearby_; }
   const Interactable* focus() const { return focus_.id >= 0 || focusValid_ ? &focus_ : nullptr; }
   bool focusValid() const { return focusValid_; }
@@ -151,6 +173,15 @@ class Game {
   void toggleCamera();
   void tryEnterExit();
   bool saveGame();
+  bool startSlot(int slot, bool fresh, bool confirmed = false);
+  bool deleteSlot(int slot);
+  SaveSlot inspectSlot(int slot) const;
+  int activeSlot() const { return activeSlot_; }
+  int recentSlot() const;
+  void returnToMain();
+  void executeCode(int code);
+  bool buyStock(int shop, int stock);
+  void showMenu(MenuState menu) { menu_ = menu; uiRects_.clear(); }
   bool loadGame();
   void startFueling(int vehicleIdx, int pumpId, int amountCents /*0 = fill*/);
   void buyItem(int item, bool fromShelf);
@@ -167,6 +198,7 @@ class Game {
   int pumpNearVehicle(const Vehicle& v) const;
   Settings& settings() { return settings_; }
   float elapsed() const { return time_; }
+  const WeatherState& weather() const {return weather_;}
   void setDebugOverlay(bool b) { settings_.showFps = b; }
 
  private:
@@ -181,6 +213,10 @@ class Game {
   void updateVehicles(float dt, const InputFrame& in);
   void updateInteractions(const InputFrame& in);
   void updateParticles(float dt);
+  void spawnTraffic();
+  void updateTraffic(float dt);
+  void updateWeather(float dt);
+  void emitWeather();
   void updateAdaptiveQuality(float dt);
   void applySettings();
   void collectInteractables();
@@ -195,8 +231,11 @@ class Game {
   // ---- panels / dialogs (game_actions.cpp)
   void openPanel(Panel p);
   void closePanel();
+  void subtitle(const std::string& text,const std::string& speaker="",bool sound=false);
+  void drawSubtitles();
+  void drawControlEditor();
   void openFuelPanel(int pumpId);
-  void openShopPanel(const char* portrait);
+  void openShopPanel(const char* portrait, int shop = -1);
   void openAttendantPanel();
   void openWorkshopPanel();
   void openNpcPanel(int npcIdx);
@@ -230,6 +269,8 @@ class Game {
   void drawPanel(float dt);
   void drawWheel(float dt);
   void drawMenus(float dt);
+  void drawFullMap();
+  void menuAction(int id);
   void drawDebug();
   InputLayout makeLayout() const;
   void handleUiPointers(const InputFrame& in);
@@ -237,6 +278,26 @@ class Game {
 
   // ---- save (game_save.cpp)
   std::string savePath() const;
+  void readSettings();
+  bool writeSettings();
+  void readSeed();
+  void releaseWorld();
+  void updateStreaming();
+  bool worldInstalled_ = false;
+  int activeSlot_ = -1;
+  bool sessionActive_ = false;
+  bool initialLoading_ = true;
+  bool freshSlot_ = true;
+  bool selectingNew_ = false;
+  int selectedSlot_ = 0;
+  bool confirmDelete_ = false;
+  MenuState settingsBack_ = MenuState::Pause;
+  int settingsTab_ = 0;
+  int inventoryTab_ = 0;
+  Vec2 mapCenter_, mapDrag_;
+  float mapZoom_ = 1;
+  bool mapDragging_ = false;
+  int purchases_ = 0;
 
   Init cfg_;
   gfx::Renderer* r_ = nullptr;
@@ -291,6 +352,14 @@ class Game {
   std::vector<std::pair<Vec4, int>> uiRects_;   // clickable rects built while drawing panels/menus: (x,y,w,h) -> index
   float panelScrollVel_ = 0;
   int pressedUi_ = -1;
+  MenuState menuVisual_ = MenuState::None;
+  float menuAnim_ = 1;
+  int menuPage_ = 0, menuPages_ = 1;
+  int controlDrag_ = -1;
+  std::string subtitleText_, subtitleSpeaker_;
+  float subtitleUntil_ = 0;
+  bool subtitleSound_ = false;
+  float receiptUntil_ = 0;
   float sliderDrag_ = -1;
   int activeSlider_ = -1;
 
@@ -338,6 +407,10 @@ class Game {
   float dayRate_ = 1.0f / 60.0f; // game hours per real second (a full day in 24 minutes)
   float cloudCover_ = 0.42f;
   float wetness_ = 0.0f;
+  WeatherState weather_;
+  Pool<WaterRing> waterRings_{48};
+  bool waterContact_=false;
+  float waterStep_=0;
   DayLighting day_;
   Vec3 shadowFocus_;
   float shadowRadius_ = 70.0f;
@@ -423,6 +496,7 @@ class Game {
   float lastReportT_ = -100.0f, lastReportSev_ = 0;
   Vec2 lastReportPos_;
   int sirenHandle_ = 0;
+  int surfHandle_ = 0;
   float deathT_ = 0;
   float slowMo_ = 1.0f;
   float muzzleT_ = 0;
@@ -445,6 +519,7 @@ class Game {
   Animator animator_;
   CharAnim playerAnim_;
   std::vector<CharAnim> npcAnim_;
+  DecorModels decorModels_;
   gfx::ModelHandle wheelModel_;
   gfx::MaterialHandle wheelMaterial_;
   bool modelsReady_ = false, carsReady_ = false;

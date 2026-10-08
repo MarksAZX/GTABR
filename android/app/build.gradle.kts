@@ -21,8 +21,8 @@ android {
         applicationId = "com.marksazx.gtabr"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0-mvp"
+        versionCode = 5
+        versionName = "0.4.0-citylife"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

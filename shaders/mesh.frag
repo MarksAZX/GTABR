@@ -23,11 +23,20 @@ void main() {
     vec3 repaint = pc.tint.rgb * (0.35 + 1.3 * lum);
     albedo = mix(albedo, repaint, paintMask * pc.tint.a);
   }
+  if(pc.tint.a<-0.5){
+    float lum=dot(albedo,vec3(0.299,0.587,0.114));
+    bool skin=albedo.r>albedo.g*1.12&&albedo.g>albedo.b*1.05;
+    if(!skin&&lum>0.07)albedo=mix(albedo,pc.tint.rgb*(0.35+lum*1.1),0.38);
+  }
   vec3 orm = texture(uORM, vUV).rgb;
   float rough = clamp(orm.g * pc.params.z, 0.05, 1.0);
   float metal = orm.b;
-  vec3 Nn = normalize(vNormal);
-  vec3 T = normalize(vTangent.xyz - Nn * dot(Nn, vTangent.xyz));
+  float wet=g.cascade.w*(1-g.params.w)*0.6;
+  if(pc.tint.a>0)rough=mix(rough,0.13,wet);
+  vec3 Nn = dot(vNormal,vNormal) > 0.00001 ? normalize(vNormal) : vec3(0,1,0);
+  vec3 tangent = vTangent.xyz - Nn * dot(Nn, vTangent.xyz);
+  if (dot(tangent,tangent)<0.00001) tangent=cross(Nn,abs(Nn.y)>0.9?vec3(0,0,1):vec3(0,1,0));
+  vec3 T = normalize(tangent);
   vec3 B = cross(Nn, T) * vTangent.w;
   vec3 tn = texture(uNormal, vUV).xyz * 2.0 - 1.0;
   vec3 N = normalize(mat3(T, B, Nn) * tn);
@@ -55,11 +64,12 @@ void main() {
   vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
   vec3 R = reflect(-V, N);
   vec3 env = skyRadiance(R, 0.0);
-  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
+  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.22 + 0.12 * N.y);
   irr = mix(irr, lamp, indoor);
   env = mix(env, lamp * 0.6, indoor);
   // crude specular occlusion toward the ground
   float so = clamp(0.6 + R.y, 0.25, 1.0);
+  env *= g.reflectionInfo.x;
   vec3 ambient = diff * irr + env * envBRDF(f0, rough, NoV) * so;
   if (cc > 0.0) ambient += env * envBRDF(vec3(0.04), 0.05, NoV) * cc * so;
   vec3 col = direct + ambient + evalLights(vWorld, N, V, diff, f0, rough);

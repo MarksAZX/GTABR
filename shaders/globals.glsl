@@ -24,6 +24,10 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 sky1;        // rgb horizon, w = cloud brightness
   vec4 cascade;     // x = split distance, y = cascade count, z = fog height falloff, w = wetness
   vec4 lightInfo;   // x = light count
+  vec4 reflectionInfo; // x sky reflection strength, y SSR steps, z material variation, w water level
+  vec4 waterBounds;    // x0,z0,x1,z1; only coastal surfaces use SSR
+  vec4 weather; // rain, wind, weather clock, effect quality
+  vec4 effectsInfo; // ambient occlusion strength, AO samples, shadow refinement, water detail
   Light lights[16];
 } g;
 
@@ -64,6 +68,12 @@ vec3 skyRadiance(vec3 dir, float sunDisk) {
   // below the horizon: dark ground haze
   vec3 ground = g.ambGround.rgb * 0.55 + hor * 0.25;
   col = mix(col, ground, smoothstep(0.0, -0.18, h));
+  if(sunDisk<0.5&&dir.y>0.0){
+    vec2 p=dir.xz/(dir.y+0.15)*2.5+g.camPos.w*vec2(0.007,0.003);
+    float cloud=0.5+0.19*sin(p.x+sin(p.y))+0.13*sin(p.y*2.1+p.x*0.5)+0.08*cos(p.x*3.7-p.y);
+    float opacity=smoothstep(1-g.sky0.w,1-g.sky0.w+0.24,cloud)*smoothstep(0.0,0.25,dir.y);
+    col=mix(col,g.ambSky.rgb*0.7+g.sunColor.rgb*0.16,opacity*0.65);
+  }
   return col;
 }
 
@@ -90,7 +100,7 @@ vec3 evalLights(vec3 P, vec3 N, vec3 V, vec3 albedo, vec3 f0, float rough) {
     float r = g.lights[i].posRadius.w;
     if (d2 > r * r) continue;
     float d = sqrt(d2);
-    L /= d;
+    L /= max(d,0.001);
     float win = clamp(1.0 - pow(d / r, 4.0), 0.0, 1.0);
     float att = win * win / (d2 + 1.0);
     if (g.lights[i].dirCone.w > -1.5) {
@@ -106,4 +116,10 @@ vec3 evalLights(vec3 P, vec3 N, vec3 V, vec3 albedo, vec3 f0, float rough) {
     acc += (albedo / PI + spec) * g.lights[i].colorInt.rgb * NoL * att;
   }
   return acc;
+}
+
+vec3 foliageWind(vec3 world,float mask,float height){
+  float phase=dot(world.xz,vec2(0.12,0.17))+g.camPos.w*1.1;
+  float bend=mask*clamp(height*0.16,0.08,1.0)*g.weather.y;
+  return vec3(sin(phase)*0.17,cos(phase*1.3)*0.025,sin(phase*0.7+0.9)*0.11)*bend;
 }

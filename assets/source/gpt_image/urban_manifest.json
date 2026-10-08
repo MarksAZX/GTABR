@@ -1,0 +1,25 @@
+{
+  "generator": "GPT Image tool available in this session",
+  "model_version": "not exposed by tool",
+  "generation_quality_preset": "not selectable; no claim of GPT Image 2.5 medium",
+  "higgsfield": "installed but no compatible callable generation tool exposed in this session",
+  "source_dimensions": [
+    1254,
+    1254
+  ],
+  "source_sha256": "e46f5a88f895a4e815d54e655866e377025b96dfc7145dac5429cff9279756bb",
+  "layout": {
+    "top_left": "asphalt",
+    "top_right": "concrete pavers",
+    "bottom_left": "mixed grass",
+    "bottom_right": "foliage"
+  },
+  "runtime": {
+    "albedo": "1024px ASTC 8x8 sRGB",
+    "normal_roughness": "512px ASTC 6x6 linear, derived from luminance",
+    "decor_leaf": "64px RGBA source sampled into shared procedural model palette",
+    "encoder_quality": "medium",
+    "material_layers": 42
+  },
+  "origin": "original generated surfaces; no copied game assets"
+}

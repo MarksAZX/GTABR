@@ -35,7 +35,7 @@ void main() {
     outColor = vec4(col.rgb, col.a * cover);
   } else if (kind == 1) {  // icon / image
     vec4 t = texture(uTex, uv);
-    outColor = vec4(t.rgb * col.rgb, t.a * col.a * cover);
+    outColor = vec4(pow(max(t.rgb, vec3(0.0)), vec3(1.0 / 2.2)) * col.rgb, t.a * col.a * cover);
   } else if (kind == 2) {  // SDF text; p0 = outline thickness (sdf units), color2 = outline colour
     float s = texture(uTex, uv).r;
     float w = max(fwidth(s) * 0.7, 0.012);
@@ -72,7 +72,7 @@ void main() {
     float cs = cos(rot), sn = sin(rot);
     vec2 r = vec2(q.x * cs - q.y * sn, q.x * sn + q.y * cs);
     vec4 t = texture(uTex, c + r * 0.5 * scale);
-    outColor = vec4(t.rgb * col.rgb, col.a * cover);
+    outColor = vec4(pow(max(t.rgb, vec3(0.0)), vec3(1.0 / 2.2)) * col.rgb, col.a * cover);
   } else if (kind == 5) {  // vertical gradient
     vec4 gcol = mix(vColor, vColor2, clamp(vT.y, 0.0, 1.0));
     outColor = vec4(gcol.rgb, gcol.a * cover);

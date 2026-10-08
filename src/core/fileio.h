@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#ifndef __ANDROID__
+#include <functional>
+#endif
 
 namespace gtabr {
 namespace fileio {
@@ -18,6 +21,10 @@ bool readAsset(const std::string& relPath, std::vector<uint8_t>& out);
 bool assetExists(const std::string& relPath);
 bool readTextAsset(const std::string& relPath, std::string& out);
 
+#ifndef __ANDROID__
+enum class AtomicStage { TempSynced, Renamed };
+void setAtomicWriteHook(std::function<void(const std::string&,AtomicStage)> hook);
+#endif
 bool writeFileAtomic(const std::string& absPath, const void* data, size_t size);
 bool readFile(const std::string& absPath, std::string& out);
 }  // namespace fileio

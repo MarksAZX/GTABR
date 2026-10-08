@@ -36,6 +36,23 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
       if ((w - here).length() > 6.0f) { next = w; break; }
     goal = next;
   }
+  if(v.ambientTraffic){
+    // The shared route supplies centre lines; ambient cars keep their right-hand lane.
+    Vec2 segment=goal-world_.nearestRoadPoint(here);
+    bool horizontal=std::fabs(segment.x)>=std::fabs(segment.y);
+    float sign=horizontal?(segment.x>=0?1.0f:-1.0f):(segment.y>=0?1.0f:-1.0f);
+    const RoadLine* road=nullptr;float nearest=1e9f;
+    for(const auto& candidate:world_.roads){if(candidate.horizontal!=horizontal)continue;float delta=std::fabs(candidate.c-(horizontal?goal.y:goal.x));if(delta<nearest){nearest=delta;road=&candidate;}}
+    float lane=road?std::min(2.2f,road->hw*0.45f):2.2f;
+    if(horizontal)goal.y=(road?road->c:goal.y)+sign*lane;else goal.x=(road?road->c:goal.x)-sign*lane;
+    if(road&&road->avenue){float side=(horizontal?here.y:here.x)-road->c,desired=sign*(horizontal?1:-1);bool open=false;
+      for(const auto& crossing:world_.roads)if(crossing.horizontal!=horizontal&&std::fabs(crossing.c-(horizontal?here.x:here.y))<crossing.hw+6)open=true;
+      if(side*desired<-0.5f&&!open){float best=1e9f;const RoadLine* crossing=nullptr;
+        for(const auto& candidate:world_.roads)if(candidate.horizontal!=horizontal){float distance=(candidate.c-(horizontal?here.x:here.y))*sign;if(distance>0&&distance<best){best=distance;crossing=&candidate;}}
+        if(crossing){float keep=side>0?lane:-lane;goal=horizontal?Vec2{crossing->c,road->c+keep}:Vec2{road->c+keep,crossing->c};maxSpeed=std::min(maxSpeed,4.5f);}
+      }
+    }
+  }
   Vec2 d = goal - here;
   float dist = d.length();
   VehicleInput in;
@@ -324,7 +341,7 @@ void Game::updatePolice(float dt) {
   }
   // siren audio: one loop following the nearest responding car
   if (anySiren) {
-    if (!sirenHandle_) sirenHandle_ = audio_.loopStart("siren", sirenPos, 0.5f);
+    if (!sirenHandle_){sirenHandle_ = audio_.loopStart("siren", sirenPos, 0.5f);if(settings_.soundCaptions)subtitle("Sirene próxima","Polícia",true); }
     audio_.loopUpdate(sirenHandle_, sirenPos, 0.55f);
   } else if (sirenHandle_) { audio_.loopStop(sirenHandle_); sirenHandle_ = 0; }
 }
@@ -424,7 +441,7 @@ void Game::copThink(Npc& c, float dt) {
       // escalation: officers who arrived with a baton draw the pistol once the level reaches 2 and the suspect keeps distance
       if (c.weapon == kWpnBaton && (wanted_ >= 3 || (wanted_ >= 2 && d > 8.0f) || (isFirearm(player_.weapon) && player_.aimHold > 0))) c.weapon = kWpnPistol;
       // armed response: shoot at level 3 or when the suspect has a firearm out / is shooting
-      bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || wanted_ >= 2 && d > 8.0f);
+      bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || (wanted_ >= 2 && d > 8.0f));
       if (shoot && d < 24.0f) {
         c.speed = 0;
         c.yaw = lerpAngle(c.yaw, yawFromDir(pp - c.pos), expDecay(10.0f, dt));

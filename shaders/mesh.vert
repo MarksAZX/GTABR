@@ -12,6 +12,7 @@ layout(location = 2) out vec4 vTangent;
 layout(location = 3) out vec2 vUV;
 void main() {
   vec4 wp = pc.model * vec4(aPos, 1.0);
+  wp.xyz+=foliageWind(wp.xyz,max(aNormal.w,0.0),aPos.y);
   vWorld = wp.xyz;
   mat3 m = mat3(pc.model);
   vNormal = m * aNormal.xyz;

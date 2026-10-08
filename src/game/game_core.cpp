@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 #include "../core/fileio.h"
 #include "../core/log.h"
@@ -14,6 +15,9 @@ bool Game::init(const Init& i) {
   r_ = i.renderer;
   jobs_ = i.jobs;
   fileio::setSaveDir(i.saveDir);
+  readSettings();
+  if (!i.mainMenu) { activeSlot_ = 0; sessionActive_ = true; freshSlot_ = i.newGame; if (!i.newGame) readSeed(); }
+  else menu_ = MenuState::Main;
   assets_.startLoading(r_, jobs_);
   queueModels();
   audio_.init();
@@ -23,37 +27,30 @@ bool Game::init(const Init& i) {
 }
 
 void Game::shutdown() {
-  if (phase_ == Phase::Playing) saveGame();
+  if (sessionActive_ && phase_ == Phase::Playing) saveGame();
   jobs_->waitIdle();
   audio_.shutdown();
 }
 
 void Game::startWorldJob() {
   jobs_->submit([this]() {
-    buildWorld(world_, worldSeed_);
+    worldReady_ = false;
+  buildWorld(world_, worldSeed_);
     worldReady_ = true;
   });
 }
 
 void Game::finishLoading() {
   // GPU meshes
-  for (auto& c : world_.chunks) {
-    if (c.mesh.empty()) continue;
-    c.handle = r_->createMesh(c.mesh.v.data(), c.mesh.v.size(), c.mesh.idx.data(), c.mesh.idx.size());
-    c.bounds = c.mesh.bounds;
-    c.mesh.v.clear(); c.mesh.v.shrink_to_fit(); c.mesh.idx.clear(); c.mesh.idx.shrink_to_fit();
-    if (!c.lod.empty()) {
-      c.lodHandle = r_->createMesh(c.lod.v.data(), c.lod.v.size(), c.lod.idx.data(), c.lod.idx.size());
-      c.lod.v.clear(); c.lod.v.shrink_to_fit(); c.lod.idx.clear(); c.lod.idx.shrink_to_fit();
-    }
-  }
+  for (auto& c : world_.chunks) c.bounds = c.mesh.bounds;
+  worldInstalled_ = true;
   if (!world_.interiorCeiling.empty()) {
     world_.interiorCeilingHandle = r_->createMesh(world_.interiorCeiling.v.data(), world_.interiorCeiling.v.size(), world_.interiorCeiling.idx.data(),
                                                   world_.interiorCeiling.idx.size());
   }
+  if(!world_.oceanBackdrop.empty())world_.oceanBackdropHandle=r_->createMesh(world_.oceanBackdrop.v.data(),world_.oceanBackdrop.v.size(),world_.oceanBackdrop.idx.data(),world_.oceanBackdrop.idx.size());
   materials_ = assets_.materials;
-  finishModels();
-  buildWeaponMeshes(*r_, weaponMeshes_);
+  if (initialLoading_) { finishModels(); buildWeaponMeshes(*r_, weaponMeshes_); buildDecorModels(*r_, decorModels_); }
   // weapon pickups around the neighbourhood (melee in the open, firearms in quieter corners)
   {
     // weapon pickups on spots chosen by the city generator (melee first, firearms later in the list)
@@ -67,7 +64,7 @@ void Game::finishLoading() {
     phys::depenetrateCircle(world_, p, 0.5f);
     k.pos = {p.x, world_.heightAt(p.x, p.y), p.y};
   }
-  worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
+  if (initialLoading_) worldMaterial_ = r_->createWorldMaterial(assets_.materials, assets_.materialsNormal);
   buildSpriteTables();
   // navigation
   {
@@ -95,8 +92,9 @@ void Game::finishLoading() {
   }
   resetEntities(true);
   bool loaded = false;
-  if (!cfg_.newGame) loaded = loadGame();
-  if (!loaded) LOGI("Starting a new game");
+  if (sessionActive_ && !freshSlot_) loaded = loadGame();
+  if (sessionActive_ && !freshSlot_ && !loaded) {sessionActive_=false;toast("Save inválido. O arquivo foi preservado.","save");}
+  else if (!loaded) LOGI("Starting a new game");
   CameraInput ci;
   ci.focus = {player_.pos.x, player_.y, player_.pos.y};
   ci.headingYaw = player_.yaw;
@@ -105,7 +103,10 @@ void Game::finishLoading() {
   fadeAlpha_ = 1.0f;
   fadeTarget_ = 0.0f;
   applySettings();
-  toast("Bem-vindo ao bairro! Ache o carro e vá ao posto.", "pin");
+  initialLoading_ = false;
+  if (sessionActive_) { menu_ = MenuState::None; if (freshSlot_) saveGame(); toast(world_.cityName + " • seed " + std::to_string(worldSeed_), "pin"); }
+  else menu_ = MenuState::Main;
+  updateStreaming();
 }
 
 void Game::resetEntities(bool fresh) {
@@ -125,6 +126,17 @@ void Game::resetEntities(bool fresh) {
     v.health = health[i];
     vehicles_.push_back(v);
   }
+  spawnTraffic();
+  weather_={};waterRings_.reserve(48);particles_.reserve(particles_.capacity());waterContact_=false;waterStep_=0;
+  time_ = 0; autosave_ = 0; timeScale_ = 1;
+  wanted_ = 0; wantedHeat_ = 0; sinceSeen_ = 1e9f; evadeT_ = 0; deathT_ = 0;
+  policeSpawnT_ = 0; tutorialStep_ = 0; purchases_ = 0;
+  fueling_ = {}; events_.clear(); tracers_.clear(); stains_.clear();
+  subtitleText_.clear();subtitleSpeaker_.clear();subtitleUntil_=0;receiptUntil_=0;
+  panel_ = {}; wheel_.open = false; wheel_.anim = 0; blur_ = 0;
+  waypoint_ = {}; playerAnim_ = {}; npcAnim_.clear();
+  audio_.loopStop(sirenHandle_); sirenHandle_ = 0;
+  audio_.loopStop(surfHandle_); surfHandle_ = 0;
   player_ = Player();
   player_.pos = {world_.spawnPlayer.x, world_.spawnPlayer.z};
   player_.yaw = player_.targetYaw = world_.spawnYaw;
@@ -142,7 +154,9 @@ void Game::teleportPlayer(Vec2 p, float yaw) {
   player_.pos = p;
   player_.yaw = player_.targetYaw = yaw;
   player_.vel = {};
-  player_.y = world_.heightAt(p.x, p.y);
+  player_.swimming=world_.waterDepth(p.x,p.y)>0.9f;
+  player_.swimBlend=player_.swimming?1.0f:0.0f;
+  player_.y = player_.swimming?world_.waterLevel-0.85f:world_.heightAt(p.x, p.y);
   player_.indoors = world_.inInterior(p.x, p.y);
 }
 
@@ -153,7 +167,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   lastDt_ = dtReal;
   fd_ = &fd;
   fd.clear();
-  timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
+  if (sessionActive_ && menu_ == MenuState::None && settings_.dayCycle) timeOfDay_ = std::fmod(timeOfDay_ + dtReal * dayRate_, 24.0f);
   fd.blur = 0; fd.fade = 0; fd.dim = 0;
 
   // smoothed frame time for adaptive quality + FPS counter
@@ -189,6 +203,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
   }
   updatePlaying(dtReal, in);
   setupGlobals(fd);
+  updateStreaming();
   buildScene(fd);
   buildUi(fd, dtReal);
 }
@@ -196,7 +211,7 @@ void Game::frame(float dtReal, gfx::FrameData& fd) {
 void Game::updatePlaying(float dtReal, const InputFrame& in) {
   // ---- fade transitions
   {
-    float rate = 4.5f;
+    float rate = settings_.reducedMotion ? 9.0f : 3.0f;
     if (fadeAlpha_ < fadeTarget_) fadeAlpha_ = std::min(fadeTarget_, fadeAlpha_ + rate * dtReal);
     else if (fadeAlpha_ > fadeTarget_) fadeAlpha_ = std::max(fadeTarget_, fadeAlpha_ - rate * dtReal);
     if (fadeTarget_ >= 1.0f && fadeAlpha_ >= 0.995f && fadeThen_) {
@@ -283,15 +298,17 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   time_ += dt;
 
   InputFrame gameIn = in;
-  if (panel_.open || wheel_.open || fadeAlpha_ > 0.6f) { gameIn.move = {}; gameIn.runHeld = false; }
+  if (panel_.open || wheel_.open || fadeThen_ || fadeAlpha_ > 0.3f) {gameIn.move={};gameIn.runHeld=false;gameIn.attackHeld=false;gameIn.attackPressed=false;gameIn.reloadPressed=false;}
 
   updatePlayer(dt, gameIn);
+  if (player_.swimming) {gameIn.attackPressed=false;gameIn.attackHeld=false;gameIn.reloadPressed=false;}
   updateCombat(dt, gameIn);
   updateVehicles(dt, gameIn);
   updateNpcs(dt);
   updateWanted(dt);
   updatePolice(dt);
   updateParticles(dt);
+  updateWeather(dt);
 
   // fuelling
   if (fueling_.active) {
@@ -316,12 +333,12 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
       ci.focus = {v.pos.x, world_.heightAt(v.pos.x, v.pos.y), v.pos.y};
       ci.headingYaw = v.yaw; ci.velocity = v.vel; ci.speed = v.speed; ci.driving = true;
     } else {
-      ci.focus = {player_.pos.x, player_.y, player_.pos.y};
+      ci.focus = {player_.pos.x, player_.y + 0.55f*player_.swimBlend, player_.pos.y};
       ci.headingYaw = player_.yaw; ci.velocity = player_.vel; ci.speed = player_.speed;
     }
     ci.indoors = player_.indoors;
     ci.look = in.look; ci.zoomDelta = in.zoom; ci.userDragging = in.lookDragging;
-    ci.shake = cameraShake_;
+    ci.shake = settings_.reducedMotion?0:cameraShake_;
     cam_.sensitivity = settings_.sensitivity;
     cam_.invertY = settings_.invertY;
     if (!panel_.open && !wheel_.open) cam_.update(dtReal, ci, world_, screenW_ / std::max(1.0f, screenH_));
@@ -329,6 +346,11 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     cameraShake_ = std::max(0.0f, cameraShake_ - dtReal * 2.5f);
     audio_.setListener(cam_.focus(), cam_.right());
   }
+  if ((world_.coastSide >= 0 && !player_.indoors && world_.beach.inflated(25).contains(player_.pos.x, player_.pos.y)) || player_.swimming) {
+    Vec3 sound{player_.pos.x,world_.waterLevel,player_.pos.y};
+    if(!surfHandle_){surfHandle_=audio_.loopStart("surf",sound,0.35f);if(settings_.soundCaptions)subtitle("Ondas do mar","Ambiente",true);}
+    audio_.loopUpdate(surfHandle_,sound,0.35f);
+  } else if(surfHandle_){audio_.loopStop(surfHandle_);surfHandle_=0;}
   indoorBlend_ += ((player_.indoors ? 1.0f : 0.0f) - indoorBlend_) * expDecay(6.0f, dtReal);
 
   // timers for HUD
@@ -352,7 +374,7 @@ void Game::updateAdaptiveQuality(float dt) {
   if (adaptTimer_ < 3.0f || !settings_.dynamicRes) return;
   adaptTimer_ = 0;
   // dynamic resolution: never above the preset's base scale, never below 60% of it
-  float base = preset().renderScale;
+  float base = preset().renderScale * settings_.resolution;
   float s = r_->renderScale();
   if (frameMsAvg_ > 36.0f && s > base * 0.6f + 0.01f) r_->setRenderScale(std::max(base * 0.6f, s - 0.08f));
   else if (frameMsAvg_ < 24.0f && s < base - 0.01f) r_->setRenderScale(std::min(base, s + 0.08f));
@@ -360,7 +382,8 @@ void Game::updateAdaptiveQuality(float dt) {
 
 void Game::applySettings() {
   const QualityPreset& qp = preset();
-  r_->setRenderScale(qp.renderScale);
+  r_->setRenderScale(qp.renderScale * settings_.resolution);
+  audio_.setMasterVolume(settings_.volume);
   r_->setShadowMapSize(qp.shadowMapSize);
   r_->setShadowsEnabled(settings_.shadows && qp.shadowCascades > 0);
   cam_.sensitivity = settings_.sensitivity;
@@ -399,7 +422,7 @@ int Game::nearestVehicleTo(Vec2 p, float maxDist, bool) const {
 }
 
 void Game::tryEnterExit() {
-  if (player_.entering || player_.exiting) return;
+  if (player_.entering || player_.exiting || fadeThen_ || player_.dead || player_.down) return;
   if (player_.vehicle >= 0) {
     Vehicle& v = vehicles_[player_.vehicle];
     if (std::fabs(v.speed) > 6.0f) { toast("Pare o veículo para sair", "car"); return; }
@@ -407,15 +430,24 @@ void Game::tryEnterExit() {
     player_.exiting = true;
     player_.transition = 0;
     player_.transitionVehicle = player_.vehicle;
+    player_.transitionFrom=v.pos;
+    const auto& def=vehicleDef(v.model);
+    Vec2 cand[]={v.pos-right2(v.yaw)*(def.width*0.5f+0.85f),v.pos+right2(v.yaw)*(def.width*0.5f+0.85f),v.pos-fwd2(v.yaw)*(def.length*0.5f+0.9f)};
+    player_.transitionTo=cand[0];for(Vec2 point:cand){auto free=point;phys::depenetrateCircle(world_,free,0.34f);player_.transitionTo=free;if((free-point).length()<0.05f)break;}
+    player_.transitionFrom=lerp(v.pos,player_.transitionTo,0.75f);
+    player_.vehicle=-1;v.occupant=-1;v.engineOn=false;player_.transitionYaw=player_.yaw;player_.vel={};
     return;
   }
-  if (player_.indoors) return;
+  if (player_.indoors || player_.swimming) return;
   int vi = nearestVehicleTo(player_.pos, 2.4f);
   if (vi < 0) { toast("Nenhum veículo por perto", "car"); return; }
   if (vehicles_[vi].occupant >= 0) return;
+  if(std::fabs(vehicles_[vi].speed)>1.0f){toast("Espere o veículo parar", "car");return;}
+  vehicles_[vi].ambientTraffic=false;vehicles_[vi].vel={};vehicles_[vi].speed=0;vehicles_[vi].engineOn=false;
   player_.entering = true;
   player_.transition = 0;
   player_.transitionVehicle = vi;
+  player_.transitionFrom=player_.pos;player_.transitionYaw=player_.yaw;player_.vel={};
 }
 
 void Game::updatePlayer(float dt, const InputFrame& in) {
@@ -423,44 +455,18 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   p.hurtTimer = std::max(0.0f, p.hurtTimer - dt);
   // ---- enter / exit animation
   if (p.entering || p.exiting) {
-    p.transition += dt / 0.42f;
-    Vehicle& v = vehicles_[p.transitionVehicle];
-    const VehicleDef& d = vehicleDef(v.model);
-    Vec2 door = v.pos - right2(v.yaw) * (d.width * 0.5f + 0.55f) + fwd2(v.yaw) * 0.3f;
-    if (p.entering) {
-      p.pos = lerp(p.pos, door, expDecay(10.0f, dt));
-      if (p.transition >= 1.0f) {
-        p.entering = false;
-        p.vehicle = p.transitionVehicle;
-        v.occupant = 0;
-        v.engineOn = true;
-        p.transition = 0;
-        toast(std::string("Dirigindo: ") + d.name, "car");
-        if (v.fuel <= 0.0f) toast("Sem combustível!", "fuel", rgba(1.0f, 0.5f, 0.4f));
-      }
-    } else {
-      if (p.transition >= 1.0f) {
-        p.exiting = false;
-        p.transition = 0;
-        v.occupant = -1;
-        v.engineOn = false;
-        p.vehicle = -1;
-      } else if (p.transition < 0.05f) {
-        // choose a free exit spot: driver side, passenger side, behind
-        Vec2 cand[3] = {v.pos - right2(v.yaw) * (d.width * 0.5f + 0.75f), v.pos + right2(v.yaw) * (d.width * 0.5f + 0.75f),
-                        v.pos - fwd2(v.yaw) * (d.length * 0.5f + 0.9f)};
-        Vec2 best = cand[0];
-        for (Vec2 c : cand) {
-          Vec2 t = c;
-          phys::depenetrateCircle(world_, t, 0.34f);
-          if ((t - c).length() < 0.05f) { best = c; break; }
-          best = t;
-        }
-        p.pos = best;
-        p.yaw = p.targetYaw = wrapAngle(v.yaw + kPi * 0.5f);
-        p.vehicle = -1;   // visible on foot again, still blocked from input until done
-        v.occupant = -1;
-      }
+    if(p.transitionVehicle<0||p.transitionVehicle>=(int)vehicles_.size()){p.entering=p.exiting=false;return;}
+    p.transition = std::min(1.0f,p.transition + dt / 0.75f);
+    Vehicle& v=vehicles_[p.transitionVehicle];const auto& d=vehicleDef(v.model);
+    Vec2 door=v.pos-right2(v.yaw)*(d.width*0.5f+0.55f)+fwd2(v.yaw)*0.3f;
+    float ease=smoothstep(p.transition);
+    p.pos=lerp(p.transitionFrom,p.entering?door:p.transitionTo,ease);
+    p.y=world_.heightAt(p.pos.x,p.pos.y);p.speed=0;p.running=false;
+    p.yaw=lerpAngle(p.transitionYaw,p.entering?wrapAngle(v.yaw+kPi*0.5f):v.yaw,ease);
+    if(p.transition>=1){
+      if(p.entering){p.vehicle=p.transitionVehicle;v.occupant=0;v.engineOn=true;toast(std::string("Dirigindo: ")+d.name,"car");if(v.fuel<=0)toast("Sem combustível!","fuel",rgba(1.0f,0.5f,0.4f));if(settings_.soundCaptions)subtitle("Motor ligado","Veículo",true);}
+      else {p.vehicle=-1;v.occupant=-1;v.engineOn=false;}
+      p.entering=p.exiting=false;p.transition=0;p.targetYaw=p.yaw;
     }
     return;
   }
@@ -496,8 +502,9 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   Vec2 dir = camF2 * mv.y + camR2 * mv.x;
   bool wantRun = in.runHeld && mag > 0.2f;
   bool canRun = (p.stamina > 6.0f || p.runBoost > 0.0f) && p.staminaCooldown <= 0.0f;
+  p.swimming = world_.waterDepth(p.pos.x, p.pos.y) > (p.swimming ? 0.65f : 0.9f);
   p.running = wantRun && canRun;
-  float maxSpeed = p.running ? 6.4f : 3.1f;
+  float maxSpeed = lerp(p.running ? 6.4f : 3.1f,p.running ? 2.8f : 1.8f,p.swimBlend);
   Vec2 desired = mag > 0.01f ? dir.normalized() * (maxSpeed * (p.running ? 1.0f : std::max(0.45f, mag))) : Vec2{0, 0};
   float accel = mag > 0.01f ? 16.0f : 20.0f;
   p.vel += (desired - p.vel) * expDecay(accel, dt);
@@ -552,20 +559,23 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   p.yaw = lerpAngle(p.yaw, p.targetYaw, expDecay(13.0f, dt));
   float stride = p.running ? 2.5f : 1.55f;
   if (p.speed > 0.25f) p.animTime += p.speed * dt / stride;
-  float hy = world_.heightAt(p.pos.x, p.pos.y);
-  p.y += (hy - p.y) * expDecay(18.0f, dt);
+  p.swimming = world_.waterDepth(p.pos.x, p.pos.y) > (p.swimming ? 0.65f : 0.9f);
+  p.swimBlend+=(float(p.swimming)-p.swimBlend)*expDecay(5.0f,dt);
+  float hy = lerp(world_.heightAt(p.pos.x,p.pos.y),world_.waterLevel - 0.85f + 0.04f * std::sin(realTime_ * 2.2f),p.swimBlend);
+  p.y += (hy - p.y) * expDecay(8.0f, dt);
   p.indoors = world_.inInterior(p.pos.x, p.pos.y);
   p.health = std::min(100.0f, p.health + 0.4f * dt);   // slow natural recovery
 }
 
 // ------------------------------------------------------------------------------------------------ vehicles
 void Game::updateVehicles(float dt, const InputFrame& in) {
+  updateTraffic(dt);
   // sub-step for stability at low frame rates
   int steps = std::max(1, (int)std::ceil(dt / (1.0f / 60.0f)));
   float h = dt / steps;
   for (int s = 0; s < steps; ++s) {
     for (Vehicle& v : vehicles_) {
-      if (v.despawn || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
+      if (v.despawn || v.ambientTraffic || (v.police && v.driver >= 0 && v.occupant < 0)) continue;   // AI police cars are driven by updatePolice
       VehicleInput vi;
       bool driven = (player_.vehicle == v.id && !player_.exiting);
       if (driven) {
@@ -707,7 +717,7 @@ void Game::collectInteractables() {
     for (const DoorDef& d : world_.doors) {
       if (d.toInterior == player_.indoors) continue;   // exterior doors are only usable outside, exit doors inside
       Interactable it;
-      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair"; it.sub = d.toInterior ? "Mercado do Zé" : "Voltar à rua"; it.icon = "door";
+      it.kind = IKind::Door; it.id = d.id; it.pos = d.pos; it.radius = d.radius; it.label = d.toInterior ? "Entrar" : "Sair"; it.sub = d.toInterior && d.shop >= 0 ? world_.shops[d.shop].name : "Voltar à rua"; it.icon = "door";
       add(it);
     }
     if (player_.indoors)
@@ -715,8 +725,10 @@ void Game::collectInteractables() {
         const ItemDef& d = itemDef(pr.item);
         Interactable it;
         it.kind = IKind::Product; it.id = pr.id; it.pos = pr.pos; it.radius = 1.5f; it.label = "Comprar";
-        it.sub = std::string(d.name) + " • " + fmtMoney(d.priceCents); it.icon = "cart"; it.art = d.art ? d.art : "";
-        it.enabled = moneyCents_ >= d.priceCents;
+        int price=d.priceCents;
+        if(pr.shop>=0) for(const auto& stock:world_.shops[pr.shop].stock) if(stock.kind==0&&stock.id==pr.item)price=stock.priceCents;
+        it.sub = std::string(d.name) + " • " + fmtMoney(price); it.icon = "cart"; it.art = d.art ? d.art : "";
+        it.enabled = moneyCents_ >= price;
         add(it);
       }
   }
@@ -763,7 +775,8 @@ void Game::activateInteractable(const Interactable& it) {
     case IKind::Door: {
       const DoorDef* d = nullptr;
       for (const DoorDef& x : world_.doors) if (x.id == it.id) d = &x;
-      if (!d) break;
+      if (!d || fadeThen_ || player_.entering || player_.exiting) break;
+      interactPulse_=0.8f;player_.vel={};player_.speed=0;
       DoorDef door = *d;
       fadeTarget_ = 1.0f;
       fadeThen_ = [this, door]() {
@@ -773,7 +786,7 @@ void Game::activateInteractable(const Interactable& it) {
         ci.headingYaw = door.arriveYaw;
         ci.indoors = player_.indoors;
         cam_.snapTo(ci, world_, screenW_ / std::max(1.0f, screenH_));
-        toast(door.toInterior ? "Mercado do Zé" : "Na rua", door.toInterior ? "cart" : "pin");
+        toast(door.toInterior && door.shop >= 0 ? world_.shops[door.shop].name : "Na rua", door.toInterior ? "cart" : "pin");
       };
       break;
     }

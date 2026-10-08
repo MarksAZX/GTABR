@@ -10,6 +10,12 @@ float shadowCascade(vec3 worldPos, int c) {
   s += texture(uShadow, vec4(uv - vec2(t, 0.0), float(c), p.z)) * 0.18;
   s += texture(uShadow, vec4(uv + vec2(0.0, t), float(c), p.z)) * 0.18;
   s += texture(uShadow, vec4(uv - vec2(0.0, t), float(c), p.z)) * 0.18;
+  if(g.effectsInfo.z>0.5){s*=0.52;
+    s+=texture(uShadow,vec4(uv+vec2(t,t),float(c),p.z))*0.12;
+    s+=texture(uShadow,vec4(uv+vec2(-t,t),float(c),p.z))*0.12;
+    s+=texture(uShadow,vec4(uv+vec2(t,-t),float(c),p.z))*0.12;
+    s+=texture(uShadow,vec4(uv-vec2(t,t),float(c),p.z))*0.12;
+  }
   if (c == 0) return s;
   vec2 e = abs(uv - 0.5) * 2.0;
   return mix(s, 1.0, smoothstep(0.9, 1.0, max(e.x, e.y)));

@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+#include <unistd.h>
+#include <fcntl.h>
 
 #ifdef __ANDROID__
 #include <android/asset_manager.h>
@@ -73,15 +75,29 @@ bool readTextAsset(const std::string& rel, std::string& out) {
   return true;
 }
 
+#ifndef __ANDROID__
+static std::function<void(const std::string&,AtomicStage)> atomicHook;
+void setAtomicWriteHook(std::function<void(const std::string&,AtomicStage)> hook){atomicHook=std::move(hook);}
+#endif
 bool writeFileAtomic(const std::string& path, const void* data, size_t size) {
   std::string tmp = path + ".tmp";
   FILE* f = fopen(tmp.c_str(), "wb");
   if (!f) return false;
   size_t n = fwrite(data, 1, size, f);
-  fflush(f);
-  fclose(f);
-  if (n != size) return false;
-  return rename(tmp.c_str(), path.c_str()) == 0;
+  bool flushed = fflush(f) == 0;
+  bool synced = flushed && fsync(fileno(f)) == 0;
+  bool closed = fclose(f) == 0;
+  if (n != size || !synced || !closed) {std::remove(tmp.c_str()); return false;}
+#ifndef __ANDROID__
+  if(atomicHook)atomicHook(path,AtomicStage::TempSynced);
+#endif
+  if(rename(tmp.c_str(),path.c_str())!=0){std::remove(tmp.c_str());return false;}
+#ifndef __ANDROID__
+  if(atomicHook)atomicHook(path,AtomicStage::Renamed);
+#endif
+  auto slash=path.find_last_of('/');std::string parent=slash==std::string::npos?".":path.substr(0,slash);
+  int dir=open(parent.c_str(),O_RDONLY|O_DIRECTORY);if(dir<0)return false;
+  bool durable=fsync(dir)==0;close(dir);return durable;
 }
 
 bool readFile(const std::string& path, std::string& out) {

@@ -111,6 +111,13 @@ void Audio::synthesize() {
   samples_["body"].data = thud(s, 0.4f, 60.0f, 0.6f, 12.0f);
   samples_["siren"].data = siren(s);
   samples_["siren"].loop = true;
+  auto& surf = samples_["surf"]; surf.data = s.buf(6.0f); surf.loop = true;
+  LP low(950.0f, s.rate);
+  for(size_t i=0;i<surf.data.size();++i) {
+    float wave=0.55f+0.45f*std::sin(i*kTau/surf.data.size());
+    surf.data[i]=low(s.noise())*wave*0.32f;
+  }
+  if(!surf.data.empty())surf.data.back()=surf.data.front();
 }
 
 bool Audio::init() {

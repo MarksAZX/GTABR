@@ -161,24 +161,32 @@ void Game::setupGlobals(gfx::FrameData& fd) {
 
   const bool shadowsOn = settings_.shadows && qp.shadowCascades > 0;
   g.sunDir = {L.x, L.y, L.z, shadowsOn ? day_.shadowStrength * (1.0f - ind) : 0.0f};
-  g.sunColor = {day_.sunColor.x, day_.sunColor.y, day_.sunColor.z, day_.sunDisk};
+  float storm=weather_.rain*(1-ind);
+  g.sunDir.w*=1-storm*0.65f;
+  g.sunColor = {day_.sunColor.x*(1-storm*0.65f), day_.sunColor.y*(1-storm*0.62f), day_.sunColor.z*(1-storm*0.55f), day_.sunDisk*(1-storm)};
   g.ambSky = {day_.ambSky.x, day_.ambSky.y, day_.ambSky.z, 0};
   g.ambGround = {day_.ambGround.x, day_.ambGround.y, day_.ambGround.z, 0};
   g.fog = {day_.fog.x, day_.fog.y, day_.fog.z, lerp(day_.fogDensity, 0.0f, ind)};
+  g.fog.x=lerp(g.fog.x,0.28f,storm*0.65f);g.fog.y=lerp(g.fog.y,0.33f,storm*0.65f);g.fog.z=lerp(g.fog.z,0.39f,storm*0.65f);g.fog.w+=storm*0.004f;
   g.params = {day_.exposure, 1.25f / smSize, day_.night, ind};
   g.sky0 = {day_.zenith.x, day_.zenith.y, day_.zenith.z, day_.cloudCover};
   g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};
   g.cascade = {0.0f, (float)std::max(1, qp.shadowCascades), 0.045f, wetness_};
   g.lightInfo = {0, 0, 0, 0};
+  const int ssrSteps[]={8,12,20,28};
+  g.reflectionInfo={settings_.reflections?1.0f:0.0f,settings_.reflections==2?(float)ssrSteps[clamp(settings_.quality,0,3)]:0.0f,settings_.quality>=1?1.0f:0.0f,world_.coastSide>=0?world_.waterLevel:-10000.0f};
+  g.weather={weather_.rain,weather_.wind,weather_.clock,settings_.effects?float(settings_.quality+1):0.0f};
+  g.effectsInfo={settings_.ambientOcclusion&&settings_.effects&&settings_.quality>0?0.55f:0.0f,settings_.quality>=2?8.0f:4.0f,settings_.quality>=2?1.0f:0.0f,settings_.quality>=1?1.0f:0.0f};
+  g.waterBounds={world_.sea.x0-3,world_.sea.z0-3,world_.sea.x1+3,world_.sea.z1+3};
   fd.drawShadows = shadowsOn && ind < 0.5f && day_.shadowStrength > 0.01f;
   fd.shadowCascades = std::max(1, qp.shadowCascades);
   fd.vignette = 0.26f;
   fd.fade = fadeAlpha_;
-  fd.blur = blur_;
+  fd.blur = menu_ != MenuState::None ? 0.5f : blur_;
   fd.dim = blur_ * 0.5f;
   // indoors: neutral lamp exposure
   fd.exposure = lerp(day_.exposure, 1.05f, ind);
-  fd.bloom = qp.bloom ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
+  fd.bloom = qp.bloom && settings_.effects ? lerp(0.05f, 0.11f, day_.night) : 0.0f;
   fd.bloomThreshold = lerp(1.1f, 0.55f, day_.night);
   fd.lift = {day_.lift.x, day_.lift.y, day_.lift.z, lerp(day_.saturation, 1.0f, ind)};
   fd.gain = {day_.gain.x, day_.gain.y, day_.gain.z, day_.contrast};
@@ -191,17 +199,19 @@ void Game::emitWorld(gfx::FrameData& fd) {
   bool indoors = player_.indoors;
   Vec3 focus = cam_.focus();
   stats_.drawnChunks = 0;
+  if(!indoors&&world_.oceanBackdropHandle.valid()&&fr.intersects(world_.oceanBackdrop.bounds))fd.worldMeshes.push_back(world_.oceanBackdropHandle.id);
   for (const World::Chunk& c : world_.chunks) {
-    if (!c.handle.valid()) continue;
+    if (!c.handle.valid() && !c.lodHandle.valid()) continue;
     if (c.interior != indoors) continue;
     Vec3 ctr = c.bounds.center();
     // HLOD: far chunks draw their merged low-detail mesh (one box per building, flat ground)
     float camD = std::sqrt((ctr.x - focus.x) * (ctr.x - focus.x) + (ctr.z - focus.z) * (ctr.z - focus.z));
-    bool far = c.lodHandle.valid() && camD > lodDistance_;
+    if (camD > preset().drawDistance * settings_.renderDistance + World::kChunk) continue;
+    bool far = c.lodHandle.valid() && (camD > lodDistance_ || !c.handle.valid());
     if (fr.intersects(c.bounds)) { fd.worldMeshes.push_back(far ? c.lodHandle.id : c.handle.id); stats_.drawnChunks++; }
     float dx = ctr.x - shadowFocus_.x, dz = ctr.z - shadowFocus_.z;
     float ext = (c.bounds.extent().x + c.bounds.extent().z) * 0.5f;
-    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(c.handle.id);
+    if (std::sqrt(dx * dx + dz * dz) < shadowRadius_ * 1.42f + ext) fd.shadowMeshes.push_back(far ? c.lodHandle.id : c.handle.id);
   }
   if (indoors && world_.interiorCeilingHandle.valid() && cam_.blend() > 0.45f && cam_.eye().y < 3.1f)
     fd.worldMeshes.push_back(world_.interiorCeilingHandle.id);
@@ -306,7 +316,10 @@ void Game::emitSprites(gfx::FrameData& fd) {
     // ---- trees and props
     for (size_t i = 0; i < world_.decor.size(); ++i) {
       const DecorInstance& d = world_.decor[i];
-      float reach = d.kind == DecorKind::Tree ? 4.5f : 1.8f;
+      if (decorModels_.ready && d.model >= 0) continue;
+      if (d.species >= 0 && decorModels_.ready && (d.pos-eye).length() <= preset().drawDistance * settings_.renderDistance * 0.75f) continue;
+      if (d.kind == DecorKind::Tree && (i%100)/100.0f > settings_.vegetation * preset().decorDensity) continue;
+      float reach = d.kind == DecorKind::Tree ? 6.0f : 1.8f;
       if (!visible(d.pos, reach)) continue;
       const DecorSprites* ds = decorOf_[i];
       if (!ds) continue;
@@ -321,6 +334,7 @@ void Game::emitSprites(gfx::FrameData& fd) {
       }
     }
   }
+  emitWeather();
   // ---- smoke particles (use the soft dot of the icon atlas)
   UvRect dot = assets_.icon("dot");
   if (dot.valid) {

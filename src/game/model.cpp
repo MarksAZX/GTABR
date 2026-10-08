@@ -495,6 +495,8 @@ void Animator::evaluate(CharAnim& a, const ModelAsset& m) {
     if (ci >= (int)m.clipMap.size()) return;
     const AnimClip& c = (*clips_)[ci];
     samplePose(sk, c, m.clipMap[ci], std::min(t, c.duration - 1e-3f), m.animRootScale, tmp_);
+    if (act == kActSwim || act == kActSwimIdle)
+      for (size_t b=0;b<nb;++b) if (sk.parent[b]<0) {tmp_[b].t=sk.rest[b].t; tmp_[b].s=sk.rest[b].s;}
     for (size_t b = 0; b < nb; ++b) {
       if (upper && !upperBone(b)) continue;
       float k = w;

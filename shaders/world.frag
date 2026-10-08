@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
 #include "globals.glsl"
+#include "water.glsl"
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
 layout(set = 1, binding = 0) uniform sampler2DArray uMat;    // albedo
 layout(set = 1, binding = 1) uniform sampler2DArray uMatN;   // rg = normal xy, b = roughness, a = cavity / AO
@@ -25,19 +26,55 @@ vec3 perturb(vec3 N, vec3 P, vec2 uv, vec3 tn) {
 }
 
 void main() {
-  vec3 Ng = normalize(vNormal);
-  vec4 tex = texture(uMat, vUVL);
-  vec4 nr = texture(uMatN, vUVL);
+  vec3 Ng = dot(vNormal,vNormal) > 0.00001 ? normalize(vNormal) : vec3(0,1,0);
+  bool water = vUVL.z > 30.5 && vUVL.z < 31.5;
+  // Coast distance in vUVL.y is gameplay geometry, not a texture repeat coordinate.
+  vec2 waterUV = vWorld.xz * 0.16 + vec2(g.camPos.w * 0.008, g.camPos.w * -0.011);
+  vec3 materialUV = water ? vec3(waterUV, 31.0) : vUVL;
+  vec4 tex = texture(uMat, materialUV);
+  vec4 nr = texture(uMatN, materialUV);
+  bool natural = (vUVL.z > 3.5 && vUVL.z < 5.5) || (vUVL.z > 29.5 && vUVL.z < 30.5) || (vUVL.z > 40.5 && vUVL.z < 41.5);
+  vec2 alternateUV=mat2(0.8,-0.6,0.6,0.8)*vUVL.xy*0.73+vec2(0.37,0.61);
+  if(natural && g.reflectionInfo.z>0.5){tex=mix(tex,texture(uMat,vec3(alternateUV,vUVL.z)),0.32);nr=mix(nr,texture(uMatN,vec3(alternateUV,vUVL.z)),0.32);}
+  float wetSand=0.0;
+  if(vUVL.z>40.5 && vUVL.z<41.5){
+    wetSand=clamp(vColor.a+(0.10*sin(dot(vWorld.xz,vec2(0.24,0.32))-g.camPos.w*0.6))*sin(vColor.a*PI),0.0,1.0);vec4 dry=texture(uMat,vec3(vUVL.xy,30)),dryN=texture(uMatN,vec3(vUVL.xy,30));
+    if(g.reflectionInfo.z>0.5){dry=mix(dry,texture(uMat,vec3(alternateUV,30)),0.32);dryN=mix(dryN,texture(uMatN,vec3(alternateUV,30)),0.32);}
+    tex=mix(dry,tex,wetSand);nr=mix(dryN,nr,wetSand);
+  }
+  float macro=0.94+0.035*sin(dot(vWorld.xz,vec2(0.17,0.12)))+0.025*cos(dot(vWorld.xz,vec2(-0.11,0.19)));
   vec3 albedo = tex.rgb * vColor.rgb;
+  if(natural||vUVL.z<2.5)albedo*=macro;
   vec3 tn = vec3(nr.rg * 2.0 - 1.0, 0.0);
   tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
   vec3 N = perturb(Ng, vWorld, vUVL.xy, tn);
   float rough = clamp(nr.b, 0.04, 1.0);
-  float ao = vColor.a * mix(1.0, nr.a, 0.85);
+  float ao = (vUVL.z>40.5&&vUVL.z<41.5?1.0:vColor.a) * mix(1.0, nr.a, 0.85);
+  if (water) {
+    vec2 fineUV=vWorld.xz*0.34+vec2(g.camPos.w*0.016,-g.camPos.w*0.013);
+    vec4 fine=texture(uMatN,vec3(fineUV,31));
+    vec2 ripples=(nr.rg+fine.rg-1.0)*0.11;
+    N=normalize(waveNormal(vWorld.xz,vUVL.y,g.camPos.w)+vec3(ripples.x,0,ripples.y));
+    float phase=vUVL.y*0.68+g.camPos.w*1.65+sin(dot(vWorld.xz,vec2(0.06,0.04)))*0.38;
+    float coverage=texture(uMat,vec3(vWorld.xz*0.28+vec2(g.camPos.w*0.02,0),40)).r;
+    float breakZone=1-smoothstep(2.0,15.0,vUVL.y);
+    float crest=pow(max(0.0,sin(phase)),7.0);
+    float wash=(1-smoothstep(0.0,2.1+0.7*sin(g.camPos.w*1.65),vUVL.y))*0.7;
+    float foam=clamp((crest*breakZone+wash)*smoothstep(0.03,0.35,coverage)*1.5,0,1);
+    float depthBlend=smoothstep(0.0,42.0,vUVL.y);
+    albedo=mix(vec3(0.16,0.47,0.42),vec3(0.016,0.09,0.15),depthBlend);
+    albedo=mix(albedo,tex.rgb*0.45,0.14);
+    albedo=mix(albedo,vec3(0.82,0.9,0.88),foam*0.86);
+    rough=mix(0.16,0.7,foam);
+    ao = 1.0;
+  }
   // rain-darkened / wet ground: darker albedo, glossier on horizontal surfaces
-  float wet = g.cascade.w * smoothstep(0.7, 0.95, Ng.y);
+  float wetPatch=0.5+0.25*sin(vWorld.x*0.67+sin(vWorld.z*0.21))+0.25*cos(vWorld.z*0.48+vWorld.x*0.13);
+  float wet = g.cascade.w * smoothstep(0.7, 0.95, Ng.y)*(1-g.params.w);
+  if(vUVL.z>3.5&&vUVL.z<5.5)wet*=0.25;
+  wet*=mix(0.4,1.0,smoothstep(0.25,0.8,wetPatch));
   albedo *= 1.0 - 0.35 * wet;
-  rough = mix(rough, 0.12, wet * 0.85);
+  rough = mix(rough, 0.085, wet * 0.92);
 
   vec3 V = normalize(g.camPos.xyz - vWorld);
   vec3 L = g.sunDir.xyz;
@@ -54,13 +91,13 @@ void main() {
   vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
   vec3 R = reflect(-V, N);
   vec3 env = skyRadiance(R, 0.0) * (1.0 - 0.6 * a);
-  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
+  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.22 + 0.12 * N.y);
   irr = mix(irr, lamp, indoor);
-  env = mix(env, lamp * 0.6, indoor);
+  env = mix(env, lamp * 0.6, indoor) * g.reflectionInfo.x;
   vec3 ambient = (albedo * irr + env * envBRDF(f0, rough, NoV)) * ao;
 
   vec3 col = direct + ambient + evalLights(vWorld, N, V, albedo, f0, rough);
-  col += albedo * vEmissive * g.params.z * 6.0;   // shop signs / lamps glow at night
+  col += albedo * vEmissive * max(g.params.z,g.params.w) * 6.0;   // shop signs / lamps glow at night
   col = applyFog(col, vWorld);
   outColor = vec4(col, 1.0);
 }

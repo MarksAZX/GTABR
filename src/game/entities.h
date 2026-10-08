@@ -68,6 +68,7 @@ struct Vehicle {
   float y = 0;
   float wheelSpin = 0;
   // police / AI driving
+  bool ambientTraffic = false;
   bool police = false;
   bool siren = false;
   int driver = -1;          // npc index driving it (police), -1 none
@@ -88,6 +89,10 @@ inline phys::OBB vehicleObb(const Vehicle& v) {
 }
 
 struct Player {
+  bool swimming = false;
+  float swimBlend = 0;
+  Vec2 transitionFrom, transitionTo;
+  float transitionYaw = 0;
   Vec2 pos;
   float yaw = 0;
   float targetYaw = 0;

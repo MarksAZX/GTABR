@@ -1,8 +1,16 @@
 # Bairro — jogo urbano brasileiro (Android, C++20 + Vulkan)
 
-Um bairro pequeno e jogável, com posto de gasolina (R$20 / R$50 / completar), mercado (entrar, conversar, comprar) e oficina (conserto pago).
-Tem câmera Top Down e câmera em Terceira Pessoa, com transição suave.
-Há NPCs andando em navmesh, roda de itens com blur, dinheiro real e save/load.
+Continuação da base C++20/Vulkan existente: cidade procedural por seed, quatro comércios com interiores e compra, praia e natação, combate, veículos, posto, oficina e polícia. A cidade varia em distritos, ruas, avenidas, lotes e costa; o mapa e o minimapa usam os dados dessa geração.
+
+## Jogar e persistir
+
+O Android abre o menu principal. **Novo jogo** permite escolher um dos quatro slots; substituir ou excluir exige confirmação na interface. **Continuar** carrega o slot utilizado por último, e **Carregar jogo** mostra seed, data, localização, dinheiro e tempo jogado.
+
+Cada slot guarda a seed exata, posição, dinheiro, itens, armas, munição, veículos persistentes, combustível, danos, câmera, hora, tempo jogado e estado de procura/progresso. O mundo é reconstruído antes de restaurar as entidades. Escrita atômica com sincronização em disco; saves antigos são migrados uma vez e o original é preservado.
+
+A pausa reúne mapa com zoom/arraste, jogo, inventário utilizável, códigos com efeitos reais, configurações, salvar e menu principal. Configurações globais persistem separadamente e alteram resolução, sombras, distância, vegetação, efeitos, resolução dinâmica, limite de FPS Android, volume, sensibilidade, ciclo do dia e escala do HUD.
+
+Na costa, andar para água profunda ativa natação; voltar à água rasa permite caminhar. Há animações de deslocamento e repouso, velocidade própria, flutuação, ondas simples, espuma e som de mar. Nas lojas, entre pela porta, interaja com o atendente e escolha o produto: o preço é descontado e o item/equipamento é entregue.
 
 ## Build
 
@@ -21,6 +29,13 @@ cmake -S . -B build && cmake --build build -j
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./build/gtabr_headless --scenario look --out shots
 ```
 
+Para GPUs desktop sem ASTC, gere o fallback dos assets originais uma vez:
+
+```sh
+python3 -m pip install astc-encoder-py
+python3 tools/decode_textures.py
+```
+
 **Cenários:**
 
 | Cenário | O que faz |
@@ -28,7 +43,12 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./build/gtabr_headless --s
 | `start` | Gera as duas câmeras. |
 | `look` | Gera manhã, tarde, pôr do sol e noite nas duas câmeras. |
 | `char` | Mostra o personagem em idle, andando e correndo. |
-| `mvp` | Roda o loop completo com input simulado e verificações. |
+| `mvp` | Caminhar, dirigir, abastecer, comprar, reparar pagando e salvar/carregar com input simulado. |
+| `city` | Quatro lojas, compras, códigos, natação, persistência e independência dos slots. |
+| `menus` | Acrescenta navegação real por toque do menu principal até a criação do slot. |
+| `resume` | Com `--continue`, valida o save em um processo novo, incluindo seed, posição, dinheiro, itens e armas. |
+| `gameplay` | Combate, reações dos NPCs, polícia e persistência de armas/munição. |
+| `wanted3` | Perseguição e sobrevivência com procura máxima. |
 
 **Opções:**
 
@@ -38,6 +58,27 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json ./build/gtabr_headless --s
 | `--day-rate R` | Define a velocidade do ciclo do dia. |
 | `--quality 0..3` | Escolhe o preset: BAIXO, MÉDIO, ALTO ou ULTRA. |
 | `--scale S` | Define a escala de resolução. |
+| `--seed N` | Seed reproduzível de teste; o Android gera uma nova por slot. |
+| `--save DIRETÓRIO` | Isola os arquivos de uma sessão de teste. |
+| `--continue` | Restaura o slot recente desse diretório. |
+| `--validation` | Habilita validação Vulkan quando a camada estiver instalada. |
+
+Teste determinístico sem renderização:
+
+```sh
+ctest --test-dir build --output-on-failure
+```
+
+`test_city` compara geometria e minimapa em 24 seeds, verifica os quatro lados de costa e seeds sem mar, interiores, spawn, geometria finita e orientação das superfícies de água.
+
+## Cidade e orçamento gráfico
+
+- Árvores de oito espécies com variação de forma/tamanho, três LODs e impostores distantes.
+- Props urbanos próprios em 3D: postes, bancos, bombas, lixeiras, objetos de praia e outros; atlas compartilhado de albedo, normal e ORM.
+- Instancing na GPU para árvores e props com modelo/material/LOD iguais; culling por distância e frustum.
+- Chunks próximos detalhados, HLOD intermediário, descarregamento distante com histerese e uploads limitados por frame.
+- Deleção de recursos da GPU adiada até a conclusão dos frames em voo; IDs reutilizados.
+- O mapa completo continua disponível mesmo quando o chunk visual não está residente.
 
 ## Visual
 
@@ -93,6 +134,14 @@ Os presets BAIXO, MÉDIO, ALTO e ULTRA mudam:
 
 A resolução dinâmica é opcional.
 
+## Texturas costeiras — 0.2.1
+
+Mar, areia seca, areia úmida e máscara de espuma vêm de um novo atlas GPT Image. O shader consome a textura do mar e a máscara animada de espuma; UVs de material são separados da distância da costa, a cor por profundidade é interpolada e os chunks HLOD preservam a superfície do oceano.
+
+A geração usou o GPT Image disponível na sessão. A versão do modelo e o preset de geração não foram expostos; não se afirma GPT Image 2.5 medium. O Higgsfield estava instalado no catálogo, mas sem ferramentas de geração acessíveis. Os assets Higgsfield existentes foram preservados. Proveniência e reconstrução em `assets/source/gpt_image/README.md`.
+
+`python3 tools/build_coastal_assets.py --quality medium` atualiza somente as quatro camadas costeiras, preservando todos os bytes comprimidos dos outros materiais. `medium` aqui é a qualidade de compressão ASTC. O crescimento dos dois arrays é de 1.016.000 bytes, com mipmaps. O build completo de materiais também reconhece o atlas.
+
 ## Pipeline de assets
 
 | Etapa | Ferramenta |
@@ -105,3 +154,7 @@ A resolução dinâmica é opcional.
 - Ready Player Me não estava disponível; os personagens vêm do pipeline 3D do Higgsfield.
 - Ainda não existem modelos próprios para mecânico e pedestre homem, por falta de créditos. Eles reutilizam outros corpos.
 - Só houve teste em renderizador por software (lavapipe). O desempenho real precisa ser medido em aparelho.
+
+Esta etapa foi validada em desktop headless com lavapipe e compilada para Android arm64. Não foi medida em aparelho Android físico. O APK de debug serve para instalação e teste; a assinatura de distribuição continua a cargo do projeto.
+
+O streaming novo é de malhas na GPU: os dados da cidade ainda são gerados e mantidos na CPU. Não há novo sistema de oclusão nem streaming de texturas por residência nesta etapa; são próximos trabalhos de otimização, não recursos concluídos. As ondas usam shader simples, sem simulação física de fluidos.

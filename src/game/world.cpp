@@ -71,6 +71,8 @@ class Gen {
   }
 
   void ground(RectF r, float y, int layer, float tile, Vec3 tint = {1, 1, 1}, bool lod = true) {
+    if(layer==mat::grass)tile=2.0f;
+    if(layer==mat::asphalt||layer==mat::asphalt_cracked)tile=1.8f;
     if (r.x1 - r.x0 < 1e-3f || r.z1 - r.z0 < 1e-3f) return;
     int cx0 = (int)std::floor(r.x0 / World::kChunk), cx1 = (int)std::floor((r.x1 - 1e-4f) / World::kChunk);
     int cz0 = (int)std::floor(r.z0 / World::kChunk), cz1 = (int)std::floor((r.z1 - 1e-4f) / World::kChunk);
@@ -81,9 +83,19 @@ class Gen {
         if (x1 - x0 < 1e-4f || z1 - z0 < 1e-4f) continue;
         MeshBuilder b = mb((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, tint);
         b.groundRect(x0, z0, x1, z1, y, layer, tile);
+        auto blendWet=[&](MeshBuilder& builder){if(layer==mat::sand_wet){
+          auto* mesh=builder.mesh();
+          for(size_t i=mesh->v.size()-4;i<mesh->v.size();++i){auto& v=mesh->v[i];
+            float distance=w_.coastSide==0?-v.p[2]-w_.shoreline:w_.coastSide==1?v.p[0]-w_.shoreline:w_.coastSide==2?v.p[2]-w_.shoreline:-v.p[0]-w_.shoreline;
+            float wet=clamp((distance+3.0f)/3.0f,0.0f,1.0f);wet=wet*wet*(3-2*wet);
+            v.color=packRGBA8(tint.x,tint.y,tint.z,wet);
+          }
+        }};
+        blendWet(b);
         if (lod) {
           MeshBuilder l = lodb((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, tint);
           l.groundRect(x0, z0, x1, z1, y, layer, tile);
+          blendWet(l);
         }
       }
   }
@@ -154,7 +166,9 @@ class Gen {
     auto wallSeg = [&](int side, float x0, float z0, float x1, float z1) {
       float len = std::sqrt((x1 - x0) * (x1 - x0) + (z1 - z0) * (z1 - z0));
       if (side == frontSide) {
-        b.setTint({1, 1, 1});
+        Rng finishRng(w_.seed^(uint32_t)(int32_t)(r.cx()*133+r.cz()*191));
+        float finish=finishRng.range(0.94f,1.0f);
+        b.setTint({finish,finish,finish});
         b.wall(x0, z0, x1, z1, 0.0f, h, frontLayer, 0.003f, 0.997f, 1.0f - vFrac, 1.0f, 0.8f, 1.0f);
       } else {
         b.setTint(sideLayer_ == mat::brick_raw ? Vec3{1, 1, 1} : tint);
@@ -165,9 +179,33 @@ class Gen {
     wallSeg(E, r.x1, r.z1, r.x1, r.z0);
     wallSeg(N, r.x1, r.z0, r.x0, r.z0);
     wallSeg(W, r.x0, r.z0, r.x0, r.z1);
+    // Shallow relief at roof and floor lines; the distant representation remains a single box.
+    if((frontLayer>=mat::house_yellow&&frontLayer<=mat::apt_bands)||frontLayer==mat::apt_tower||frontLayer==mat::house_periferia_a||frontLayer==mat::house_periferia_b){
+      b.setTint(tint*0.8f);
+      int levels=std::min(7,std::max(1,int(h/3.1f)));
+      for(int level=1;level<=levels;++level){float y=level==levels?h:level*3.1f;
+        if(frontSide==N||frontSide==S){float z=frontSide==N?r.z0:r.z1;b.box(AABB({r.x0,y-0.10f,z-0.08f},{r.x1,y+0.03f,z+0.08f}),mat::concrete,mat::concrete,2);}
+        else{float x=frontSide==W?r.x0:r.x1;b.box(AABB({x-0.08f,y-0.10f,r.z0},{x+0.08f,y+0.03f,r.z1}),mat::concrete,mat::concrete,2);}
+      }
+    }
+    // Above the walking corridor: small balconies, frames and exterior condensers.
+    if(h>5.8f){
+      float span=(frontSide==N||frontSide==S)?r.x1-r.x0:r.z1-r.z0;
+      auto P=[&](float u,float d,float y){switch(frontSide){case N:return Vec3{r.x0+u,y,r.z0-d};case S:return Vec3{r.x1-u,y,r.z1+d};case W:return Vec3{r.x0-d,y,r.z1-u};default:return Vec3{r.x1+d,y,r.z0+u};}};
+      auto slab=[&](float u0,float u1,float d0,float d1,float y0,float y1,int material,Vec3 color){Vec3 a=P(u0,d0,y0),c=P(u1,d1,y1);b.setTint(color);b.box(AABB({std::min(a.x,c.x),y0,std::min(a.z,c.z)},{std::max(a.x,c.x),y1,std::max(a.z,c.z)}),material,material,1);};
+      int floors=std::min(4,int(h/3.1f));
+      for(int floor=1;floor<floors;++floor)for(float u=2.0f;u<span-1.8f;u+=4.3f){float y=floor*3.1f;
+        slab(u-0.9f,u+0.9f,0.02f,0.72f,y,y+0.12f,mat::concrete,tint*0.9f);
+        b.setTint({0.23f,0.25f,0.26f});b.tube(P(u-0.85f,0.7f,y+1),P(u+0.85f,0.7f,y+1),0.028f,5,mat::metal);
+        for(float rail=u-0.85f;rail<=u+0.85f;rail+=0.42f)b.tube(P(rail,0.7f,y+0.12f),P(rail,0.7f,y+1),0.018f,4,mat::metal);
+        slab(u-0.94f,u-0.86f,0.015f,0.065f,y+0.25f,y+1.8f,mat::concrete,tint*0.75f);
+        slab(u+0.86f,u+0.94f,0.015f,0.065f,y+0.25f,y+1.8f,mat::concrete,tint*0.75f);
+      }
+      Rng savedRng=rng_;Vec3 ac=P(span*0.75f,0.18f,h-1.1f);decor(DecorKind::Prop,"prop_ar_condicionado",8,ac,frontSide==N?0:frontSide==S?kPi:frontSide==E?-kPi/2:kPi/2,0.9f,false,0.5f,0.7f,-1,16);rng_=savedRng;
+    }
     // far LOD: one tinted box per building
     MeshBuilder l = lodb(r.cx(), r.cz(), tint * 0.9f);
-    l.box(AABB({r.x0, 0, r.z0}, {r.x1, h, r.z1}), mat::wall_paint, mat::roof_laje, 4.0f);
+    l.box(AABB({r.x0, 0, r.z0}, {r.x1, h, r.z1}), frontLayer, mat::roof_laje, 4.0f);
   }
 
   void houseBuilding(const RectF& r, int front, const Facade& f, bool details = true) {
@@ -453,7 +491,6 @@ class Gen {
 
   void streets() {
     float x0 = xs_.front() - hwx_.front(), x1 = xs_.back() + hwx_.back();
-    float z0 = zs_.front() - hwz_.front(), z1 = zs_.back() + hwz_.back();
     for (size_t j = 0; j < zs_.size(); ++j) {
       RectF r{x0, zs_[j] - hwz_[j], x1, zs_[j] + hwz_[j]};
       ground(r, 0.0f, mat::asphalt, 6.0f);
@@ -879,12 +916,12 @@ class Gen {
     // sand: slopes gently down to the water line
     float sandFrom = prom, sandTo = beachDepth_;
     RectF sand = coastR(sA, sandFrom, sB, sandTo);
-    ground(sand, 0.06f, mat::sand, 4.0f, {1.0f, 0.98f, 0.95f});
+    ground(coastR(sA,sandFrom,sB,sandTo-3.0f), 0.06f, mat::sand, 4.0f, {1.0f, 1.0f, 1.0f});
     w_.walkable.push_back(sand);
     w_.mapSand.push_back(sand);
     // wet sand band at the water line
     RectF wet = coastR(sA, sandTo - 3.0f, sB, sandTo);
-    ground(wet, 0.065f, mat::sand, 4.0f, {0.72f, 0.68f, 0.62f}, false);
+    ground(wet, 0.06f, mat::sand_wet, 4.0f, {1.0f, 1.0f, 1.0f});
     // beach furniture: umbrellas with chairs, lifeguard tower, kiosks (barracas), volleyball net
     for (float s = sA + 10.0f; s < sB - 10.0f; s += rng_.range(9.0f, 15.0f)) {
       float t = rng_.range(prom + 6.0f, sandTo - 8.0f);
@@ -911,7 +948,7 @@ class Gen {
     for (float s = sA - 60.0f; s < sB + 60.0f; s += World::kChunk) {
       float s1 = std::min(s + World::kChunk, sB + 60.0f);
       for (float d = 0; d < seaDepth;) {
-        float step = d < 24.0f ? 3.0f : (d < 60.0f ? 8.0f : 20.0f);
+        float step = d < 9.0f ? 1.5f : (d < 24.0f ? 3.0f : (d < 60.0f ? 3.0f : 20.0f));
         float d1 = std::min(seaDepth, d + step);
         for (float ss = s; ss < s1 - 1e-3f; ss += step) {
           float ss1 = std::min(s1, ss + step);
@@ -923,14 +960,29 @@ class Gen {
             return lerp(Vec3{0.32f, 0.78f, 0.74f}, Vec3{0.05f, 0.22f, 0.38f}, k);
           };
           MeshBuilder m = mb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f, tintAt(d));
-          bool flip = w_.coastSide == 1 || w_.coastSide == 2;
-          // quad winding so the normal points up
-          if (flip == (w_.coastSide == 2 || w_.coastSide == 1))
-            m.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
-          (void)tintAt;
+
+          auto emitWater = [&](MeshBuilder& waterMesh) {
+            // Keep the sea in HLOD chunks as well: otherwise mixed shore chunks have holes at distance.
+            if (w_.coastSide == 2 || w_.coastSide == 3)
+              waterMesh.quad(a, e, c, b, {ss / 6.0f, d}, {ss / 6.0f, d1}, {ss1 / 6.0f, d1}, {ss1 / 6.0f, d}, mat::water);
+            else waterMesh.quad(a, b, c, e, {ss / 6.0f, d}, {ss1 / 6.0f, d}, {ss1 / 6.0f, d1}, {ss / 6.0f, d1}, mat::water);
+            auto& vertices=waterMesh.mesh()->v;
+            for(size_t vi=vertices.size()-4;vi<vertices.size();++vi){Vec3 col=tintAt(vertices[vi].uv[1]);vertices[vi].color=packRGBA8(col.x,col.y,col.z,1);}
+          };
+          emitWater(m);
+          MeshBuilder distantWater = lodb((a.x + c.x) * 0.5f, (a.z + c.z) * 0.5f);
+          emitWater(distantWater);
+
         }
         d = d1;
       }
+    }
+    // One tiny offshore mesh fills the horizon independently of streamed city sectors.
+    MeshBuilder horizon(&w_.oceanBackdrop);
+    for(int band=0;band<3;++band){float d0=band==0?140.0f:band==1?350.0f:700.0f,d1=band==0?350.0f:band==1?700.0f:1400.0f;
+      Vec3 a=coastP(sA-60,d0+sandTo),b=coastP(sB+60,d0+sandTo),c=coastP(sB+60,d1+sandTo),e=coastP(sA-60,d1+sandTo);a.y=b.y=c.y=e.y=w_.waterLevel;
+      if(w_.coastSide==2||w_.coastSide==3)horizon.quad(a,e,c,b,{0,d0},{0,d1},{1,d1},{1,d0},mat::water);
+      else horizon.quad(a,b,c,e,{0,d0},{1,d0},{1,d1},{0,d1},mat::water);
     }
     // the sea floor near the shore (seen through shallow water): darker sand sloping down
     RectF floor = coastR(sA - 60.0f, sandTo, sB + 60.0f, sandTo + 14.0f);
@@ -1033,10 +1085,10 @@ class Gen {
       }
     }
     // ground around the land so the horizon is closed (except the sea side)
-    ground({Ld.x0 - 30, Ld.z0 - 30, Ld.x1 + 30, Ld.z0}, kH, mat::grass, 6.0f);
-    ground({Ld.x0 - 30, Ld.z1, Ld.x1 + 30, Ld.z1 + 30}, kH, mat::grass, 6.0f);
-    ground({Ld.x0 - 30, Ld.z0, Ld.x0, Ld.z1}, kH, mat::grass, 6.0f);
-    ground({Ld.x1, Ld.z0, Ld.x1 + 30, Ld.z1}, kH, mat::grass, 6.0f);
+    if(w_.coastSide!=0)ground({Ld.x0 - 30, Ld.z0 - 30, Ld.x1 + 30, Ld.z0}, kH, mat::grass, 6.0f);
+    if(w_.coastSide!=2)ground({Ld.x0 - 30, Ld.z1, Ld.x1 + 30, Ld.z1 + 30}, kH, mat::grass, 6.0f);
+    if(w_.coastSide!=3)ground({Ld.x0 - 30, Ld.z0, Ld.x0, Ld.z1}, kH, mat::grass, 6.0f);
+    if(w_.coastSide!=1)ground({Ld.x1, Ld.z0, Ld.x1 + 30, Ld.z1}, kH, mat::grass, 6.0f);
   }
 
   // ---- shops and interiors -------------------------------------------------------------------------------
@@ -1106,7 +1158,22 @@ class Gen {
     collider(AABB({X1, 0, Z0}, {X1 + 1, HGT, Z1}), ColKind::Wall);
     auto furn = [&](float x0, float z0, float x1, float z1, float y1, int side, int top, Vec3 tint) {
       MeshBuilder bb = mb(cx, 0, tint);
-      bb.box(AABB({x0, 0, z0}, {x1, y1, z1}), side, top, 2.0f);
+      if (side == mat::shelf) {
+        // Open shelf silhouette: uprights, four boards and real product volumes.
+        bb.box(AABB({x0,0,z0},{x0+0.08f,y1,z1}),mat::metal,mat::metal,1);
+        bb.box(AABB({x1-0.08f,0,z0},{x1,y1,z1}),mat::metal,mat::metal,1);
+        for(int level=0;level<4;++level) {
+          float y=0.15f+level*(y1-0.2f)/4;
+          bb.setTint(tint);bb.box(AABB({x0,y,z0},{x1,y+0.045f,z1}),mat::wood,mat::wood,1);
+          for(float px=x0+0.28f;px<x1-0.25f;px+=0.38f) {
+            int variant=(int)((px-x0)*10)+level+shop.id;
+            bb.setTint(variant%3==0?Vec3{0.48f,0.25f,0.18f}:variant%3==1?Vec3{0.32f,0.47f,0.35f}:Vec3{0.75f,0.65f,0.43f});
+            float pz=(z0+z1)*0.5f,base=y+0.045f;
+            if(variant%3==0){bb.box(AABB({px-0.085f,base,pz-0.085f},{px+0.085f,base+0.24f,pz+0.085f}),mat::white,mat::white,1);bb.setTint({0.87f,0.82f,0.67f});bb.box(AABB({px-0.07f,base+0.08f,pz-0.09f},{px+0.07f,base+0.17f,pz-0.087f}),mat::white,mat::white,1);}
+            else{bb.prism({px,base,pz},0.085f,0.21f,8,mat::white,1);bb.setTint({0.73f,0.76f,0.71f});bb.prism({px,base+0.21f,pz},0.05f,0.08f,8,mat::metal,1);bb.setTint({0.88f,0.83f,0.70f});bb.prism({px,base+0.07f,pz},0.087f,0.065f,8,mat::white,1);}
+          }
+        }
+      } else bb.box(AABB({x0, 0, z0}, {x1, y1, z1}), side, top, 2.0f);
       collider(AABB({x0, 0, z0}, {x1, y1, z1}), ColKind::Prop);
       w_.interiorBlockers.push_back({x0, z0, x1, z1});
     };
@@ -1120,6 +1187,11 @@ class Gen {
     {
       MeshBuilder reg = mb(cx, 0, {0.15f, 0.15f, 0.17f});
       reg.box(AABB({ctrX0 + 0.4f, 1.0f, ctrZ0 + 0.3f}, {ctrX0 + 0.9f, 1.25f, ctrZ0 + 0.7f}), mat::metal, mat::metal, 1.0f);
+    }
+    {MeshBuilder registerDetail=mb(cx,0,{0.18f,0.20f,0.21f});
+      registerDetail.tube({ctrX0+0.67f,1.25f,ctrZ0+0.5f},{ctrX0+0.67f,1.53f,ctrZ0+0.45f},0.035f,6,mat::metal);
+      registerDetail.box(AABB({ctrX0+0.43f,1.44f,ctrZ0+0.42f},{ctrX0+0.91f,1.72f,ctrZ0+0.47f}),mat::metal,mat::metal,1);
+      registerDetail.setTint({0.25f,0.42f,0.38f});registerDetail.wall(ctrX0+0.88f,ctrZ0+0.475f,ctrX0+0.46f,ctrZ0+0.475f,1.47f,1.69f,mat::white,0,1,0,1,1,1);
     }
     shop.clerk = {(ctrX0 + ctrX1) * 0.5f, 0, Z0 + 0.55f};
     const char* clerkArch = shop.kind == ShopKind::Ferragens ? "mecanico" : (shop.kind == ShopKind::Padaria ? "pedestre_mulher_npc" : "atendente");
@@ -1138,7 +1210,7 @@ class Gen {
           for (float x = g0 + 1.0f; x < g1 - 0.5f && k < (int)itemsOnShelves.size(); x += 2.4f) product(itemsOnShelves[k++], x, gz + 0.75f);
         }
         furn(X0, Z0 + 0.5f, X0 + 0.9f, Z1 - 2.5f, 2.0f, mat::metal, mat::white, {0.85f, 0.92f, 1.0f});
-        while (k < (int)itemsOnShelves.size()) product(itemsOnShelves[k++], X0 + 1.4f, Z0 + 1.0f + k * 1.2f);
+        while (k < (int)itemsOnShelves.size()) { product(itemsOnShelves[k], X0 + 1.4f, Z0 + 1.0f + k * 1.2f); ++k; }
         break;
       }
       case ShopKind::Padaria: {
@@ -1191,6 +1263,7 @@ class Gen {
     for (float lx = X0 + 2.5f; lx < X1 - 1.0f; lx += 4.0f)
       for (float lz = Z0 + 2.0f; lz < Z1 - 1.0f; lz += 3.0f) {
         cb.ceiling(lx - 0.6f, lz - 0.2f, lx + 0.6f, lz + 0.2f, HGT - 0.01f, mat::white, 1.0f);
+        for(size_t i=w_.interiorCeiling.v.size()-4;i<w_.interiorCeiling.v.size();++i)w_.interiorCeiling.v[i].n[3]=64;
         w_.interiorLights.push_back({lx, HGT - 0.2f, lz});
       }
   }
@@ -1200,7 +1273,6 @@ class Gen {
     int nx = (int)xs_.size() - 1, nz = (int)zs_.size() - 1;
     struct Bk { RectF r; int i, j; District d; int special = 0; };
     std::vector<Bk> bks;
-    float cxm = 0, czm = 0;
     for (int i = 0; i < nx; ++i)
       for (int j = 0; j < nz; ++j) {
         Bk b;
@@ -1339,6 +1411,36 @@ class Gen {
       }
   }
 
+  void visualDetail(){
+    // Separate random stream: street layout, stores and original vehicle spawns stay stable.
+    rng_=Rng(uint64_t(w_.seed)^0x71c8b46d);
+    auto free=[&](Vec3 p,float radius){for(const auto& q:noTree_)if(q.contains(p.x,p.z))return false;for(const auto& c:w_.colliders)if(c.box.mn.y<1.5f&&p.x>c.box.mn.x-radius&&p.x<c.box.mx.x+radius&&p.z>c.box.mn.z-radius&&p.z<c.box.mx.z+radius)return false;for(const auto& door:w_.doors)if((door.pos-p).lengthSq()<12)return false;return true;};
+    static const char* people[]={"mulher_rosa","homem_polo","jovem_moletom","mulher_vestido","corredor","vizinho"};
+    int count=0;
+    for(const auto& [block,district]:w_.blocks){
+      for(int side=0;side<4;++side){float len=side%2?block.z1-block.z0:block.x1-block.x0;
+        for(float u=6;u<len-5;u+=rng_.range(10,16)){Vec3 p=side==0?Vec3{block.x0+u,kH,block.z0+2.0f}:side==1?Vec3{block.x1-2.0f,kH,block.z0+u}:side==2?Vec3{block.x0+u,kH,block.z1-2.0f}:Vec3{block.x0+2.0f,kH,block.z0+u};
+          if(!free(p,0.45f))continue;
+          int model=side%2?18:0;if(rng_.chance(0.3f))model=19;
+          decor(DecorKind::Prop,"prop_detalhe",8,p,side*kPi/2,model==18?0.7f:0.85f,false,0.3f,1,-1,model);
+          Vec3 person=p;if(side%2)person.x+=side==1?-1:1;else person.z+=side==0?1:-1;
+          if(count<55&&free(person,0.5f)&&rng_.chance(0.5f)){w_.npcs.push_back({people[count%6],0,person,rng_.range(0,kTau)});++count;}
+        }
+      }
+    }
+    // Narrow cables with sag between neighbouring existing lamp anchors; no extra colliders.
+    for(size_t i=0;i<w_.lampLights.size();++i){Vec3 a=w_.lampLights[i];float best=32*32;int target=-1;
+      for(size_t j=i+1;j<w_.lampLights.size();++j){Vec3 q=w_.lampLights[j];float d=(q-a).lengthSq();if(d<best&&d>8*8&&(std::fabs(a.x-q.x)<1||std::fabs(a.z-q.z)<1)){best=d;target=j;}}
+      if(target<0)continue;
+      Vec3 z=w_.lampLights[target];a.y-=0.55f;z.y-=0.55f;MeshBuilder wire=mb((a.x+z.x)*0.5f,(a.z+z.z)*0.5f,{0.15f,0.16f,0.17f});
+      for(int k=0;k<6;++k){float t=k/6.0f,t1=(k+1)/6.0f;Vec3 p=lerp(a,z,t),q=lerp(a,z,t1);p.y-=std::sin(t*kPi)*0.65f;q.y-=std::sin(t1*kPi)*0.65f;wire.tube(p,q,0.012f,4,mat::metal);}
+    }
+    if(w_.coastSide>=0){float lo=w_.coastSide%2==0?w_.beach.x0:w_.beach.z0,hi=w_.coastSide%2==0?w_.beach.x1:w_.beach.z1;
+      for(float s=lo+14;s<hi-12;s+=7){Vec3 p=coastP(s,rng_.range(3.5f,7),0.06f);if(free(p,0.4f))decor(DecorKind::Prop,"prop_vegetacao_costeira",8,p,rng_.range(0,kTau),rng_.range(0.7f,1.6f),false,0.2f,0.5f,-1,17);}
+      for(int k=0;k<10;++k){Vec3 p=coastP(rng_.range(lo+20,hi-20),rng_.range(10,beachDepth_-8),0.06f);if(free(p,0.5f)){w_.npcs.push_back({people[k%6],0,p,rng_.range(0,kTau)});if(k%2==0){Vec3 q=p+Vec3{0.8f,0,0.5f};decor(DecorKind::Prop,"prop_caixa_termica",8,q,0,1,false,0.3f,0.4f,-1,21);}}}
+    }
+  }
+
   void run() {
     plan();
     blocks();
@@ -1354,6 +1456,7 @@ class Gen {
       const RectF& B = w_.blocks[rng_.irange(0, (int)w_.blocks.size() - 1)].first;
       w_.pickupSpots.push_back({rng_.range(B.x0 + 6, B.x1 - 6), kH, B.z0 + 1.2f});
     }
+    visualDetail();
   }
 
   std::vector<RectF> noTree_;

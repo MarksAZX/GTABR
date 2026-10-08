@@ -62,7 +62,7 @@ void Game::queueModels() {
   for (int i = 0; i < kClipCount; ++i) clipsOk &= loadClip(kClipFiles[i], clips_[i]);
   if (!clipsOk) { clips_.clear(); LOGE("animation clips missing - characters fall back to sprites"); }
   else {
-    clips_.resize(kClipCount + kActCount);
+    clips_.resize((int)kClipCount + (int)kActCount);
     for (int a = 0; a < kActCount; ++a)
       if (!loadClip(std::string("data/models/anim_") + actionFile(a) + ".ganim", clips_[kClipCount + a]))
         LOGW("action clip %s missing (gameplay still runs, without that animation)", actionFile(a));
@@ -116,8 +116,8 @@ const ModelAsset* Game::modelForArchetype(const std::string& a, int id) const {
   else if (a == "frentista") pick = "frentista";
   else if (a == "atendente") pick = "atendente";
   else if (a == "mecanico") pick = "mecanico";
-  else if (a == "mulher_rosa" || a == "mulher_vestido") pick = "pedestre_mulher";
-  else if (a == "vizinho" || a == "homem_polo" || a == "jovem_moletom" || a == "corredor") pick = "pedestre_homem";
+  else if (a == "mulher_rosa" || a == "mulher_vestido") pick = id%3==0?"atendente":"pedestre_mulher";
+  else if (a == "vizinho" || a == "homem_polo" || a == "jovem_moletom" || a == "corredor") { static const char* bodies[]={"pedestre_homem","frentista","mecanico"};pick=bodies[id%3]; }
   const ModelAsset* m = pick ? charModel(pick) : nullptr;
   if (m) return m;
   // fall back to the available bodies (never the protagonist for a pedestrian if anything else exists)
@@ -229,6 +229,7 @@ void Game::emitVehicle(gfx::FrameData& fd, int model, int color, Vec3 pos, float
   float dist = (pos - cam_.eye()).length();
   const VehicleDef& vd = vehicleDef(model);
   Vec3 paint = paintColor(vd.colors[clamp(color, 0, 2)]);
+  if(!policeCar&&color>2){static const Vec3 finishes[]={{0.12f,0.19f,0.24f},{0.26f,0.28f,0.29f},{0.48f,0.39f,0.29f}};paint=finishes[(color-3)%3];}
   if (policeCar && mi == 1) paint = {0.85f, 0.85f, 0.84f};
   Mat4 body = yawMatrix(pos, yaw) * rotX(-pitch) * rotZ(roll);
   gfx::ModelDraw d;
@@ -317,13 +318,30 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
   pendingLights_.clear();
   const bool indoors = player_.indoors;
   const Frustum& fr = cam_.frustum();
-  const float drawDist = preset().drawDistance;
+  const float drawDist = preset().drawDistance * settings_.renderDistance;
   const Vec3 eye = cam_.eye();
   auto visible = [&](Vec3 p, float r) {
     if ((p - eye).lengthSq() > drawDist * drawDist) return false;
     return fr.intersectsSphere({p.x, p.y + r * 0.5f, p.z}, r);
   };
 
+  if (decorModels_.ready && !indoors) {
+    for (size_t i=0;i<world_.decor.size();++i) {
+      const auto& obj=world_.decor[i];bool tree=obj.species>=0;
+      if(!tree && obj.model<0) continue;
+      if(tree && (i%100)/100.0f > settings_.vegetation * preset().decorDensity) continue;
+      float radius=tree?6.0f:4.0f; if(!visible(obj.pos,radius)) continue;
+      float dist=(obj.pos-eye).length();
+      if(tree && dist>drawDist*0.75f) continue; // distant trees use their existing impostors
+      int index=tree?obj.species*3+(int)(i%3):obj.model;
+      const auto& list=tree?decorModels_.trees:decorModels_.props;
+      if(index<0 || index>=(int)list.size()) continue;
+      gfx::ModelDraw d;d.model=list[index];d.material=decorModels_.material;
+      d.lod=dist*preset().lodBias<25?0:(dist*preset().lodBias<60?1:2);
+      d.transform=yawMatrix(obj.pos,obj.yaw)*scaleM({obj.scale,obj.scale,obj.scale});
+      d.params={0,0,1,1};d.instanced=true;d.castShadow=dist<shadowRadius_;fd.models.push_back(d);++stats_.drawnModels;
+    }
+  }
   if (modelsReady_) {
     // ---- player
     if (player_.vehicle < 0) {
@@ -339,7 +357,13 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       AnimIn ai;
       ai.req = &player_.animReq; ai.reqSpeed = player_.animReqSpeed; ai.reqUpper = player_.animReqUpper; ai.reqHold = player_.animReqHold;
       ai.lying = player_.down && player_.animReq < 0 && a.action != kActKnockDown && player_.dead;
-      ai.weapon = player_.weapon;
+      ai.weapon = player_.swimming ? 0 : player_.weapon;
+      if (player_.swimming) {
+        int swim = player_.speed > 0.2f ? kActSwim : kActSwimIdle;
+        if (a.action != swim || a.actFading) animator_.play(a, swim, 1.0f, false, false);
+        else if (a.actT >= animator_.actionDuration(swim) - 0.08f) a.actT = 0;
+        ai.req = nullptr;
+      } else if (a.action == kActSwim || a.action == kActSwimIdle) animator_.stop(a);
       if (m && visible(pos, 2.0f)) emitCharacter(fd, *m, a, pos, player_.yaw, 1.0f, player_.speed, dt, true, {0, 0, 0, 0}, ai);
       interactPulse_ = std::max(0.0f, interactPulse_ - dt);
     }
@@ -386,7 +410,8 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
       if (n.state != NpcState::Chat && a.action == kActChat) animator_.stop(a);
       a.aimTarget = (n.police && isFirearm(n.weapon) && n.state == NpcState::Fight) ? 1.0f : 0.0f;
       a.crouchTarget = n.state == NpcState::Cower ? 0.9f : 0.0f;
-      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, {0, 0, 0, 0}, ai);
+      static const Vec4 wardrobe[]={{0.23f,0.32f,0.36f,-1},{0.44f,0.28f,0.22f,-1},{0.31f,0.36f,0.24f,-1},{0.39f,0.31f,0.40f,-1},{0.58f,0.52f,0.39f,-1},{0.25f,0.26f,0.28f,-1}};
+      emitCharacter(fd, *m, a, pos, n.yaw, scale, n.speed, dt, (int)k < full, n.role==0&&!n.police?wardrobe[n.id%6]:Vec4{0,0,0,0}, ai);
       npcModelDrawn_[n.id] = true;
     }
   }
@@ -430,10 +455,17 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     int room = world_.interiorAt(player_.pos.x, player_.pos.y);
     for (const Vec3& l : world_.interiorLights) {
       if (room < 0 || !world_.interiors[room].bounds.inflated(0.5f).contains(l.x, l.z)) continue;
-      pendingLights_.push_back({l, {0, -1, 0}, {3.0f, 2.9f, 2.7f}, 7.5f, -2.0f, (l - Vec3{player_.pos.x, 1.5f, player_.pos.y}).length()});
+      Vec3 temperature={2.6f,2.65f,2.7f};
+      int shop=world_.interiors[room].shop;
+      if(shop>=0&&world_.shops[shop].kind==ShopKind::Padaria)temperature={3.0f,2.55f,2.1f};
+      pendingLights_.push_back({l, {0, -1, 0}, temperature, 6.5f, -2.0f, (l - Vec3{player_.pos.x, 1.5f, player_.pos.y}).length()});
     }
   }
 
+  if(indoors){int room=world_.interiorAt(player_.pos.x,player_.pos.y);
+    if(room>=0){int shop=world_.interiors[room].shop;if(shop>=0){Vec3 p=world_.shops[shop].clerk+Vec3{0,2.35f,1.0f};
+      pendingLights_.push_back({p,{0,-1,0},{1.55f,1.35f,1.1f},3.8f,-2.0f,(p-Vec3{player_.pos.x,1.5f,player_.pos.y}).length()});}}
+  }
   // keep the most relevant lights within the preset budget
   std::sort(pendingLights_.begin(), pendingLights_.end(), [](const PendingLight& a, const PendingLight& b) { return a.dist < b.dist; });
   int n = std::min<int>((int)pendingLights_.size(), std::min(preset().maxLights, gfx::kMaxLights));

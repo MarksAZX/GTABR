@@ -13,6 +13,7 @@ uint32_t MeshBuilder::vert(const Vec3& p, const Vec3& n, const Vec2& uv, int lay
   w.layer = (float)layer;
   m_->v.push_back(w);
   m_->bounds.expand(p);
+  if(layer==31){m_->bounds.expand({p.x,p.y-0.32f,p.z});m_->bounds.expand({p.x,p.y+0.32f,p.z});}
   return (uint32_t)m_->v.size() - 1;
 }
 
@@ -103,4 +104,8 @@ void MeshBuilder::gableRoof(float x0, float z0, float x1, float z1, float y, flo
   (void)n;
 }
 
+void MeshBuilder::tube(Vec3 a,Vec3 b,float radius,int sides,int layer){
+  Vec3 axis=(b-a).normalized(),u=axis.cross(std::fabs(axis.y)>0.9f?Vec3{1,0,0}:Vec3{0,1,0}).normalized(),v=axis.cross(u);
+  for(int i=0;i<sides;++i){float t=i*kTau/sides,t1=(i+1)*kTau/sides;Vec3 p=u*std::cos(t)+v*std::sin(t),q=u*std::cos(t1)+v*std::sin(t1);quad(a+p*radius,a+q*radius,b+q*radius,b+p*radius,{0,0},{1,0},{1,1},{0,1},layer);}
+}
 }  // namespace gtabr

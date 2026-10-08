@@ -2,6 +2,10 @@
 // walk -> switch camera -> enter car -> drive -> refuel at the pump -> market (talk + buy) -> workshop repair -> save -> reload.
 #include <cmath>
 #include <string>
+#include <sstream>
+#include <map>
+#include "../core/fileio.h"
+#include "../core/save_store.h"
 
 #include "../core/log.h"
 #include "../core/png.h"
@@ -81,6 +85,7 @@ struct Bot {
   bool driveTo(Vec2 target, float tol, int maxFrames, float maxSpeed = 12.0f) {
     int reverse = 0;
     Vec2 lastPos = g.vehicles()[g.player().vehicle].pos;
+    Vec2 command{};
     for (int i = 0; i < maxFrames; ++i) {
       Vehicle& v = g.vehicles()[g.player().vehicle];
       Vec2 d = target - v.pos;
@@ -98,7 +103,20 @@ struct Bot {
       float steer = clamp(err * 2.2f, -1.0f, 1.0f);
       float tgt = clamp(dist * 0.7f, 2.5f, maxSpeed) * clamp(1.0f - std::fabs(err) / 1.6f, 0.25f, 1.0f);
       float thr = clamp((tgt - v.speed) * 0.5f, -1.0f, 1.0f);
-      in.move = {steer, thr};
+      // Predict short manoeuvres with the same vehicle physics, then inject real controls.
+      // This keeps the test driver from clipping medians/cars or running over the denser crowd.
+      if(i%3==0){float best=1e9f;command={steer,thr};
+        const float turns[]={steer,-1,-0.5f,0,0.5f,1},pedals[]={thr,0.5f,0,-0.55f};
+        for(float turn:turns)for(float pedal:pedals){Vehicle prediction=v;float penalty=0;VehicleInput control;control.steer=clamp(turn*1.15f,-1.0f,1.0f);control.throttle=pedal;
+          for(int tick=0;tick<10;++tick){float impact=stepVehicle(prediction,control,0.1f,g.world(),g.vehicles());penalty+=impact*3;
+            auto shape=vehicleObb(prediction);for(const auto& npc:g.npcs())if(!npc.interior&&!npc.despawn&&(npc.pos-prediction.pos).lengthSq()<16&&phys::circleVsObb(npc.pos,0.5f,shape).hit)penalty+=15;
+          }
+          Vec2 remaining=target-prediction.pos;float angle=std::fabs(wrapAngle(yawFromDir(remaining)-prediction.yaw));
+          float score=remaining.length()+angle*0.35f+penalty+std::max(0.0f,prediction.speed-maxSpeed)*0.7f+std::fabs(turn-steer)*0.06f;
+          if(score<best){best=score;command={turn,pedal};}
+        }
+      }
+      in.move = command;
       step(in, 1);
       // stuck: barely moved over the last second while pushing forward -> three-point turn
       if (i % 45 == 0) { if (i > 0 && (v.pos - lastPos).length() < 0.4f && thr > 0.2f) reverse = 35; lastPos = v.pos; }
@@ -107,13 +125,34 @@ struct Bot {
     for (const Collider& c : g.world().colliders)
       if (std::fabs((c.box.mn.x + c.box.mx.x) * 0.5f - v.pos.x) < 5 && std::fabs((c.box.mn.z + c.box.mx.z) * 0.5f - v.pos.y) < 5)
         LOGW("  near collider kind %d [%.1f,%.1f]-[%.1f,%.1f] h %.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mx.y);
+    for(const auto& other:g.vehicles())if(other.id!=v.id&&(other.pos-v.pos).length()<12)LOGW("near vehicle %d traffic=%d at %.2f %.2f yaw %.2f",other.id,int(other.ambientTraffic),other.pos.x,other.pos.y,other.yaw);
+    LOGW("vehicle health %.1f engine %d player %.1f wanted %d",v.health,int(v.engineOn),g.player().health,g.wantedLevel());
     LOGW("driveTo (%.1f, %.1f) timed out: car at (%.2f, %.2f) yaw %.2f speed %.2f fuel %.1f", target.x, target.y, v.pos.x, v.pos.y, v.yaw, v.speed, v.fuel);
     return false;
+  }
+  // Join the requested lane through a crossing; never cut a planted median mid-block.
+  bool joinAvenue(const RoadLine& road,Vec2 next,int maxFrames){
+    if(!road.avenue)return true;Vec2 start=g.vehicles()[g.player().vehicle].pos;
+    float along=road.horizontal?next.x-start.x:next.y-start.y,side=road.horizontal?start.y-road.c:start.x-road.c;
+    float sign=along>=0?1.0f:-1.0f,desired=sign*(road.horizontal?1.0f:-1.0f);
+    if(desired*side>=-0.5f||std::fabs(side)>road.hw+2)return true;
+    const RoadLine* junction=nullptr;float best=1e9f;bool open=false;
+    for(const auto& crossing:g.world().roads)if(crossing.horizontal!=road.horizontal){float delta=crossing.c-(road.horizontal?start.x:start.y);
+      if(std::fabs(delta)<crossing.hw+6){junction=&crossing;open=true;break;}
+      float distance=delta*sign;if(distance>1&&distance<best){best=distance;junction=&crossing;}}
+    if(!junction)return false;float lane=std::min(2.2f,road.hw*0.45f);
+    if(!open){Vec2 approach=road.horizontal?Vec2{junction->c,road.c+(side>0?lane:-lane)}:Vec2{road.c+(side>0?lane:-lane),junction->c};if(!driveTo(approach,2,maxFrames,6)||!stopCar())return false;}
+    Vec2 join=road.horizontal?Vec2{junction->c+sign*8,road.c+desired*lane}:Vec2{road.c+desired*lane,junction->c+sign*8};
+    return driveTo(join,1.4f,maxFrames,4)&&stopCar();
   }
   // drives along the street grid (right-hand lane) to a point on or next to a street
   bool driveRoad(Vec2 target, float tol, int maxFrames, float maxSpeed = 11.0f) {
     const World& w = g.world();
     std::vector<Vec2> route = w.roadRoute(g.vehicles()[g.player().vehicle].pos, target);
+    Vec2 start=g.vehicles()[g.player().vehicle].pos;
+    const RoadLine* initial=nullptr;float nearest=1e9f;
+    for(const auto& road:w.roads){Vec2 q=road.horizontal?Vec2{clamp(start.x,road.a,road.b),road.c}:Vec2{road.c,clamp(start.y,road.a,road.b)};float distance=(q-start).length();if(distance<nearest){nearest=distance;initial=&road;}}
+    if(initial){Vec2 next=target;for(const auto& p:route)if((p-w.nearestRoadPoint(start)).length()>6){next=p;break;}if(!joinAvenue(*initial,next,maxFrames))return false;route=w.roadRoute(g.vehicles()[g.player().vehicle].pos,target);}
     Vec2 prev = g.vehicles()[g.player().vehicle].pos;
     for (size_t i = 0; i < route.size(); ++i) {
       Vec2 p = route[i];
@@ -122,8 +161,25 @@ struct Bot {
         Vec2 d = p - prev;
         if (d.length() > 0.5f) { Vec2 n = d.normalized(); p += Vec2{-n.y, n.x} * 1.5f; }
         if ((p - g.vehicles()[g.player().vehicle].pos).length() < 5.0f) { prev = route[i]; continue; }
-        if (!driveTo(p, 4.5f, maxFrames, maxSpeed)) return false;
-      } else if (!driveTo(p, tol, maxFrames, std::min(maxSpeed, 8.0f))) return false;
+        bool horizontal=std::fabs(d.x)>=std::fabs(d.y);
+        for(const auto& road:w.roads)if(road.horizontal==horizontal&&std::fabs(road.c-(horizontal?route[i].y:route[i].x))<0.5f){if(!joinAvenue(road,p,maxFrames))return false;break;}
+        Vec2 incoming=(route[i]-prev).normalized(),outgoing=i+1<route.size()?(route[i+1]-route[i]).normalized():incoming;
+        if(i+1<route.size()&&(route[i+1]-route[i]).length()>8&&incoming.dot(outgoing)<0.5f){
+          Vec2 before=route[i]-incoming*6+Vec2{-incoming.y,incoming.x}*1.5f;
+          Vec2 after=route[i]+outgoing*6+Vec2{-outgoing.y,outgoing.x}*1.5f;
+          if(!driveTo(before,1.6f,maxFrames,6)||!stopCar()||!driveTo(after,2,maxFrames,4))return false;
+        }else if (!driveTo(p, 4.5f, maxFrames, maxSpeed)) return false;
+      } else {
+        Vec2 here=g.vehicles()[g.player().vehicle].pos;
+        for(const auto& road:w.roads)if(road.avenue){float side=road.horizontal?here.y-road.c:here.x-road.c, goalSide=road.horizontal?p.y-road.c:p.x-road.c;
+          if(side*goalSide<0&&std::fabs(side)<road.hw+2&&std::fabs(goalSide)<road.hw+2){
+            float sign=(goalSide>0?1.0f:-1.0f)*(road.horizontal?1.0f:-1.0f);
+            Vec2 laneGoal=here+(road.horizontal?Vec2{sign*30,0}:Vec2{0,sign*30});
+            if(!joinAvenue(road,laneGoal,maxFrames))return false;break;
+          }
+        }
+        if (!driveTo(p, tol, maxFrames, std::min(maxSpeed, 8.0f))) return false;
+      }
       prev = route[i];
     }
     return true;
@@ -143,6 +199,203 @@ struct Bot {
 
 int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameData& fd, const std::string& out, float dt) {
   Bot b{g, r, fd, dt, out};
+  if(name=="visual"){
+    b.render=false;g.settings().dynamicRes=false;g.settings().dayCycle=false;g.settings().weatherMode=1;
+    g.setTimeOfDay(16,0);b.idle(60);b.render=true;b.idle(35);b.shot("01_urban_day");if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();b.idle(35);b.shot("02_urban_street");
+    if(g.settings().quality>0){auto reference=fd;std::vector<uint8_t> off,on;uint32_t width=0,height=0;reference.globals.effectsInfo.x=0;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(off,width,height),"AO disabled readback");reference.globals.effectsInfo.x=0.55f;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(on,width,height),"AO enabled readback");int changed=0;for(size_t i=0;i<off.size()&&i<on.size();i+=4)if(std::abs(int(off[i])-int(on[i]))+std::abs(int(off[i+1])-int(on[i+1]))+std::abs(int(off[i+2])-int(on[i+2]))>3)++changed;CHECK(changed>5,"ambient occlusion affects real geometry pixels");LOGI("AO frozen-frame changed pixels: %d",changed);}
+
+    CHECK(g.world().npcs.size()>45,"city has a larger deterministic population");
+    CHECK(g.vehicles().size()>3,"seed creates real ambient vehicles");
+    int moving=0;std::vector<Vec2> positions;for(auto& v:g.vehicles())positions.push_back(v.pos);
+    b.render=false;b.idle(300);for(size_t i=3;i<positions.size();++i)if((g.vehicles()[i].pos-positions[i]).length()>2)++moving;CHECK(moving>0,"ambient vehicles travel using existing physics");
+    g.settings().weatherMode=2;b.idle(1500);CHECK(g.weather().rain>0.9f&&g.weather().wet>0.8f,"rain really wets the ground");
+    b.render=true;b.idle(8);b.shot("03_urban_rain");g.setTimeOfDay(21,0);b.idle(8);b.shot("04_urban_night_rain");
+    float clock=g.weather().clock,wet=g.weather().wet;CHECK(g.saveGame(),"weather session saves");b.render=false;b.idle(180);CHECK(g.loadGame(),"weather session reloads");CHECK(std::fabs(g.weather().clock-clock)<0.01f&&std::fabs(g.weather().wet-wet)<0.001f,"rain timeline and wetness restore exactly");
+    if(g.world().coastSide>=0){const auto& w=g.world();g.settings().weatherMode=1;b.idle(400);g.setTimeOfDay(16,0);g.teleportPlayer({w.poiBeach.x,w.poiBeach.z},w.coastSide*kPi*0.5f);b.idle(45);b.render=true;b.idle(45);b.shot("05_beach");
+      Vec2 water{w.poiBeach.x,w.poiBeach.z};if(w.coastSide==0)water.y=-w.shoreline-3;if(w.coastSide==1)water.x=w.shoreline+3;if(w.coastSide==2)water.y=w.shoreline+3;if(w.coastSide==3)water.x=-w.shoreline-3;
+      g.teleportPlayer(water,w.coastSide*kPi*0.5f);b.idle(12);b.shot("06_shallow_water");bool ring=false;for(auto& d:fd.decals)if(d.kind==2)ring=true;CHECK(ring,"water contact creates real ripple decals");
+      if(w.coastSide==0)water.y-=12;if(w.coastSide==1)water.x+=12;if(w.coastSide==2)water.y+=12;if(w.coastSide==3)water.x-=12;g.teleportPlayer(water,w.coastSide*kPi*0.5f);b.idle(18);b.shot("07_swimming");CHECK(g.player().swimming,"deep water preserves swimming");
+    }
+    if(g.vehicles().size()>3){b.render=false;int id=3;auto& v=g.vehicles()[id];v.vel={};v.speed=0;g.player().vehicle=-1;g.teleportPlayer(v.pos,0);InputFrame enter;enter.enterExitPressed=true;b.step(enter);b.idle(28);CHECK(g.player().vehicle==id&&!g.vehicles()[id].ambientTraffic,"ambient vehicle can be taken over through real interaction");int model=g.vehicles()[id].model,color=g.vehicles()[id].color;CHECK(g.saveGame(),"taken vehicle saves");g.vehicles()[id].pos={0,0};g.vehicles()[id].model=(model+1)%3;g.vehicles()[id].color=(color+1)%6;CHECK(g.loadGame()&&g.player().vehicle==id&&!g.vehicles()[id].ambientTraffic,"taken vehicle restores without AI control");CHECK(g.vehicles()[id].model==model&&g.vehicles()[id].color==color,"taken vehicle restores body model and paint");InputFrame leave;leave.enterExitPressed=true;b.step(leave);b.idle(28);}
+    g.player().vehicle=-1;g.teleportPlayer({g.world().spawnPlayer.x,g.world().spawnPlayer.z},0);b.render=false;b.idle(10);CHECK(g.saveGame(),"visual scenario leaves a valid slot");LOGI("VISUAL checks failures: %d",g_failures);return g_failures?1:0;
+  }
+  if (name == "resume") {
+    std::string text;
+    CHECK(save_store::read(fileio::saveDir()+"/slot_"+std::to_string(g.activeSlot())+".sav",text),"fresh process finds persisted slot");
+    std::map<std::string,std::string> kv;std::istringstream in(text);std::string line;
+    while(std::getline(in,line)){auto p=line.find('=');if(p!=std::string::npos)kv[line.substr(0,p)]=line.substr(p+1);}
+    CHECK(g.world().seed==(uint32_t)std::strtoull(kv["seed"].c_str(),nullptr,10),"fresh process reconstructs saved seed instead of command-line seed");
+    CHECK(g.money()==std::atoi(kv["money"].c_str()),"fresh process restores money");
+    Vec2 expected{std::strtof(kv["playerX"].c_str(),nullptr),std::strtof(kv["playerZ"].c_str(),nullptr)};
+    CHECK((g.player().pos-expected).length()<0.1f,"fresh process restores position");
+    for(int i=1;i<kItemCount;++i)CHECK(g.itemCount(i)==std::atoi(kv[std::string("item_")+itemDef(i).key].c_str()),"fresh process restores inventory");
+    for(int w=1;w<kWeaponCount;++w){auto it=kv.find(std::string("wpn_")+weaponDef(w).key);if(it!=kv.end()){int mag=0,res=0;std::sscanf(it->second.c_str(),"%d,%d",&mag,&res);CHECK(g.player().owned[w]&&g.player().mag[w]==mag&&g.player().reserve[w]==res,"fresh process restores weapon and ammunition");}}
+    b.idle(4);b.shot("resume");LOGI("RESUME checks failures: %d",g_failures);return g_failures?1:0;
+  }
+  if (name == "city" || name == "menus" || name == "polish") {
+    auto load=[&](){for(int i=0;i<1500&&!g.loaded();++i){g.frame(dt,fd);r.renderFrame(fd);}CHECK(g.loaded(),"city generation finishes");};
+    auto tap=[&](float x,float y){InputFrame in;UiPointer p;p.id=0;p.pos={x,y};p.pressed=true;p.down=true;in.ui={p};b.step(in);p.pressed=false;p.down=false;p.released=true;in.ui={p};b.step(in);b.idle(2);};
+    if(name=="menus"||name=="polish"){
+      CHECK(g.menu()==MenuState::Main,"startup shows main menu");b.shot("00_main_menu");
+      Vec4 bounds;CHECK(g.uiButtonBounds(401,bounds),"new game button is visible");
+      tap(bounds.x+bounds.z/2,bounds.y+bounds.w/2);CHECK(g.menu()==MenuState::Slots,"new game button opens slots");b.shot("01_slots");
+      CHECK(g.uiButtonBounds(420,bounds),"create button is visible");
+      tap(bounds.x+bounds.z/2,bounds.y+bounds.w/2);load();CHECK(g.menu()==MenuState::None,"create slot starts gameplay");
+    }
+    if(name=="polish"){
+      auto tapButton=[&](int id){
+        b.idle(8);Vec4 rect;
+        for(int page=0;page<8&&!g.uiButtonBounds(id,rect);++page){Vec4 next;if(!g.uiButtonBounds(791,next))break;tap(next.x+next.z/2,next.y+next.w/2);}
+        if(!g.uiButtonBounds(id,rect)){CHECK(false,"requested UI control is reachable");return false;}
+        CHECK(rect.x>=0&&rect.y>=0&&rect.x+rect.z<=r.outputWidth()+1&&rect.y+rect.w<=r.outputHeight()+1,"menu button fits viewport");
+        tap(rect.x+rect.z/2,rect.y+rect.w/2);return true;
+      };
+      g.showMenu(MenuState::Pause);b.idle(8);tapButton(202);tapButton(700);
+      int oldReflection=g.settings().reflections;tapButton(719);
+      CHECK(g.settings().reflections==(oldReflection+1)%3,"reflection UI changes real setting");
+      CHECK(fd.globals.reflectionInfo.y>0,"coastal reflection activates ray-march budget");
+      tapButton(719);CHECK(fd.globals.reflectionInfo.x==0&&fd.globals.reflectionInfo.y==0,"reflection off removes reflection work");
+      tapButton(719);CHECK(fd.globals.reflectionInfo.x==1&&fd.globals.reflectionInfo.y==0,"sky reflection avoids coastal ray-marching");
+      bool ao=g.settings().ambientOcclusion;tapButton(730);CHECK(g.settings().ambientOcclusion!=ao&&fd.globals.effectsInfo.x==0,"AO UI removes its rendering work");tapButton(730);CHECK(fd.globals.effectsInfo.x>0,"AO UI restores real rendering work");tapButton(700);
+      tapButton(303);CHECK(g.settings().quality==3&&fd.globals.reflectionInfo.y==28,"ultra preset enables its coastal reflection budget");
+      tapButton(703);int climate=g.settings().weatherMode;tapButton(729);CHECK(g.settings().weatherMode==(climate+1)%3,"weather UI changes real climate mode");
+      tapButton(702);float scale=g.settings().controlScale;tapButton(720);CHECK(g.settings().controlScale>scale,"control size increases");
+      tapButton(727);CHECK(g.settings().leftHanded,"left handed layout enabled");
+      tapButton(728);CHECK(g.menu()==MenuState::Controls,"control editor opens");
+      b.idle(8);Vec4 joy;CHECK(g.uiButtonBounds(808,joy),"joystick has draggable control");
+      InputFrame drag;UiPointer finger;finger.id=3;finger.down=true;finger.pressed=true;finger.pos={joy.x+joy.z/2,joy.y+joy.w/2};drag.ui={finger};b.step(drag);
+      finger.pressed=false;finger.pos={r.outputWidth()*0.7f,r.outputHeight()*0.3f};drag.ui={finger};b.step(drag);
+      finger.down=false;finger.released=true;drag.ui={finger};b.step(drag);b.idle(3);
+      CHECK(g.settings().fixedJoystick&&std::fabs(g.settings().controlPos[8].x-0.7f)<0.01f,"drag changes and persists joystick position");
+      b.shot("controls_custom");tapButton(304);tapButton(704);tapButton(722);tapButton(725);
+      CHECK(g.settings().highContrast&&g.settings().reducedMotion,"accessibility options toggle");
+      tapButton(717);b.shot("accessibility_settings");tapButton(304);b.shot("pause_polished");
+      tapButton(205);b.shot("inventory_polished");tapButton(304);tapButton(200);
+      auto layout=g.controlLayout();layout.modal=false;InputSystem input;input.poll(layout);
+      input.onTouch(5,TouchAction::Down,layout.joyCenter.x,layout.joyCenter.y);input.poll(layout);
+      input.onTouch(5,TouchAction::Move,layout.joyCenter.x+layout.joyRadius*0.7f,layout.joyCenter.y);
+      auto moved=input.poll(layout);CHECK(moved.joyActive&&moved.move.x>0.5f,"relocated joystick receives movement at its visual position");
+      g.showMenu(MenuState::Settings);tapButton(702);tapButton(728);tapButton(810);tapButton(304);tapButton(304);g.showMenu(MenuState::None);
+    }
+    b.render=false;b.idle(45);
+    CHECK(g.world().shops.size()==4,"four enterable stores");
+    uint32_t seed=g.world().seed;auto spawn=g.world().spawnPlayer;
+    for(int shop=0;shop<4;++shop){
+      auto sh=g.world().shops[shop];int door=-1;
+      for(const auto& d:g.world().doors)if(d.shop==shop&&d.toInterior)door=d.id;
+      CHECK(door>=0,"shop has entrance");
+      g.teleportPlayer({sh.door.x,sh.door.z},0);b.idle(2);
+      Interactable it;it.kind=IKind::Door;it.id=door;g.activateInteractable(it);
+      if(name=="polish"&&shop==0){g.onBackground();CHECK(g.player().indoors,"background during doorway settles inside before saving");}
+      b.idle(20);
+      CHECK(g.player().indoors&&g.world().interiorAt(g.player().pos.x,g.player().pos.y)==sh.interior,"door enters correct interior");
+      int clerk=-1;for(size_t n=0;n<g.npcs().size();++n)if(g.npcs()[n].role==4&&g.world().interiorAt(g.npcs()[n].pos.x,g.npcs()[n].pos.y)==sh.interior)clerk=(int)n;
+      CHECK(clerk>=0,"clerk exists in each store");it.kind=IKind::Npc;it.id=clerk;g.activateInteractable(it);g.selectPanelOptionPublic(0);
+      CHECK(g.panel().open&&g.panel().title==sh.name,"clerk opens shop-specific catalog");
+      auto stock=sh.stock[0];int money=g.money(),count=g.itemCount(stock.id);g.selectPanelOptionPublic(0);
+      CHECK(g.money()==money-stock.priceCents,"purchase deducts actual shop price");
+      if(stock.kind==0)CHECK(g.itemCount(stock.id)==count+1,"purchase adds item to inventory");else CHECK(g.player().owned[stock.id],"hardware store gives real equipment");
+      b.render=true;b.idle(20);b.shot("shop_"+std::to_string(shop));b.render=false;
+      g.selectPanelOptionPublic((int)g.panel().options.size()-1);
+      if(name=="polish"){if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();b.render=true;b.idle(30);b.shot("interior_"+std::to_string(shop));b.render=false;}
+      g.money()=0;CHECK(!g.buyStock(shop,0),"insufficient funds reject purchase");g.money()=40000;
+    }
+    g.teleportPlayer({spawn.x,spawn.z},0);b.idle(2);
+    if(name=="polish"){
+      auto& car=g.vehicles()[0];g.teleportPlayer(car.pos-right2(car.yaw)*(vehicleDef(car.model).width*0.5f+0.8f),car.yaw);
+      b.press(&InputFrame::enterExitPressed);CHECK(g.player().entering&&g.player().vehicle==-1,"car entry has a visible transition before occupancy");
+      CHECK(!g.saveGame(),"manual save waits for a stable interaction state");
+      g.onBackground();CHECK(g.player().vehicle==0&&!g.player().entering,"background completes car entry before persistence");
+      CHECK((g.player().pos-g.vehicles()[0].pos).length()<0.01f,"background saves canonical vehicle position");
+      b.press(&InputFrame::enterExitPressed);CHECK(g.player().exiting,"car exit has a transition");g.onBackground();
+      CHECK(!g.player().exiting&&g.player().vehicle==-1,"background completes car exit before persistence");
+      g.teleportPlayer({spawn.x,spawn.z},0);b.idle(2);
+    }
+    g.player().health=12;g.executeCode(0);CHECK(g.player().health==100,"health code changes state");
+    g.executeCode(1);CHECK(g.player().owned[kWpnPistol],"weapons code grants weapons");
+    g.player().mag[kWpnPistol]=0;g.executeCode(2);CHECK(g.player().mag[kWpnPistol]>0,"ammo code replenishes magazines");
+    int before=g.money();g.executeCode(3);CHECK(g.money()==before+100000,"money code grants money");
+    g.executeCode(5);CHECK(g.wantedLevel()>0,"wanted code raises wanted level");g.executeCode(4);CHECK(g.wantedLevel()==0,"clear code removes wanted level");
+    g.player().vehicle=0;g.vehicles()[0].health=1;g.vehicles()[0].fuel=0;g.executeCode(6);g.executeCode(7);
+    CHECK(g.vehicles()[0].health==100&&g.vehicles()[0].fuel==vehicleDef(0).fuelCap,"vehicle codes repair and fill tank");g.player().vehicle=-1;
+    if(g.world().coastSide>=0){auto& w=g.world();Vec2 p{w.poiBeach.x,w.poiBeach.z};int side=w.coastSide;
+      g.teleportPlayer(p,0);b.idle(60);CHECK(!g.player().swimming,"dry beach uses walking state");
+      if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();
+      CameraInput coastCamera;coastCamera.focus={p.x,g.player().y,p.y};coastCamera.headingYaw=side*kPi*0.5f;
+      g.camera().snapTo(coastCamera,w,(float)r.outputWidth()/std::max(1u,r.outputHeight()));
+      b.render=true;b.idle(45);b.shot("beach_shore");b.render=false;
+      if(side==0)p.y=-w.shoreline-20;if(side==1)p.x=w.shoreline+20;if(side==2)p.y=w.shoreline+20;if(side==3)p.x=-w.shoreline-20;
+      if(name=="polish"){
+        Vec2 outward=(side==0?Vec2{0,-1}:side==1?Vec2{1,0}:side==2?Vec2{0,1}:Vec2{-1,0});
+        Vec2 edge=p-outward*10.0f;g.teleportPlayer(edge,0);b.idle(3);CHECK(!g.player().swimming,"shallow water still permits walking");
+        bool blended=false;
+        for(int frame=0;frame<50;++frame){float yaw=g.camera().yaw();Vec2 forward{std::sin(yaw),-std::cos(yaw)},right{std::cos(yaw),std::sin(yaw)};
+          InputFrame swim;swim.move={outward.dot(right),outward.dot(forward)};b.step(swim);
+          if(g.player().swimming){blended=g.player().swimBlend>0&&g.player().swimBlend<0.99f;break;}}
+        CHECK(blended,"walking into deeper water blends movement and buoyancy gradually");
+      }
+      g.teleportPlayer(p,0);b.idle(10);CHECK(g.player().swimming,"deep water switches to swimming");
+      CHECK(g.player().y>w.heightAt(p.x,p.y)+0.4f,"swimmer floats above seabed");
+      b.render=true;b.idle(20);b.shot("beach_swimming");b.render=false;
+      g.teleportPlayer({w.poiBeach.x,w.poiBeach.z},0);b.idle(10);CHECK(!g.player().swimming,"returning to shore restores walking");
+      g.teleportPlayer(p,0);b.idle(10);
+    }
+    g.money()=123456;g.player().health=67;g.player().mag[kWpnPistol]=7;g.equipWeapon(kWpnPistol);
+    Vec2 saved=g.player().pos;int waterCount=g.itemCount(1);CHECK(g.saveGame(),"slot is saved atomically");
+    CHECK(g.inspectSlot(g.activeSlot()).seed==seed,"save contains exact seed");
+    int slot=g.activeSlot();g.returnToMain();CHECK(g.menu()==MenuState::Main,"return to menu saves and freezes session");
+    CHECK(!g.startSlot(slot,true),"existing slot cannot be overwritten without confirmation");
+    CHECK(g.startSlot(slot,false),"load starts city reconstruction");load();b.idle(2);
+    CHECK(g.world().seed==seed&&g.world().spawnPlayer.x==spawn.x,"same seed regenerates same city");
+    CHECK((g.player().pos-saved).length()<0.1f,"position restored");CHECK(g.money()==123456&&g.itemCount(1)==waterCount,"money and inventory restored");
+    CHECK(g.player().owned[kWpnPistol]&&g.player().mag[kWpnPistol]==7,"weapons and ammunition restored");
+    if(name=="polish"){
+      CHECK(g.settings().highContrast&&g.settings().reducedMotion,"saved accessibility survives slot reload");
+      CHECK(g.settings().weatherMode==1&&g.settings().ambientOcclusion,"weather and AO settings survive slot reload");
+      const auto& w=g.world();if(w.coastSide>=0){
+        Vec2 water{w.poiBeach.x,w.poiBeach.z};
+        if(w.coastSide==0)water.y=-w.shoreline-1;if(w.coastSide==1)water.x=w.shoreline+1;if(w.coastSide==2)water.y=w.shoreline+1;if(w.coastSide==3)water.x=-w.shoreline-1;
+        g.teleportPlayer(water,0);b.idle(8);b.render=true;
+        Vec2 along=(w.coastSide%2)?Vec2{0,1}:Vec2{1,0};
+        // A parked car above the water line supplies visible geometry for coastal SSR.
+        auto original=g.vehicles()[0];auto& car=g.vehicles()[0];Vec2 outward=(w.coastSide==0?Vec2{0,-1}:w.coastSide==1?Vec2{1,0}:w.coastSide==2?Vec2{0,1}:Vec2{-1,0});car.pos=water+along*2.5f+outward*4;car.driver=-1;car.engineOn=false;car.vel={};car.speed=0;
+        CameraInput ci;ci.focus={water.x,0,water.y};ci.headingYaw=w.coastSide*kPi*0.5f+0.5f;g.camera().snapTo(ci,w,(float)r.outputWidth()/r.outputHeight());
+        for(int mode=0;mode<3;++mode){g.settings().reflections=mode;b.idle(5);b.shot("coast_reflection_"+std::to_string(mode));}
+        b.idle(4);auto reference=fd;reference.globals.reflectionInfo.x=1;reference.globals.reflectionInfo.y=0;
+        std::vector<uint8_t> sky,ssr;uint32_t width=0,height=0;
+        r.requestReadback();r.renderFrame(reference);CHECK(r.readback(sky,width,height),"sky-only reflection readback succeeds");
+        reference.globals.reflectionInfo.y=28;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(ssr,width,height),"coastal SSR readback succeeds");
+        int changed=0;for(size_t pixel=0;pixel+3<sky.size()&&pixel+3<ssr.size();pixel+=4){int difference=0;for(int c=0;c<3;++c)difference+=std::abs(int(sky[pixel+c])-int(ssr[pixel+c]));if(difference>3)++changed;}
+        LOGI("coastal SSR changes %d visible pixels with frozen scene/time",changed);CHECK(changed>5,"coastal SSR visibly reflects scene geometry beyond the sky fallback");
+        if(!ssr.empty())writePng(out+"/coast_ssr_verified.png",ssr.data(),width,height);
+        g.vehicles()[0]=original;g.settings().reflections=2;b.render=false;
+      }
+      g.teleportPlayer({spawn.x,spawn.z},0);b.idle(3);g.saveGame();
+      g.returnToMain();auto info=g.inspectSlot(slot);
+      const std::string path=fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav";
+      CHECK(fileio::writeFileAtomic(path,"truncated",9),"inject truncated primary save");
+      auto backup=g.inspectSlot(slot);CHECK(backup.valid&&backup.recovered&&backup.seed==seed,"slot screen finds valid backup and its seed");
+      CHECK(g.startSlot(slot,false),"corrupted primary loads its backup");load();b.idle(2);
+      CHECK(g.world().seed==seed&&g.money()==backup.money,"recovered game rebuilds correct city and money");
+      CHECK(g.saveGame(),"recovered slot can be saved again");
+    }
+    g.showMenu(MenuState::Map);b.render=true;b.idle(4);b.shot("full_map");g.showMenu(MenuState::Codes);b.shot("codes");g.showMenu(MenuState::Settings);b.shot("settings");g.showMenu(MenuState::Pause);b.shot("pause");
+    g.returnToMain();CHECK(g.startSlot(1,true,true),"second slot starts independently");load();
+    CHECK(g.inspectSlot(slot).money==123456,"new slot preserves original save");
+    g.returnToMain();CHECK(g.deleteSlot(1),"inactive slot can be deleted");CHECK(!g.inspectSlot(1).exists,"deleted slot disappears");
+    CHECK(g.recentSlot()==slot,"continue falls back to most recent remaining slot");
+    LOGI("CITY checks failures: %d",g_failures);return g_failures?1:0;
+  }
+
+  if (name == "diagnostic") {
+    b.idle(40);
+    for(int i=0;i<4;++i){g.frame(dt,fd);
+      if(i==0){fd.worldMeshes.clear();fd.models.clear();fd.sprites.clear();fd.spriteBatches.clear();fd.decals.clear();fd.silhouettes.clear();fd.silhouetteBatches.clear();fd.ui.clear();fd.uiBatches.clear();}
+      if(i==1){fd.sprites.clear();fd.spriteBatches.clear();fd.decals.clear();fd.silhouettes.clear();fd.silhouetteBatches.clear();fd.ui.clear();fd.uiBatches.clear();}
+      if(i==2){fd.ui.clear();fd.uiBatches.clear();}
+      r.requestReadback();r.renderFrame(fd);std::vector<uint8_t> px;uint32_t w,h;if(r.readback(px,w,h))writePng(out+"/diag_"+std::to_string(i)+".png",px.data(),w,h);
+    } return 0;
+  }
   if (name == "start") {
     b.idle(40);
     b.shot("01_topdown");
@@ -354,6 +607,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     return 0;
   }
   if (name == "mvp") {
+    b.render = false; // simulation uses real input and physics; screenshots render selected states
     // ---- walk to the car
     b.idle(20);
     b.shot("10_spawn_topdown");
@@ -379,8 +633,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     // ---- drive to the gas station (route generated from the city's street grid)
     const World& W = g.world();
     auto v2 = [](const Vec3& p) { return Vec2{p.x, p.z}; };
-    Vehicle& car = g.vehicles()[0];
-    float fuel0 = car.fuel;
+    float fuel0 = g.vehicles()[0].fuel;
     LOGI("city '%s' seed %u, coast %d, %zu shops", W.cityName.c_str(), W.seed, W.coastSide, W.shops.size());
     CHECK(b.driveRoad(v2(W.gasApproach), 3.0f, 1500), "drove through the city to the gas station");
     b.shot("14_driving");
@@ -403,13 +656,14 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.idle(120);
     b.shot("17_after_fuel");
     CHECK(g.money() < money0, "money was spent on fuel");
-    CHECK(car.fuel > fuel0 + 2.5f, "fuel was added to the tank");
-    LOGI("fuel %.1f -> %.1f L, money %d -> %d", fuel0, car.fuel, money0, g.money());
+    CHECK(g.vehicles()[0].fuel > fuel0 + 2.5f, "fuel was added to the tank");
+    LOGI("fuel %.1f -> %.1f L, money %d -> %d", fuel0, g.vehicles()[0].fuel, money0, g.money());
     // ---- go to the market
     CHECK(b.driveTo(v2(W.gasLaneExit), 2.0f, 900, 5.0f), "drove out of the pump lane");
     CHECK(b.driveTo(v2(W.gasExitStreet), 2.5f, 900, 5.0f), "left the forecourt");
     CHECK(b.driveRoad(v2(W.marketParking), 2.5f, 1500), "drove to the market");
     b.stopCar();
+    LOGI("market target %.2f %.2f actual car %.2f %.2f player health %.1f vehicle %d",W.marketParking.x,W.marketParking.z,g.vehicles()[0].pos.x,g.vehicles()[0].pos.y,g.player().health,g.player().vehicle);
     in = InputFrame();
     in.enterExitPressed = true;
     b.step(in, 1);
@@ -418,6 +672,11 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     const ShopDef* market = nullptr;
     for (const ShopDef& sh : W.shops) if (sh.kind == ShopKind::Mercado) market = &sh;
     CHECK(market != nullptr, "the city has a market");
+    // Walk around the parked car instead of asking the straight-line bot to cross it.
+    Vec2 parked=g.vehicles()[0].pos, direction=(v2(market->door)-parked).normalized();
+    Vec2 side{-direction.y,direction.x};if(side.dot(g.player().pos-parked)<0)side=side*-1.0f;
+    CHECK(b.walkTo(parked+side*3.2f-direction*2.8f,0.5f,500), "walked beside the parked car");
+    CHECK(b.walkTo(parked+side*3.2f+direction*2.8f,0.5f,500), "walked around the parked car");
     CHECK(b.walkTo(v2(market->door), 0.7f, 500), "walked to the market door");
     b.idle(5);
     CHECK(g.focusValid() && g.focus()->kind == IKind::Door, "door interaction available");
