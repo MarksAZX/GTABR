@@ -127,3 +127,10 @@ A resolução dinâmica é opcional.
 - NPCs derrubados pelo jogador soltam dinheiro.
 - Salto contextual sobre obstáculos baixos, esquiva e bloqueio, hitstop, mundo vivo (lojas abrem/fecham, trânsito por hora).
 - O ZIP `Bairro-v0.7.0-completo.zip` (raiz do projeto, não versionado por causa do tamanho) traz todos os arquivos e o APK.
+
+## 0.8.0
+
+- **UI:** barras planas com emblemas redondos (vida, fôlego, XP), mapa que muda com a hora (claro de dia, azul-violeta à noite) com trilha rosa até o destino, menu de pausa em lista com destaque em degradê.
+- **Cidade por classe social:** bairros autoconstruídos (vielas, casas de tijolo e retalhos de tinta, telhado de zinco, lama), bairro nobre perto do mar (vilas, muros altos, piscinas) e classe média. Ruas de bloquete e de paralelepípedo, ruas de terra batida e transições suaves asfalto → lama → terra feitas no shader (quantidade de lama guardada na parte fracionária da camada do vértice).
+- **Materiais novos (8):** lama, bloquete, paralelepípedo, terra batida, parede de favela, zinco, vila de luxo, torre de luxo (albedo gerado por IA; normais/rugosidade derivadas).
+- **Gráficos:** desfoque de movimento opcional, sombras de contato, nitidez, nuvens volumétricas (Ultra).
