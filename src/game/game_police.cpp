@@ -41,6 +41,11 @@ void Game::driveAi(Vehicle& v, Vec2 target, float maxSpeed, float dt) {
     }
     float look = 5.0f + std::fabs(v.speed) * 0.45f;
     while (v.routeIdx + 1 < v.route.size() && (v.route[v.routeIdx + 1] - here).length() < look * 0.6f) ++v.routeIdx;
+    // a waypoint that slipped behind the car within turning range would make it orbit around it: skip it
+    while (v.routeIdx + 2 < v.route.size()) {
+      Vec2 to = v.route[v.routeIdx + 1] - here;
+      if (to.length() < 12.0f && to.dot(fwd2(v.yaw)) < 0) ++v.routeIdx; else break;
+    }
     goal = v.route[std::min(v.routeIdx + 1, v.route.size() - 1)];
     bool lastLeg = v.routeIdx + 2 >= v.route.size();
     if (lastLeg && (v.route.back() - here).length() < 6.0f) { v.atRouteEnd = true; distGoal = 0; }   // arrived: brake to a stop
