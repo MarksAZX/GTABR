@@ -388,7 +388,8 @@ void Game::drawGameTab(float x, float y, float w, float h) {
   ui_.rect(x, y + 156 * S, w, 1.2f * S, kLine);
   ui_.text(false, "CIDADE", x, y + 176 * S, 16 * S, dimCol(c), Align::Left);
   ui_.text(true, upper(world_.cityName) + "   ·   SEED " + std::to_string(worldSeed_), x, y + 200 * S, 28 * S, kInk, Align::Left);
-  ui_.text(false, "A mesma seed recria exatamente a mesma cidade ao carregar o save.", x, y + 238 * S, 19 * S, dimCol(c), Align::Left);
+  ui_.text(false, "NÍVEL " + std::to_string(level_) + "  ·  " + std::to_string(xp_) + "/" + std::to_string(xpForNext(level_)) + " XP  ·  " + std::to_string(jobsDone_) +
+           " entregas  ·  " + fmtMoney(earned_) + " ganhos  ·  desconto " + std::to_string((int)std::lround(shopDiscount() * 100)) + "%", x, y + 238 * S, 19 * S, dimCol(c), Align::Left);
   ui_.rect(x, y + 282 * S, w, 1.2f * S, kLine);
   // milestones
   static const char* names[kPgCount] = {"Abasteceu um veículo", "Comprou em uma loja", "Consertou um veículo", "Nadou no mar", "Pegou uma arma",

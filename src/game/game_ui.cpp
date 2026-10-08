@@ -276,17 +276,29 @@ void Game::drawMoney() {
   // objective card under the status block
   if (waypoint_.active) {
     float d = (player_.pos - Vec2{waypoint_.pos.x, waypoint_.pos.z}).length();
-    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 14 * S + (moneyDeltaT_ > 0 ? 32 * S : 0);
+    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 32 * S + (moneyDeltaT_ > 0 ? 32 * S : 0);
     std::string dist = d >= 1000 ? fmtFloat(d / 1000.0f, 1) + " km" : std::to_string((int)d) + " m";
+    if (job_.active) {
+      int t = (int)std::max(0.0f, job_.timeLeft);
+      dist += "  ·  " + std::to_string(t / 60) + ":" + (t % 60 < 10 ? "0" : "") + std::to_string(t % 60);
+    }
     float nameW = ui_.textWidth(true, waypoint_.name, 24 * S), distW = ui_.textWidth(false, dist, 22 * S);
     float w = 62 * S + std::max(nameW + 22 * S + distW, 150 * S) + 18 * S, h = 66 * S;
     ui_.glow(x, y + 4 * S, w, h, 18 * S, 12 * S, C(0, 0, 0, 0.26f * a));
     ui_.rect(x, y, w, h, withAlpha(kGlass, a), 18 * S, 1.2f * S, C(1, 1, 1, 0.14f * a));
     ui_.rect(x, y + 14 * S, 4 * S, h - 28 * S, withAlpha(kRed, a), 2 * S);
     ui_.icon("pin", x + 36 * S, y + h / 2, 26 * S, withAlpha(kRed, a));
-    ui_.text(false, "OBJETIVO", x + 62 * S, y + 9 * S, 15 * S, withAlpha(kMuted, a), Align::Left);
+    ui_.text(false, job_.active ? (job_.timeLeft < 0 ? "ENTREGA ATRASADA" : "ENTREGA") : "OBJETIVO", x + 62 * S, y + 9 * S, 15 * S, withAlpha(kMuted, a), Align::Left);
     ui_.text(true, waypoint_.name, x + 62 * S, y + 27 * S, 24 * S, C(1, 1, 1, a), Align::Left);
-    ui_.text(false, dist, x + w - 18 * S, y + 27 * S, 22 * S, withAlpha(kAccent, a), Align::Right);
+    ui_.text(false, dist, x + w - 18 * S, y + 27 * S, 22 * S, withAlpha(job_.active && job_.timeLeft < 20 ? kRed : kAccent, a), Align::Right);
+  }
+  // level chip + thin XP bar, bottom of the status block
+  {
+    float x = 36 * S, y = 34 * S + (staminaShow_ > 0 ? 124 : 104) * S + 2 * S;
+    float frac = clamp(xp_ / (float)xpForNext(level_), 0.0f, 1.0f);
+    ui_.text(true, "Nv " + std::to_string(level_), x + 4 * S, y - 4 * S, 17 * S, withAlpha(kMuted, a), Align::Left);
+    ui_.rect(x + 62 * S, y + 6 * S, 110 * S, 4 * S, C(1, 1, 1, 0.12f * a), 2 * S);
+    ui_.rect(x + 62 * S, y + 6 * S, 110 * S * frac, 4 * S, withAlpha(kAccent, a), 2 * S);
   }
 }
 

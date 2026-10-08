@@ -1107,6 +1107,63 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     b.shot("life_accident");
     return 0;
   }
+  if (name == "jobs") {
+    b.idle(30);
+    int m0 = g.money();
+    g.debugJob(0);
+    CHECK(g.jobActive(), "taking a delivery activates the job and sets the waypoint");
+    g.debugJob(1);
+    b.idle(10);
+    g.debugJob(2);
+    CHECK(!g.jobActive() && g.jobsDone() == 1, "delivering finishes the job");
+    CHECK(g.money() > m0, "the delivery pays");
+    CHECK(g.xp() > 0 || g.level() > 1, "the delivery gives XP");
+    return 0;
+  }
+  if (name == "vault") {
+    // contextual vault: find a low, thin obstacle and jump over it while walking
+    b.idle(30);
+    const World& w = g.world();
+    int pick = -1;
+    for (size_t i = 0; i < w.colliders.size(); ++i) {
+      const Collider& c = w.colliders[i];
+      float h = c.box.mx.y - c.box.mn.y;
+      float sx = c.box.mx.x - c.box.mn.x, sz = c.box.mx.z - c.box.mn.z;
+      if ((c.kind == ColKind::Wall || c.kind == ColKind::Prop) && c.box.mn.y < 0.2f && c.box.mx.y > 0.7f && c.box.mx.y < 1.4f && std::min(sx, sz) < 0.9f) { pick = (int)i; break; }
+    }
+    if (pick < 0) {
+      int cnt[6][4] = {};
+      for (const Collider& c : w.colliders) { int k = (int)c.kind; float h = c.box.mx.y; cnt[k][h < 0.7f ? 0 : (h < 1.4f ? 1 : (h < 3 ? 2 : 3))]++; }
+      for (int k = 0; k < 6; ++k) printf("kind %d: <0.7 %d, <1.4 %d, <3 %d, tall %d\n", k, cnt[k][0], cnt[k][1], cnt[k][2], cnt[k][3]);
+    }
+    CHECK(pick >= 0, "the city has a low obstacle to vault");
+    if (pick < 0) return 0;
+    const Collider& c = w.colliders[pick];
+    bool alongX = (c.box.mx.x - c.box.mn.x) > (c.box.mx.z - c.box.mn.z);
+    Vec2 mid{(c.box.mn.x + c.box.mx.x) * 0.5f, (c.box.mn.z + c.box.mx.z) * 0.5f};
+    Vec2 dir = alongX ? Vec2{0, 1} : Vec2{1, 0};
+    float half = alongX ? (c.box.mx.z - c.box.mn.z) * 0.5f : (c.box.mx.x - c.box.mn.x) * 0.5f;
+    Vec2 start = mid - dir * (half + 1.3f);
+    g.teleportPlayer(start, yawFromDir(dir));
+    b.idle(20);
+    // walk towards the obstacle, then jump when close
+    float sideStart = (start - mid).dot(dir);
+    bool crossed = false;
+    for (int i = 0; i < 160 && !crossed; ++i) {
+      InputFrame in;
+      Vec2 f = dir;
+      float cy = g.camera().yaw();
+      Vec2 camF{std::sin(cy), -std::cos(cy)}, camR{std::cos(cy), std::sin(cy)};
+      in.move = {f.dot(camR), f.dot(camF)};
+      float d = (g.player().pos - mid).dot(dir);
+      if (d > -(half + 0.95f) && !g.player().airborne && d < 0) in.jumpPressed = true;
+      b.step(in, 1);
+      crossed = (g.player().pos - mid).dot(dir) > half + 0.3f;
+    }
+    CHECK(crossed, "the player vaults over the obstacle instead of stopping at it");
+    (void)sideStart;
+    return 0;
+  }
   if (name == "char") {
     g.toggleCamera();
     b.idle(60);

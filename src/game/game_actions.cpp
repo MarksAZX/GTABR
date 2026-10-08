@@ -125,12 +125,16 @@ void Game::applyItemEffects(const ItemDef& d) {
   toast(msg, d.icon);
 }
 
+// shop price after the level discount
+static int discounted(int cents, float disc) { return (int)std::lround(cents * (1.0f - disc)) / 5 * 5; }
+
 int Game::shopPriceCents(int shopId, int item) const {
   if (shopId >= 0 && shopId < (int)world_.shops.size())
     for (const ShopStock& st : world_.shops[shopId].stock)
-      if (st.kind == 0 && st.id == item) return st.priceCents;
-  return itemDef(item).priceCents;
+      if (st.kind == 0 && st.id == item) return discounted(st.priceCents, shopDiscount());
+  return discounted(itemDef(item).priceCents, shopDiscount());
 }
+
 
 void Game::buyItem(int item, bool fromShelf, int priceCents) {
   const ItemDef& d = itemDef(item);
@@ -240,6 +244,10 @@ void Game::openAttendantPanel(int shopId) {
     }
     q.options.push_back({"Valeu!", "", nullptr, "", true, true, nullptr});
     openPanel(q);
+  }});
+  p.options.back().closes = false;
+  p.options.push_back({"Tem algum bico?", "Entregas pagas por distância", "bag", "", true, false, [this, sid]() {
+    openJobBoard(Vec2{world_.shops[sid].door.x, world_.shops[sid].door.z}, "Atendente");
   }});
   p.options.back().closes = false;
   p.options.push_back({"Tchau", "", "close", "", true, true, nullptr});

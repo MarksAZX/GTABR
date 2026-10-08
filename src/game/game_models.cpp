@@ -365,7 +365,7 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
         float k = clamp(player_.dodgeT / 0.5f, 0.0f, 1.0f);
         ai.rollPitch = kTau * (k * k * (3.0f - 2.0f * k));
       }
-      ai.airborne = player_.airborne; ai.airPhase = player_.airT / 0.836f; ai.dead = player_.dead;
+      ai.airborne = player_.airborne; ai.airPhase = player_.airT / std::max(0.4f, player_.airDur); ai.dead = player_.dead;
       ai.combat = (player_.weapon > 0 && !isFirearm(player_.weapon)) || player_.attackT >= 0 || player_.comboWindow > 0;
       if (m && visible(pos, 2.0f)) emitCharacter(fd, *m, a, pos, player_.yaw, 1.0f, player_.speed, dt, true, {0, 0, 0, 0}, ai);
       interactPulse_ = std::max(0.0f, interactPulse_ - dt);

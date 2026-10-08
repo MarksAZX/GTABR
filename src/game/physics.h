@@ -22,7 +22,8 @@ Hit obbVsObb(const OBB& a, const OBB& b);
 Hit circleVsObb(Vec2 c, float r, const OBB& b);   // normal pushes the circle out of the box
 
 // Moves a circle through the static world sliding along colliders. Returns true if it touched something.
-bool moveCircle(const World& w, Vec2& pos, Vec2 delta, float radius, bool collideCars = true, float maxY = 3.0f);
+// feetY: obstacles whose top is below this height are stepped over (jumping / vaulting).
+bool moveCircle(const World& w, Vec2& pos, Vec2 delta, float radius, bool collideCars = true, float maxY = 3.0f, float feetY = -1e9f);
 // Pushes a circle out of static geometry without moving it further (e.g. after teleports).
 void depenetrateCircle(const World& w, Vec2& pos, float radius);
 // Ray (2D) vs colliders, used for the third-person camera. Returns the distance in [0,maxDist].

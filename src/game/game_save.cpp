@@ -93,6 +93,7 @@ bool Game::saveToSlot(int slot) {
   o << "location=" << locationName(player_.vehicle >= 0 ? vehicles_[player_.vehicle].pos : player_.pos, player_.indoors) << "\n";
   o << "progress=" << progress_ << "\nshops_visited=" << shopsVisited_ << "\ndriven=" << driven_ << "\n";
   o << "money=" << moneyCents_ << "\n";
+  o << "xp=" << xp_ << "\nlevel=" << level_ << "\njobsDone=" << jobsDone_ << "\nearned=" << earned_ << "\n";
   o << "playerX=" << player_.pos.x << "\nplayerZ=" << player_.pos.y << "\nplayerYaw=" << player_.yaw << "\n";
   o << "indoors=" << (player_.indoors ? 1 : 0) << "\n";
   o << "health=" << player_.health << "\nstamina=" << player_.stamina << "\nweapon=" << player_.weapon << "\n";
@@ -119,6 +120,11 @@ bool Game::saveToSlot(int slot) {
 void Game::applyStateFromFile(const KV& kv) {
   moneyCents_ = (int)numOf(kv, "money", 40000);
   moneyDisplay_ = (float)moneyCents_;
+  xp_ = (int)numOf(kv, "xp", 0);
+  level_ = std::max(1, (int)numOf(kv, "level", 1));
+  jobsDone_ = (int)numOf(kv, "jobsDone", 0);
+  earned_ = (int)numOf(kv, "earned", 0);
+  job_ = Job();
   player_.health = clamp(numOf(kv, "health", 100), 1.0f, 100.0f);
   player_.stamina = clamp(numOf(kv, "stamina", 100), 0.0f, 100.0f);
   for (int w = 1; w < kWeaponCount; ++w) {

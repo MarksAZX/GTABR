@@ -88,7 +88,7 @@ struct Toast { std::string text; float t = 0; float dur = 2.6f; uint32_t color =
 
 struct Particle { Vec3 pos, vel; float life = 0, maxLife = 1, size = 1; uint32_t color = 0xFFFFFFFFu; float gravity = 0; };
 
-enum class IKind { Npc, Vehicle, Door, Product, FuelPump, Workshop };
+enum class IKind { Npc, Vehicle, Door, Product, FuelPump, Workshop, Job };
 struct Interactable {
   IKind kind = IKind::Npc;
   int id = 0;           // npc index / vehicle index / door id / product id / pump id
@@ -140,6 +140,15 @@ struct SlotInfo {
 enum Milestone { kPgFueled = 0, kPgBought, kPgRepaired, kPgSwam, kPgArmed, kPgShops, kPgEscaped, kPgDrove, kPgCount };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
+
+// Delivery job in progress (game_jobs.cpp).
+struct Job {
+  bool active = false, warned = false, near = false;
+  std::string item, destName;
+  Vec3 dropoff;
+  int pay = 0;
+  float timeTotal = 0, timeLeft = 0, distance = 0;
+};
 
 // City life (game_life.cpp): ambient birds and one dynamic street event at a time.
 struct Bird { Vec3 pos; Vec2 dir{1, 0}; float phase = 0, speed = 6, alt = 18, orbit = 30, t = 0; bool flying = true; Vec2 home; };
@@ -223,7 +232,16 @@ class Game {
   uint32_t seed() const { return worldSeed_; }
   uint32_t progress() const { return progress_; }
   int activeSlot() const { return activeSlot_; }
-  void markProgress(int bit) { if (!(progress_ & (1u << bit))) { progress_ |= 1u << bit; } }
+  void markProgress(int bit);
+  // jobs / experience (game_jobs.cpp)
+  int xpForNext(int level) const;
+  void addXp(int amount);
+  float shopDiscount() const;
+  float staminaPerk() const;
+  void openJobBoard(Vec2 from, const std::string& giver);
+  void cancelJob();
+  void completeJob();
+  void updateJobs(float dt);
   void runCode(int code);          // pause-menu codes (cheats), each with a real effect
   bool menuIsOpen() const { return menu_ != MenuState::None; }
   std::string locationName(Vec2 p, bool indoors) const;
@@ -246,6 +264,15 @@ class Game {
   float hitstopLeft() const { return hitstop_; }
   bool fightContext() const { return fightCtx_; }
   void setWaypointDebug(const std::string& name) { waypoint_.active = true; waypoint_.name = name; waypoint_.pos = world_.poiWorkshop; }
+  void debugJob(int step) {   // tests: 0 = open the board and take offer 0, 1 = go to the dropoff, 2 = deliver
+    if (step == 0) { openJobBoard(player_.pos, "Teste"); if (panel_.options.size() > 1) { panel_.options[0].action(); closePanel(); } }
+    else if (step == 1 && job_.active) { player_.pos = {job_.dropoff.x, job_.dropoff.z}; }
+    else if (step == 2) completeJob();
+  }
+  bool jobActive() const { return job_.active; }
+  int jobsDone() const { return jobsDone_; }
+  int xp() const { return xp_; }
+  int level() const { return level_; }
   void addMoneyDebug(int cents) { moneyCents_ += cents; }
   void openAttendantPanel(int shopId);
   void repairVehicle(int vehicleIdx);
@@ -383,6 +410,8 @@ class Game {
   CityEvent cityEvent_;
   float eventCooldown_ = 160.0f;
   std::deque<std::string> recentLines_;   // last spoken lines (no repeats)
+  Job job_;
+  int xp_ = 0, level_ = 1, jobsDone_ = 0, earned_ = 0;
   float hitstop_ = 0;              // real seconds the world is nearly frozen after a heavy hit
   bool fightCtx_ = false;          // a fight is on: the jump button becomes dodge (tap) / block (hold)
   float strikePower_ = 1.0f;

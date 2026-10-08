@@ -90,13 +90,14 @@ Hit circleVsObb(Vec2 c, float r, const OBB& b) {
   return h;
 }
 
-static bool resolveCircleStatic(const World& w, Vec2& pos, float radius, bool collideCars, float maxY, std::vector<int>& tmp) {
+static bool resolveCircleStatic(const World& w, Vec2& pos, float radius, bool collideCars, float maxY, std::vector<int>& tmp, float feetY = -1e9f) {
   bool touched = false;
   w.queryColliders(pos.x - radius - 0.1f, pos.y - radius - 0.1f, pos.x + radius + 0.1f, pos.y + radius + 0.1f, tmp);
   for (int id : tmp) {
     const Collider& c = w.colliders[id];
     if (!collideCars && c.kind == ColKind::Car) continue;
     if (c.box.mn.y > maxY) continue;
+    if (c.box.mx.y < feetY) continue;   // the feet are above this obstacle (vaulting)
     float cx = clamp(pos.x, c.box.mn.x, c.box.mx.x), cz = clamp(pos.y, c.box.mn.z, c.box.mx.z);
     float dx = pos.x - cx, dz = pos.y - cz;
     float d2 = dx * dx + dz * dz;
@@ -119,7 +120,7 @@ static bool resolveCircleStatic(const World& w, Vec2& pos, float radius, bool co
   return touched;
 }
 
-bool moveCircle(const World& w, Vec2& pos, Vec2 delta, float radius, bool collideCars, float maxY) {
+bool moveCircle(const World& w, Vec2& pos, Vec2 delta, float radius, bool collideCars, float maxY, float feetY) {
   float len = delta.length();
   int steps = std::max(1, (int)std::ceil(len / 0.2f));
   Vec2 step = delta / (float)steps;
@@ -129,7 +130,7 @@ bool moveCircle(const World& w, Vec2& pos, Vec2 delta, float radius, bool collid
   for (int i = 0; i < steps; ++i) {
     pos += step;
     for (int it = 0; it < 3; ++it)
-      if (resolveCircleStatic(w, pos, radius, collideCars, maxY, tmp)) touched = true;
+      if (resolveCircleStatic(w, pos, radius, collideCars, maxY, tmp, feetY)) touched = true;
       else break;
   }
   return touched;

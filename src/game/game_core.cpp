@@ -478,6 +478,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
   updatePolice(dt);
   updateTraffic(dt);
   updateLife(dt);
+  updateJobs(dt);
   // ---- ambient surf: emitter on the water line closest to the player, louder near the beach
   if (world_.coastSide >= 0) {
     Vec2 pp = player_.pos;
@@ -743,13 +744,32 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
   } else {
     p.staminaCooldown = std::max(0.0f, p.staminaCooldown - dt);
     if (p.runBoost > 0.0f) p.runBoost -= dt;
-    p.stamina = std::min(100.0f, p.stamina + (p.staminaCooldown > 0 ? 5.0f : 15.0f) * dt);
+    p.stamina = std::min(100.0f, p.stamina + (p.staminaCooldown > 0 ? 5.0f : 15.0f) * staminaPerk() * dt);
   }
   // ---- jump: a ballistic arc (about 0.95 m high, 0.84 s in the air) matched by the jump clip
   if (in.jumpPressed && !fightCtx_ && !p.airborne && !p.swimming && p.stamina > 8.0f && p.hitStun <= 0 && p.attackT < 0 && !p.down) {
     p.airborne = true;
     p.airV = 4.6f;
     p.airT = 0.0f;
+    // contextual vault: a low obstacle right ahead (bench, bin, low wall, car bonnet) gets a stronger hop so the feet clear its top
+    {
+      Vec2 dirm = p.vel.length() > 0.6f ? p.vel.normalized() : fwd2(p.yaw);
+      Vec2 probe = p.pos + dirm * 0.85f;
+      std::vector<int> ids;
+      world_.queryColliders(probe.x - 0.45f, probe.y - 0.45f, probe.x + 0.45f, probe.y + 0.45f, ids);
+      float topMax = 0.0f;
+      for (int id : ids) {
+        const Collider& col = world_.colliders[id];
+        if (col.kind == ColKind::Building || col.kind == ColKind::Tree || col.kind == ColKind::Pole) continue;
+        if (col.box.mn.y > 0.6f || !col.box.containsXZ(probe.x, probe.y)) continue;
+        if (col.box.mx.y <= 1.75f) topMax = std::max(topMax, col.box.mx.y);
+      }
+      if (topMax > 0.55f) {
+        p.airV = std::min(6.4f, std::sqrt(2.0f * 11.0f * (topMax + 0.3f)));
+        if (settings_.hints && rng_.chance(0.15f)) toast("Pulo sobre o obstáculo", "arrow");
+      }
+    }
+    p.airDur = 2.0f * p.airV / 11.0f;
     p.stamina = std::max(0.0f, p.stamina - 8.0f);
     audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.18f);
   }
@@ -760,7 +780,7 @@ void Game::updatePlayer(float dt, const InputFrame& in) {
     if (p.air <= 0.0f) { p.air = 0.0f; p.airV = 0.0f; p.airborne = false; audio_.play("blunt", {p.pos.x, 0.2f, p.pos.y}, 0.3f); }
   }
   Vec2 before = p.pos;
-  phys::moveCircle(world_, p.pos, p.vel * dt, 0.32f);
+  phys::moveCircle(world_, p.pos, p.vel * dt, 0.32f, true, 3.0f, p.airborne ? p.y + p.air : -1e9f);
   // vehicles push the player
   for (const Vehicle& v : vehicles_) {
     phys::Hit h = phys::circleVsObb(p.pos, 0.32f, vehicleObb(v));
@@ -1012,6 +1032,11 @@ void Game::collectInteractables() {
       it.icon = "chat";
       add(it);
     }
+    if (job_.active && job_.near) {
+      Interactable it;
+      it.kind = IKind::Job; it.id = 0; it.pos = job_.dropoff; it.radius = 99; it.label = "Entregar"; it.sub = job_.item; it.icon = "bag"; it.dist = 0.5f;
+      nearby_.push_back(it);
+    }
     for (const DoorDef& d : world_.doors) {
       if (d.toInterior == player_.indoors) continue;   // exterior doors are only usable outside, exit doors inside
       Interactable it;
@@ -1101,6 +1126,7 @@ void Game::activateInteractable(const Interactable& it) {
     case IKind::Product: { const ProductPoint& pr = world_.products[it.id]; buyItem(pr.item, true, shopPriceCents(pr.shop, pr.item)); break; }
     case IKind::FuelPump: openFuelPanel(it.id); break;
     case IKind::Workshop: openWorkshopPanel(); break;
+    case IKind::Job: completeJob(); break;
   }
 }
 
