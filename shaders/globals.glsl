@@ -24,6 +24,8 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 sky1;        // rgb horizon, w = cloud brightness
   vec4 cascade;     // x = split distance, y = cascade count, z = fog height falloff, w = wetness
   vec4 lightInfo;   // x = light count
+  vec4 reflectionInfo; // x sky reflection strength, y SSR steps, z material variation, w water level
+  vec4 waterBounds;    // x0,z0,x1,z1; only coastal surfaces use SSR
   Light lights[16];
 } g;
 

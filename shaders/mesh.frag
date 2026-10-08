@@ -57,11 +57,12 @@ void main() {
   vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
   vec3 R = reflect(-V, N);
   vec3 env = skyRadiance(R, 0.0);
-  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
+  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.22 + 0.12 * N.y);
   irr = mix(irr, lamp, indoor);
   env = mix(env, lamp * 0.6, indoor);
   // crude specular occlusion toward the ground
   float so = clamp(0.6 + R.y, 0.25, 1.0);
+  env *= g.reflectionInfo.x;
   vec3 ambient = diff * irr + env * envBRDF(f0, rough, NoV) * so;
   if (cc > 0.0) ambient += env * envBRDF(vec3(0.04), 0.05, NoV) * cc * so;
   vec3 col = direct + ambient + evalLights(vWorld, N, V, diff, f0, rough);

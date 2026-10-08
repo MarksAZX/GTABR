@@ -41,16 +41,17 @@ void InputSystem::onTouch(int id, TouchAction a, float x, float y) {
         }
       }
       if (t.role == Role::None) {
-        if (p.x < L.joyZoneRight && joyId_ < 0) {
+        bool inJoy = L.joyFixed ? (p-L.joyCenter).length()<L.joyRadius*1.4f : (L.leftHanded?p.x>L.width-L.joyZoneRight:p.x<L.joyZoneRight);
+        if (inJoy && joyId_ < 0) {
           t.role = Role::Joystick;
           joyId_ = id;
-          joyBase_ = p;
+          joyBase_ = L.joyFixed ? L.joyCenter : p;
           joyKnob_ = p;
           // keep the base fully visible
-          joyBase_.x = clamp(joyBase_.x, L.joyRadius * 0.9f, L.joyZoneRight);
-          joyBase_.y = clamp(joyBase_.y, L.height * 0.35f, L.height - L.joyRadius * 0.9f);
+          joyBase_.x = clamp(joyBase_.x, L.joyRadius * 0.9f, L.width-L.joyRadius*0.9f);
+          joyBase_.y = clamp(joyBase_.y, L.joyFixed?L.joyRadius+8:L.height*0.35f, L.height - L.joyRadius - 8);
           joyKnob_ = p;
-        } else if (p.x >= L.joyZoneRight) t.role = Role::Look;
+        } else t.role = Role::Look;
       }
     }
     touches_.push_back(t);

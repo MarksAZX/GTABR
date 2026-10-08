@@ -18,6 +18,8 @@ struct HudButton {
 struct InputLayout {
   float width = 1920, height = 1080;
   HudButton run, interact, enterExit, camera, wheel, pause, attack, reload;
+  Vec2 joyCenter;
+  bool joyFixed = false, leftHanded = false;
   float joyZoneRight = 0;       // touches left of this x start the joystick
   float joyRadius = 120;
   bool modal = false;           // a menu/panel is open: touches go to the UI instead of gameplay

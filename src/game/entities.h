@@ -89,6 +89,9 @@ inline phys::OBB vehicleObb(const Vehicle& v) {
 
 struct Player {
   bool swimming = false;
+  float swimBlend = 0;
+  Vec2 transitionFrom, transitionTo;
+  float transitionYaw = 0;
   Vec2 pos;
   float yaw = 0;
   float targetYaw = 0;

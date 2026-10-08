@@ -8,7 +8,8 @@ namespace gtabr {
 
 void Game::openPanel(Panel p) {
   p.open = true;
-  p.anim = 0;
+  p.anim = panel_.open ? panel_.anim : 0;
+  if(!p.portrait.empty()&&p.title!=panel_.title)subtitle(p.text,p.title);
   panel_ = std::move(p);
   // freeze pedestrians that are being spoken to
   uiRects_.clear();
@@ -144,6 +145,8 @@ bool Game::buyStock(int shop, int stock) {
   if(st.kind==0) {if(st.id<=0||st.id>=kItemCount||inventory_[st.id]>=10000)return false;inventory_[st.id]++;}
   else {if(st.id<=0||st.id>=kWeaponCount)return false;giveWeapon(st.id,st.kind==2?weaponDef(st.id).magazine*2:0);}
   moneyCents_-=st.priceCents;moneyShow_=4;++purchases_;
+  interactPulse_=0.85f;receiptUntil_=realTime_+3.0f;
+  subtitle("Compra confirmada. O produto está com você.","Atendente");
   toast(std::string("Comprou: ")+(st.kind==0?itemDef(st.id).name:weaponDef(st.id).name)+" • −"+fmtMoney(st.priceCents),"bag");return true;
 }
 void Game::openShopPanel(const char* portrait, int shop) {
@@ -158,6 +161,7 @@ void Game::openShopPanel(const char* portrait, int shop) {
     o.icon=st.kind==0?itemDef(st.id).icon:weaponDef(st.id).icon;
     o.action=[this,shop,i](){buyStock(shop,(int)i);openShopPanel("atendente",shop);};p.options.push_back(o);
   }
+  if(realTime_<receiptUntil_)p.footer="Compra confirmada • saldo "+fmtMoney(moneyCents_);
   p.options.push_back({"Fechar", "", "close", "", true, true, nullptr});openPanel(p);
 }
 
@@ -168,6 +172,7 @@ void Game::openAttendantPanel() {
   int in=world_.interiorAt(player_.pos.x,player_.pos.y);
   std::string name=in>=0?world_.shops[world_.interiors[in].shop].name:"loja";
   p.text = "Olá! Bem-vindo a " + name + ". Posso ajudar?";
+  subtitle(p.text,"Atendente");
   p.options.push_back({"Ver produtos", "Água, lanches, kit de primeiros socorros...", "cart", "", true, false, [this]() { openShopPanel("atendente"); }});
   p.options.back().closes = false;
   p.options.push_back({"Conversar", "", "chat", "", true, false, [this]() {
@@ -249,6 +254,9 @@ void Game::openNpcPanel(int idx) {
   Npc& n = npcs_[idx];
   n.state = NpcState::Talk;
   n.path.clear();
+  n.yaw=yawFromDir(player_.pos-n.pos);
+  player_.targetYaw=yawFromDir(n.pos-player_.pos);player_.vel={};
+  interactPulse_=0.55f;
   Panel p;
   auto setWaypoint = [this](int poi) {
     waypoint_.active = true;

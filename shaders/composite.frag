@@ -1,6 +1,9 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
+#include "globals.glsl"
 layout(set = 1, binding = 0) uniform sampler2D uScene;
 layout(set = 1, binding = 1) uniform sampler2D uBlur;
+layout(set = 1, binding = 2) uniform sampler2D uDepth;
 layout(push_constant) uniform PC {
   vec4 a;      // x = wheel/menu blur, y = fade to black, z = vignette, w = sRGB target
   vec4 b;      // x = exposure, y = bloom strength, z = bloom threshold, w = time
@@ -21,8 +24,33 @@ vec3 aces(vec3 v) {
 }
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
+vec3 worldAt(vec2 uv,float depth){vec4 p=g.invViewProj*vec4(uv*2.0-1.0,depth,1);return p.xyz/p.w;}
+vec3 coastalReflection(vec3 hdr){
+  if(g.reflectionInfo.y<1)return hdr;
+  float depth=texture(uDepth,vUV).r;if(depth>=0.99999)return hdr;
+  vec3 p=worldAt(vUV,depth);
+  if(p.y>g.reflectionInfo.w+0.15||p.y<g.reflectionInfo.w-0.2 || p.x<g.waterBounds.x || p.x>g.waterBounds.z || p.z<g.waterBounds.y || p.z>g.waterBounds.w)return hdr;
+  vec3 V=normalize(g.camPos.xyz-p),R=reflect(-V,vec3(0,1,0));
+  if(R.y<=0.01)return hdr;
+  int count=int(g.reflectionInfo.y);float previous=-1;
+  for(int i=1;i<=28;++i){if(i>count)break;
+    float travel=0.45+float(i)*float(i)*0.075;vec3 ray=p+R*travel;
+    vec4 clip=g.viewProj*vec4(ray,1);if(clip.w<=0)break;
+    vec2 uv=clip.xy/clip.w*0.5+0.5;if(any(lessThan(uv,vec2(0.015)))||any(greaterThan(uv,vec2(0.985))))break;
+    float sampled=texture(uDepth,uv).r;if(sampled>=0.99999){previous=-1;continue;}
+    vec3 surface=worldAt(uv,sampled);
+    float delta=-(g.view*vec4(ray,1)).z+(g.view*vec4(surface,1)).z;
+    if(delta>=0 && delta<0.3+travel*0.035 && previous<0 && surface.y>g.reflectionInfo.w+0.2){
+      float edge=smoothstep(0.01,0.09,min(min(uv.x,uv.y),min(1-uv.x,1-uv.y)));
+      float fresnel=0.06+0.65*pow(1-max(V.y,0),5);
+      return mix(hdr,texture(uScene,uv).rgb,edge*fresnel*0.65);
+    }
+    previous=delta;
+  }
+  return hdr; // the world shader already supplies the sky fallback for missing/off-screen hits
+}
 void main() {
-  vec3 hdr = texture(uScene, vUV).rgb;
+  vec3 hdr = coastalReflection(texture(uScene, vUV).rgb);
   vec3 blurred = hdr;
   if (pc.a.x > 0.001 || pc.b.y > 0.001) blurred = texture(uBlur, vUV).rgb;
   vec3 bloom = max(blurred - vec3(pc.b.z), 0.0) * pc.b.y;

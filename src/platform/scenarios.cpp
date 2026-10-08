@@ -5,6 +5,7 @@
 #include <sstream>
 #include <map>
 #include "../core/fileio.h"
+#include "../core/save_store.h"
 
 #include "../core/log.h"
 #include "../core/png.h"
@@ -145,7 +146,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
   Bot b{g, r, fd, dt, out};
   if (name == "resume") {
     std::string text;
-    CHECK(fileio::readFile(fileio::saveDir()+"/slot_"+std::to_string(g.activeSlot())+".sav",text),"fresh process finds persisted slot");
+    CHECK(save_store::read(fileio::saveDir()+"/slot_"+std::to_string(g.activeSlot())+".sav",text),"fresh process finds persisted slot");
     std::map<std::string,std::string> kv;std::istringstream in(text);std::string line;
     while(std::getline(in,line)){auto p=line.find('=');if(p!=std::string::npos)kv[line.substr(0,p)]=line.substr(p+1);}
     CHECK(g.world().seed==(uint32_t)std::strtoull(kv["seed"].c_str(),nullptr,10),"fresh process reconstructs saved seed instead of command-line seed");
@@ -156,14 +157,48 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     for(int w=1;w<kWeaponCount;++w){auto it=kv.find(std::string("wpn_")+weaponDef(w).key);if(it!=kv.end()){int mag=0,res=0;std::sscanf(it->second.c_str(),"%d,%d",&mag,&res);CHECK(g.player().owned[w]&&g.player().mag[w]==mag&&g.player().reserve[w]==res,"fresh process restores weapon and ammunition");}}
     b.idle(4);b.shot("resume");LOGI("RESUME checks failures: %d",g_failures);return g_failures?1:0;
   }
-  if (name == "city" || name == "menus") {
+  if (name == "city" || name == "menus" || name == "polish") {
     auto load=[&](){for(int i=0;i<1500&&!g.loaded();++i){g.frame(dt,fd);r.renderFrame(fd);}CHECK(g.loaded(),"city generation finishes");};
     auto tap=[&](float x,float y){InputFrame in;UiPointer p;p.id=0;p.pos={x,y};p.pressed=true;p.down=true;in.ui={p};b.step(in);p.pressed=false;p.down=false;p.released=true;in.ui={p};b.step(in);b.idle(2);};
-    if(name=="menus"){
+    if(name=="menus"||name=="polish"){
       CHECK(g.menu()==MenuState::Main,"startup shows main menu");b.shot("00_main_menu");
-      float S=0.55f,x=480,y=60*S+80*S+70*S+72*S+31*S;
-      tap(x,y);CHECK(g.menu()==MenuState::Slots,"new game button opens slots");b.shot("01_slots");
-      tap(x,(60+80+424+31)*S);load();CHECK(g.menu()==MenuState::None,"create slot starts gameplay");
+      Vec4 bounds;CHECK(g.uiButtonBounds(401,bounds),"new game button is visible");
+      tap(bounds.x+bounds.z/2,bounds.y+bounds.w/2);CHECK(g.menu()==MenuState::Slots,"new game button opens slots");b.shot("01_slots");
+      CHECK(g.uiButtonBounds(420,bounds),"create button is visible");
+      tap(bounds.x+bounds.z/2,bounds.y+bounds.w/2);load();CHECK(g.menu()==MenuState::None,"create slot starts gameplay");
+    }
+    if(name=="polish"){
+      auto tapButton=[&](int id){
+        b.idle(8);Vec4 rect;
+        for(int page=0;page<8&&!g.uiButtonBounds(id,rect);++page){Vec4 next;if(!g.uiButtonBounds(791,next))break;tap(next.x+next.z/2,next.y+next.w/2);}
+        if(!g.uiButtonBounds(id,rect)){CHECK(false,"requested UI control is reachable");return false;}
+        CHECK(rect.x>=0&&rect.y>=0&&rect.x+rect.z<=r.outputWidth()+1&&rect.y+rect.w<=r.outputHeight()+1,"menu button fits viewport");
+        tap(rect.x+rect.z/2,rect.y+rect.w/2);return true;
+      };
+      g.showMenu(MenuState::Pause);b.idle(8);tapButton(202);tapButton(700);
+      int oldReflection=g.settings().reflections;tapButton(719);
+      CHECK(g.settings().reflections==(oldReflection+1)%3,"reflection UI changes real setting");
+      CHECK(fd.globals.reflectionInfo.y>0,"coastal reflection activates ray-march budget");
+      tapButton(719);CHECK(fd.globals.reflectionInfo.x==0&&fd.globals.reflectionInfo.y==0,"reflection off removes reflection work");
+      tapButton(719);CHECK(fd.globals.reflectionInfo.x==1&&fd.globals.reflectionInfo.y==0,"sky reflection avoids coastal ray-marching");
+      tapButton(303);CHECK(g.settings().quality==3&&fd.globals.reflectionInfo.y==28,"ultra preset enables its coastal reflection budget");
+      tapButton(702);float scale=g.settings().controlScale;tapButton(720);CHECK(g.settings().controlScale>scale,"control size increases");
+      tapButton(727);CHECK(g.settings().leftHanded,"left handed layout enabled");
+      tapButton(728);CHECK(g.menu()==MenuState::Controls,"control editor opens");
+      b.idle(8);Vec4 joy;CHECK(g.uiButtonBounds(808,joy),"joystick has draggable control");
+      InputFrame drag;UiPointer finger;finger.id=3;finger.down=true;finger.pressed=true;finger.pos={joy.x+joy.z/2,joy.y+joy.w/2};drag.ui={finger};b.step(drag);
+      finger.pressed=false;finger.pos={r.outputWidth()*0.7f,r.outputHeight()*0.3f};drag.ui={finger};b.step(drag);
+      finger.down=false;finger.released=true;drag.ui={finger};b.step(drag);b.idle(3);
+      CHECK(g.settings().fixedJoystick&&std::fabs(g.settings().controlPos[8].x-0.7f)<0.01f,"drag changes and persists joystick position");
+      b.shot("controls_custom");tapButton(304);tapButton(704);tapButton(722);tapButton(725);
+      CHECK(g.settings().highContrast&&g.settings().reducedMotion,"accessibility options toggle");
+      tapButton(717);b.shot("accessibility_settings");tapButton(304);b.shot("pause_polished");
+      tapButton(205);b.shot("inventory_polished");tapButton(304);tapButton(200);
+      auto layout=g.controlLayout();layout.modal=false;InputSystem input;input.poll(layout);
+      input.onTouch(5,TouchAction::Down,layout.joyCenter.x,layout.joyCenter.y);input.poll(layout);
+      input.onTouch(5,TouchAction::Move,layout.joyCenter.x+layout.joyRadius*0.7f,layout.joyCenter.y);
+      auto moved=input.poll(layout);CHECK(moved.joyActive&&moved.move.x>0.5f,"relocated joystick receives movement at its visual position");
+      g.showMenu(MenuState::Settings);tapButton(702);tapButton(728);tapButton(810);tapButton(304);tapButton(304);g.showMenu(MenuState::None);
     }
     b.render=false;b.idle(45);
     CHECK(g.world().shops.size()==4,"four enterable stores");
@@ -173,7 +208,9 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       for(const auto& d:g.world().doors)if(d.shop==shop&&d.toInterior)door=d.id;
       CHECK(door>=0,"shop has entrance");
       g.teleportPlayer({sh.door.x,sh.door.z},0);b.idle(2);
-      Interactable it;it.kind=IKind::Door;it.id=door;g.activateInteractable(it);b.idle(20);
+      Interactable it;it.kind=IKind::Door;it.id=door;g.activateInteractable(it);
+      if(name=="polish"&&shop==0){g.onBackground();CHECK(g.player().indoors,"background during doorway settles inside before saving");}
+      b.idle(20);
       CHECK(g.player().indoors&&g.world().interiorAt(g.player().pos.x,g.player().pos.y)==sh.interior,"door enters correct interior");
       int clerk=-1;for(size_t n=0;n<g.npcs().size();++n)if(g.npcs()[n].role==4&&g.world().interiorAt(g.npcs()[n].pos.x,g.npcs()[n].pos.y)==sh.interior)clerk=(int)n;
       CHECK(clerk>=0,"clerk exists in each store");it.kind=IKind::Npc;it.id=clerk;g.activateInteractable(it);g.selectPanelOptionPublic(0);
@@ -183,9 +220,20 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       if(stock.kind==0)CHECK(g.itemCount(stock.id)==count+1,"purchase adds item to inventory");else CHECK(g.player().owned[stock.id],"hardware store gives real equipment");
       b.render=true;b.idle(20);b.shot("shop_"+std::to_string(shop));b.render=false;
       g.selectPanelOptionPublic((int)g.panel().options.size()-1);
+      if(name=="polish"){if(g.camera().mode()==CamMode::TopDown)g.toggleCamera();b.render=true;b.idle(30);b.shot("interior_"+std::to_string(shop));b.render=false;}
       g.money()=0;CHECK(!g.buyStock(shop,0),"insufficient funds reject purchase");g.money()=40000;
     }
     g.teleportPlayer({spawn.x,spawn.z},0);b.idle(2);
+    if(name=="polish"){
+      auto& car=g.vehicles()[0];g.teleportPlayer(car.pos-right2(car.yaw)*(vehicleDef(car.model).width*0.5f+0.8f),car.yaw);
+      b.press(&InputFrame::enterExitPressed);CHECK(g.player().entering&&g.player().vehicle==-1,"car entry has a visible transition before occupancy");
+      CHECK(!g.saveGame(),"manual save waits for a stable interaction state");
+      g.onBackground();CHECK(g.player().vehicle==0&&!g.player().entering,"background completes car entry before persistence");
+      CHECK((g.player().pos-g.vehicles()[0].pos).length()<0.01f,"background saves canonical vehicle position");
+      b.press(&InputFrame::enterExitPressed);CHECK(g.player().exiting,"car exit has a transition");g.onBackground();
+      CHECK(!g.player().exiting&&g.player().vehicle==-1,"background completes car exit before persistence");
+      g.teleportPlayer({spawn.x,spawn.z},0);b.idle(2);
+    }
     g.player().health=12;g.executeCode(0);CHECK(g.player().health==100,"health code changes state");
     g.executeCode(1);CHECK(g.player().owned[kWpnPistol],"weapons code grants weapons");
     g.player().mag[kWpnPistol]=0;g.executeCode(2);CHECK(g.player().mag[kWpnPistol]>0,"ammo code replenishes magazines");
@@ -200,6 +248,15 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       g.camera().snapTo(coastCamera,w,(float)r.outputWidth()/std::max(1u,r.outputHeight()));
       b.render=true;b.idle(45);b.shot("beach_shore");b.render=false;
       if(side==0)p.y=-w.shoreline-20;if(side==1)p.x=w.shoreline+20;if(side==2)p.y=w.shoreline+20;if(side==3)p.x=-w.shoreline-20;
+      if(name=="polish"){
+        Vec2 outward=(side==0?Vec2{0,-1}:side==1?Vec2{1,0}:side==2?Vec2{0,1}:Vec2{-1,0});
+        Vec2 edge=p-outward*10.0f;g.teleportPlayer(edge,0);b.idle(3);CHECK(!g.player().swimming,"shallow water still permits walking");
+        bool blended=false;
+        for(int frame=0;frame<50;++frame){float yaw=g.camera().yaw();Vec2 forward{std::sin(yaw),-std::cos(yaw)},right{std::cos(yaw),std::sin(yaw)};
+          InputFrame swim;swim.move={outward.dot(right),outward.dot(forward)};b.step(swim);
+          if(g.player().swimming){blended=g.player().swimBlend>0&&g.player().swimBlend<0.99f;break;}}
+        CHECK(blended,"walking into deeper water blends movement and buoyancy gradually");
+      }
       g.teleportPlayer(p,0);b.idle(10);CHECK(g.player().swimming,"deep water switches to swimming");
       CHECK(g.player().y>w.heightAt(p.x,p.y)+0.4f,"swimmer floats above seabed");
       b.render=true;b.idle(20);b.shot("beach_swimming");b.render=false;
@@ -215,6 +272,35 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
     CHECK(g.world().seed==seed&&g.world().spawnPlayer.x==spawn.x,"same seed regenerates same city");
     CHECK((g.player().pos-saved).length()<0.1f,"position restored");CHECK(g.money()==123456&&g.itemCount(1)==waterCount,"money and inventory restored");
     CHECK(g.player().owned[kWpnPistol]&&g.player().mag[kWpnPistol]==7,"weapons and ammunition restored");
+    if(name=="polish"){
+      CHECK(g.settings().highContrast&&g.settings().reducedMotion,"saved accessibility survives slot reload");
+      const auto& w=g.world();if(w.coastSide>=0){
+        Vec2 water{w.poiBeach.x,w.poiBeach.z};
+        if(w.coastSide==0)water.y=-w.shoreline-1;if(w.coastSide==1)water.x=w.shoreline+1;if(w.coastSide==2)water.y=w.shoreline+1;if(w.coastSide==3)water.x=-w.shoreline-1;
+        g.teleportPlayer(water,0);b.idle(8);b.render=true;
+        Vec2 along=(w.coastSide%2)?Vec2{0,1}:Vec2{1,0};
+        // A parked car above the water line supplies visible geometry for coastal SSR.
+        auto original=g.vehicles()[0];auto& car=g.vehicles()[0];Vec2 outward=(w.coastSide==0?Vec2{0,-1}:w.coastSide==1?Vec2{1,0}:w.coastSide==2?Vec2{0,1}:Vec2{-1,0});car.pos=water+along*2.5f+outward*4;car.driver=-1;car.engineOn=false;car.vel={};car.speed=0;
+        CameraInput ci;ci.focus={water.x,0,water.y};ci.headingYaw=w.coastSide*kPi*0.5f+0.5f;g.camera().snapTo(ci,w,(float)r.outputWidth()/r.outputHeight());
+        for(int mode=0;mode<3;++mode){g.settings().reflections=mode;b.idle(5);b.shot("coast_reflection_"+std::to_string(mode));}
+        b.idle(4);auto reference=fd;reference.globals.reflectionInfo.x=1;reference.globals.reflectionInfo.y=0;
+        std::vector<uint8_t> sky,ssr;uint32_t width=0,height=0;
+        r.requestReadback();r.renderFrame(reference);CHECK(r.readback(sky,width,height),"sky-only reflection readback succeeds");
+        reference.globals.reflectionInfo.y=28;r.requestReadback();r.renderFrame(reference);CHECK(r.readback(ssr,width,height),"coastal SSR readback succeeds");
+        int changed=0;for(size_t pixel=0;pixel+3<sky.size()&&pixel+3<ssr.size();pixel+=4){int difference=0;for(int c=0;c<3;++c)difference+=std::abs(int(sky[pixel+c])-int(ssr[pixel+c]));if(difference>3)++changed;}
+        LOGI("coastal SSR changes %d visible pixels with frozen scene/time",changed);CHECK(changed>5,"coastal SSR visibly reflects scene geometry beyond the sky fallback");
+        if(!ssr.empty())writePng(out+"/coast_ssr_verified.png",ssr.data(),width,height);
+        g.vehicles()[0]=original;g.settings().reflections=2;b.render=false;
+      }
+      g.teleportPlayer({spawn.x,spawn.z},0);b.idle(3);g.saveGame();
+      g.returnToMain();auto info=g.inspectSlot(slot);
+      const std::string path=fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav";
+      CHECK(fileio::writeFileAtomic(path,"truncated",9),"inject truncated primary save");
+      auto backup=g.inspectSlot(slot);CHECK(backup.valid&&backup.recovered&&backup.seed==seed,"slot screen finds valid backup and its seed");
+      CHECK(g.startSlot(slot,false),"corrupted primary loads its backup");load();b.idle(2);
+      CHECK(g.world().seed==seed&&g.money()==backup.money,"recovered game rebuilds correct city and money");
+      CHECK(g.saveGame(),"recovered slot can be saved again");
+    }
     g.showMenu(MenuState::Map);b.render=true;b.idle(4);b.shot("full_map");g.showMenu(MenuState::Codes);b.shot("codes");g.showMenu(MenuState::Settings);b.shot("settings");g.showMenu(MenuState::Pause);b.shot("pause");
     g.returnToMain();CHECK(g.startSlot(1,true,true),"second slot starts independently");load();
     CHECK(g.inspectSlot(slot).money==123456,"new slot preserves original save");

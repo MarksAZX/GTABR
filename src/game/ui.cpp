@@ -4,8 +4,8 @@
 
 namespace gtabr {
 
-void UiPainter::begin(gfx::FrameData* fd, const Assets* a, float w, float h, float scale) {
-  fd_ = fd; a_ = a; w_ = w; h_ = h; scale_ = scale;
+void UiPainter::begin(gfx::FrameData* fd, const Assets* a, float w, float h, float scale, bool highContrast) {
+  fd_ = fd; a_ = a; w_ = w; h_ = h; scale_ = scale;highContrast_=highContrast;
   cur_ = gfx::TexHandle{};
   fd_->ui.clear();
   fd_->uiBatches.clear();
@@ -30,6 +30,11 @@ gfx::UiInst& UiPainter::push(float x, float y, float w, float h, gfx::UiKind kin
   gfx::UiInst& u = fd_->ui.back();
   std::memset(&u, 0, sizeof(u));
   u.rect[0] = x; u.rect[1] = y; u.rect[2] = w; u.rect[3] = h;
+  if(highContrast_ && (c>>24)>0){
+    bool text = kind==gfx::kUiText;
+    int brightness=((c&255)+((c>>8)&255)+((c>>16)&255))/3;
+    if(text || brightness<48)c=(c&0x00ffffffu)|0xf5000000u;
+  }
   u.color = c; u.color2 = c;
   u.kind = (float)kind;
   return u;

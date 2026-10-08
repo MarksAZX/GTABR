@@ -1,5 +1,7 @@
 # Validação da etapa de cidade e persistência
 
+Registro das etapas 0.2.x. Para as mudanças e testes atuais (0.3.0), consulte [VALIDACAO_POLIMENTO.md](VALIDACAO_POLIMENTO.md).
+
 Base preservada: `04820ba`, branch `codex/persistent-procedural-city`. Implementação incremental na engine C++20/Vulkan existente, sem recriar o projeto.
 
 ## Verificação executada

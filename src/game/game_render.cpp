@@ -170,6 +170,9 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};
   g.cascade = {0.0f, (float)std::max(1, qp.shadowCascades), 0.045f, wetness_};
   g.lightInfo = {0, 0, 0, 0};
+  const int ssrSteps[]={8,12,20,28};
+  g.reflectionInfo={settings_.reflections?1.0f:0.0f,settings_.reflections==2?(float)ssrSteps[clamp(settings_.quality,0,3)]:0.0f,settings_.quality>=1?1.0f:0.0f,world_.coastSide>=0?world_.waterLevel:-10000.0f};
+  g.waterBounds={world_.sea.x0-3,world_.sea.z0-3,world_.sea.x1+3,world_.sea.z1+3};
   fd.drawShadows = shadowsOn && ind < 0.5f && day_.shadowStrength > 0.01f;
   fd.shadowCascades = std::max(1, qp.shadowCascades);
   fd.vignette = 0.26f;

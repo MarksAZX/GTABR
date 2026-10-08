@@ -1,16 +1,18 @@
 #include "game.h"
 #include "../core/fileio.h"
+#include "../core/save_store.h"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <sstream>
+#include <unistd.h>
 
 namespace gtabr {
 namespace {
 std::map<std::string,std::string> fields(const std::string& path) {
-  std::string text; fileio::readFile(path, text);
+  std::string text; if(path.ends_with(".sav"))save_store::read(path,text);else fileio::readFile(path,text);
   std::istringstream in(text); std::string line; std::map<std::string,std::string> kv;
   while (std::getline(in,line)) { auto p=line.find('='); if(p!=std::string::npos) kv[line.substr(0,p)]=line.substr(p+1); }
   return kv;
@@ -24,8 +26,10 @@ float number(const std::map<std::string,std::string>& kv,const char* key,float d
 SaveSlot Game::inspectSlot(int slot) const {
   SaveSlot s; if(slot<0||slot>=4) return s;
   auto kv=fields(fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav");
-  s.exists=kv.count("version") && (kv["version"]=="4" || kv["version"]=="3");
-  if(!s.exists) return s;
+  std::string raw;auto path=fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav";
+  s.exists=access(path.c_str(),F_OK)==0||access((path+".bak").c_str(),F_OK)==0;
+  s.valid=save_store::read(path,raw,&s.recovered);
+  if(!s.valid)return s;
   s.seed=kv.count("seed") ? (uint32_t)std::strtoull(kv["seed"].c_str(),nullptr,10):1;
   s.money=(int)clamp(number(kv,"money",40000),0.0f,100000000.0f); s.playtime=std::max(0.0f,number(kv,"playtime",0));
   s.location=kv["location"]; if(s.location.empty()) s.location="Bairro";
@@ -36,9 +40,9 @@ SaveSlot Game::inspectSlot(int slot) const {
 int Game::recentSlot() const {
   std::string last; fileio::readFile(fileio::saveDir()+"/recent.txt",last);
   int slot=last.empty()?-1:std::atoi(last.c_str());
-  if(slot>=0&&slot<4&&inspectSlot(slot).exists) return slot;
+  if(slot>=0&&slot<4&&inspectSlot(slot).valid) return slot;
   long long newest=-1; int result=-1;
-  for(int i=0;i<4;++i) if(inspectSlot(i).exists) {
+  for(int i=0;i<4;++i) if(inspectSlot(i).valid) {
     auto kv=fields(fileio::saveDir()+"/slot_"+std::to_string(i)+".sav");
     long long t=std::strtoll(kv["savedAt"].c_str(),nullptr,10); if(t>newest){newest=t;result=i;}
   }
@@ -52,7 +56,7 @@ bool Game::startSlot(int slot,bool fresh,bool confirmed) {
   if(slot<0||slot>=4||phase_==Phase::Loading) return false;
   SaveSlot s=inspectSlot(slot);
   if(fresh&&s.exists&&!confirmed) return false;
-  if(!fresh&&!s.exists) return false;
+  if(!fresh&&!s.valid) return false;
   if(sessionActive_ && activeSlot_!=slot && !saveGame()) { toast("Não foi possível salvar a partida atual", "save"); return false; }
   jobs_->waitIdle(); releaseWorld();
   activeSlot_=slot; freshSlot_=fresh; sessionActive_=true;
@@ -67,13 +71,16 @@ bool Game::startSlot(int slot,bool fresh,bool confirmed) {
 bool Game::deleteSlot(int slot) {
   if(slot<0||slot>=4||!inspectSlot(slot).exists) return false;
   if(sessionActive_&&slot==activeSlot_) return false;
-  return std::remove((fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav").c_str())==0;
+  auto path=fileio::saveDir()+"/slot_"+std::to_string(slot)+".sav";
+  bool ok=true;for(const char* ext:{"",".bak",".tmp",".bak.tmp"}){auto file=path+ext;if(access(file.c_str(),F_OK)==0&&std::remove(file.c_str())!=0)ok=false;}
+  return ok;
 }
 void Game::handleBack() {
   if(phase_==Phase::Loading)return;
   if(menu_==MenuState::None)openPauseMenu();
   else if(menu_==MenuState::Main)quit_=true;
   else if(menu_==MenuState::Confirm)menu_=MenuState::Slots;
+  else if(menu_==MenuState::Controls){writeSettings();menu_=MenuState::Settings;controlDrag_=-1;}
   else if(menu_==MenuState::Pause)menu_=MenuState::None;
   else menuAction(304);
 }
@@ -103,12 +110,25 @@ void Game::readSettings() {
   settings_.invertY=number(kv,"invert",0)!=0; settings_.showFps=number(kv,"fps",0)!=0;
   settings_.fpsLimit=number(kv,"fpsLimit",30)>=60?60:30;
   settings_.effects=number(kv,"effects",1)!=0; settings_.dayCycle=number(kv,"dayCycle",1)!=0;
+  settings_.controlScale=clamp(number(kv,"controlScale",1),0.7f,1.4f);
+  settings_.controlOpacity=clamp(number(kv,"controlOpacity",0.8f),0.3f,1.0f);
+  settings_.fixedJoystick=number(kv,"fixedJoystick",0)!=0;settings_.leftHanded=number(kv,"leftHanded",0)!=0;
+  settings_.subtitles=number(kv,"subtitles",1)!=0;settings_.soundCaptions=number(kv,"soundCaptions",0)!=0;
+  settings_.highContrast=number(kv,"highContrast",0)!=0;settings_.reducedMotion=number(kv,"reducedMotion",0)!=0;
+  settings_.reflections=clamp((int)number(kv,"reflections",1),0,2);
+  for(int i=0;i<9;++i){std::string x="ctrl"+std::to_string(i)+"X",y="ctrl"+std::to_string(i)+"Y";
+    settings_.controlPos[i]={clamp(number(kv,x.c_str(),-1),-1.0f,0.95f),clamp(number(kv,y.c_str(),-1),-1.0f,0.94f)};}
+
 }
 bool Game::writeSettings() {
   std::ostringstream s; s<<"quality="<<settings_.quality<<"\nsensitivity="<<settings_.sensitivity<<"\nhudScale="<<settings_.hudScale
     <<"\nvolume="<<settings_.volume<<"\nresolution="<<settings_.resolution<<"\ndistance="<<settings_.renderDistance<<"\nvegetation="<<settings_.vegetation
     <<"\nshadows="<<settings_.shadows<<"\ndynamic="<<settings_.dynamicRes<<"\ninvert="<<settings_.invertY<<"\nfps="<<settings_.showFps
     <<"\nfpsLimit="<<settings_.fpsLimit<<"\neffects="<<settings_.effects<<"\ndayCycle="<<settings_.dayCycle<<"\n";
+  s<<"controlScale="<<settings_.controlScale<<"\ncontrolOpacity="<<settings_.controlOpacity<<"\nfixedJoystick="<<settings_.fixedJoystick
+   <<"\nleftHanded="<<settings_.leftHanded<<"\nsubtitles="<<settings_.subtitles<<"\nsoundCaptions="<<settings_.soundCaptions
+   <<"\nhighContrast="<<settings_.highContrast<<"\nreducedMotion="<<settings_.reducedMotion<<"\nreflections="<<settings_.reflections<<"\n";
+  for(int i=0;i<9;++i)s<<"ctrl"<<i<<"X="<<settings_.controlPos[i].x<<"\nctrl"<<i<<"Y="<<settings_.controlPos[i].y<<"\n";
   auto text=s.str();return fileio::writeFileAtomic(fileio::saveDir()+"/settings.txt",text.data(),text.size());
 }
 void Game::executeCode(int code) {

@@ -32,17 +32,26 @@ void main() {
   vec3 materialUV = water ? vec3(waterUV, 31.0) : vUVL;
   vec4 tex = texture(uMat, materialUV);
   vec4 nr = texture(uMatN, materialUV);
+  bool natural = (vUVL.z > 3.5 && vUVL.z < 5.5) || (vUVL.z > 29.5 && vUVL.z < 30.5) || (vUVL.z > 40.5 && vUVL.z < 41.5);
+  vec2 alternateUV=mat2(0.8,-0.6,0.6,0.8)*vUVL.xy*0.73+vec2(0.37,0.61);
+  if(natural && g.reflectionInfo.z>0.5){tex=mix(tex,texture(uMat,vec3(alternateUV,vUVL.z)),0.32);nr=mix(nr,texture(uMatN,vec3(alternateUV,vUVL.z)),0.32);}
+  float wetSand=0.0;
+  if(vUVL.z>40.5 && vUVL.z<41.5){
+    wetSand=clamp(vColor.a+(0.10*sin(dot(vWorld.xz,vec2(0.24,0.32))-g.camPos.w*0.6))*sin(vColor.a*PI),0.0,1.0);vec4 dry=texture(uMat,vec3(vUVL.xy,30)),dryN=texture(uMatN,vec3(vUVL.xy,30));
+    if(g.reflectionInfo.z>0.5){dry=mix(dry,texture(uMat,vec3(alternateUV,30)),0.32);dryN=mix(dryN,texture(uMatN,vec3(alternateUV,30)),0.32);}
+    tex=mix(dry,tex,wetSand);nr=mix(dryN,nr,wetSand);
+  }
   vec3 albedo = tex.rgb * vColor.rgb;
   vec3 tn = vec3(nr.rg * 2.0 - 1.0, 0.0);
   tn.z = sqrt(max(1.0 - dot(tn.xy, tn.xy), 0.0));
   vec3 N = perturb(Ng, vWorld, vUVL.xy, tn);
   float rough = clamp(nr.b, 0.04, 1.0);
-  float ao = vColor.a * mix(1.0, nr.a, 0.85);
+  float ao = (vUVL.z>40.5&&vUVL.z<41.5?1.0:vColor.a) * mix(1.0, nr.a, 0.85);
   if (water) {
     vec2 fineNormal = nr.rg * 2.0 - 1.0;
     vec2 swell = vec2(sin(dot(vWorld.xz, vec2(0.31, 0.47)) + g.camPos.w * 0.8), cos(dot(vWorld.xz, vec2(0.51, -0.29)) - g.camPos.w * 0.65)) * 0.008;
     N = normalize(vec3(fineNormal.x * 0.65 + swell.x, 1.0, fineNormal.y * 0.65 + swell.y));
-    float phase = vUVL.y * 0.55 - g.camPos.w * 1.1;
+    float phase = vUVL.y * 0.55 - g.camPos.w * 1.1 + sin(dot(vWorld.xz,vec2(0.043,0.061)))*0.55;
     float coverage = texture(uMat, vec3(vWorld.xz * 0.22 + vec2(g.camPos.w * 0.019, -g.camPos.w * 0.012), 40.0)).r;
     float shore = 1.0 - smoothstep(1.0, 13.0, vUVL.y);
     float crest = pow(max(0.0, sin(phase)), 5.0);
@@ -72,13 +81,13 @@ void main() {
   vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
   vec3 R = reflect(-V, N);
   vec3 env = skyRadiance(R, 0.0) * (1.0 - 0.6 * a);
-  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
+  vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.22 + 0.12 * N.y);
   irr = mix(irr, lamp, indoor);
-  env = mix(env, lamp * 0.6, indoor);
+  env = mix(env, lamp * 0.6, indoor) * g.reflectionInfo.x;
   vec3 ambient = (albedo * irr + env * envBRDF(f0, rough, NoV)) * ao;
 
   vec3 col = direct + ambient + evalLights(vWorld, N, V, albedo, f0, rough);
-  col += albedo * vEmissive * g.params.z * 6.0;   // shop signs / lamps glow at night
+  col += albedo * vEmissive * max(g.params.z,g.params.w) * 6.0;   // shop signs / lamps glow at night
   col = applyFog(col, vWorld);
   outColor = vec4(col, 1.0);
 }

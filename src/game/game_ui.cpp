@@ -28,7 +28,8 @@ std::vector<std::string> wrapText(const UiPainter& ui, const std::string& s, flo
     word.clear();
   };
   for (char c : s) {
-    if (c == ' ') flushWord();
+    if(c=='\n'){flushWord();if(!cur.empty()){lines.push_back(cur);cur.clear();}}
+    else if (c == ' ') flushWord();
     else word.push_back(c);
   }
   flushWord();
@@ -41,10 +42,12 @@ float Game::uiScale() const { return std::max(0.55f, screenH_ / 1080.0f * settin
 
 InputLayout Game::makeLayout() const {
   InputLayout L;
-  float S = uiScale();
+  float S = uiScale()*settings_.controlScale;
   L.width = screenW_; L.height = screenH_;
   L.joyZoneRight = screenW_ * 0.44f;
   L.joyRadius = 105.0f * S;
+  L.joyFixed=settings_.fixedJoystick;L.leftHanded=settings_.leftHanded;
+  L.joyCenter={L.joyRadius*1.6f,screenH_-L.joyRadius*1.9f};
   // right thumb cluster: the primary action (attack / shoot) is the big button; secondary ones are smaller and
   // contextual (interact, enter/exit, reload only show up when they can be used)
   Vec2 A{screenW_ - 210.0f * S, screenH_ - 190.0f * S};
@@ -59,6 +62,13 @@ InputLayout Game::makeLayout() const {
   L.camera = {A + Vec2{-270, 96} * S, 40.0f * S, true};
   L.wheel = {A + Vec2{-262, -44} * S, 46.0f * S, true};
   L.pause = {Vec2{screenW_ - 64.0f * S, 64.0f * S}, 34.0f * S, true};
+  HudButton* controls[]={&L.run,&L.interact,&L.enterExit,&L.camera,&L.wheel,&L.pause,&L.attack,&L.reload};
+  for(int i=0;i<8;++i){auto& b=*controls[i];if(settings_.leftHanded)b.c.x=screenW_-b.c.x;
+    if(settings_.controlPos[i].x>=0&&settings_.controlPos[i].y>=0)b.c={settings_.controlPos[i].x*screenW_,settings_.controlPos[i].y*screenH_};
+    b.c.x=clamp(b.c.x,b.r+8,screenW_-b.r-8);b.c.y=clamp(b.c.y,b.r+8,screenH_-b.r-8);}
+  if(settings_.leftHanded)L.joyCenter.x=screenW_-L.joyCenter.x;
+  if(settings_.controlPos[8].x>=0&&settings_.controlPos[8].y>=0)L.joyCenter={settings_.controlPos[8].x*screenW_,settings_.controlPos[8].y*screenH_};
+  L.joyCenter.x=clamp(L.joyCenter.x,L.joyRadius+8,screenW_-L.joyRadius-8);L.joyCenter.y=clamp(L.joyCenter.y,L.joyRadius+8,screenH_-L.joyRadius-8);
   L.modal = panel_.open || menu_ != MenuState::None;
   if (L.modal) {
     L.run.visible = L.interact.visible = L.enterExit.visible = L.camera.visible = L.wheel.visible = L.pause.visible = false;
@@ -83,7 +93,7 @@ void Game::drawLoading(float dt) {
   ui_.rect(cx - bw / 2, cy + 100 * S, bw, bh, C(1, 1, 1, 0.14f), bh / 2);
   ui_.rect(cx - bw / 2, cy + 100 * S, bw * clamp(p, 0.02f, 1.0f), bh, kAccent, bh / 2);
   if (hasFont) {
-    static const char* tips[] = {"Dica: o botão de câmera alterna entre Top Down e Terceira Pessoa.", "Dica: o posto fica no quarteirão a nordeste.",
+    static const char* tips[] = {"Dica: o botão de câmera alterna entre Top Down e Terceira Pessoa.", "Dica: encontre os estabelecimentos pelo mapa no menu de pausa.",
                                  "Dica: segure o botão ITENS para abrir a roda de itens.", "Dica: se o tanque secar, empurre... ou ande até o posto!"};
     ui_.text(false, tips[(int)(loadingAnim_ / 3.0f) % 4], cx, cy + 140 * S, 24 * S, C(1, 1, 1, 0.5f), Align::Center);
   }
@@ -101,14 +111,14 @@ static void glassButton(UiPainter& ui, Vec2 c, float r, bool pressed, bool activ
 void Game::drawTouchControls(const InputFrame& in) {
   InputLayout L = makeLayout();
   float S = uiScale();
-  float a = 1.0f - 0.85f * wheel_.anim;
+  float a = (1.0f - 0.85f * wheel_.anim)*settings_.controlOpacity;
   bool driving = player_.vehicle >= 0;
   // joystick
   if (in.joyActive) {
     ui_.circle(in.joyBase.x, in.joyBase.y, L.joyRadius, C(0.05f, 0.06f, 0.09f, 0.28f * a), 2.0f * S, C(1, 1, 1, 0.38f * a));
     ui_.circle(in.joyKnob.x, in.joyKnob.y, L.joyRadius * 0.42f, C(1, 1, 1, 0.38f * a), 2.0f * S, C(1, 1, 1, 0.8f * a));
   } else {
-    Vec2 h{L.joyRadius * 1.6f, screenH_ - L.joyRadius * 1.9f};
+    Vec2 h=L.joyCenter;
     ui_.circle(h.x, h.y, L.joyRadius, C(0.05f, 0.06f, 0.09f, 0.16f * a), 2.0f * S, C(1, 1, 1, 0.20f * a));
     ui_.circle(h.x, h.y, L.joyRadius * 0.42f, C(1, 1, 1, 0.14f * a), 0, 0);
   }
@@ -138,7 +148,7 @@ void Game::drawTouchControls(const InputFrame& in) {
   }
   if (L.enterExit.visible) glassButton(ui_, L.enterExit.c, L.enterExit.r, in.enterExitHeld, true, driving ? "door" : "car", kMint, a);
   glassButton(ui_, L.camera.c, L.camera.r, in.cameraHeld, false, "camera", kAccent, a);
-  glassButton(ui_, L.wheel.c, L.wheel.r, in.wheelBtnHeld, wheel_.open, "wheel", kAccent, 1.0f - 0.0f * wheel_.anim);
+  glassButton(ui_, L.wheel.c, L.wheel.r, in.wheelBtnHeld, wheel_.open, "wheel", kAccent, a);
   ui_.text(false, "ARMAS", L.wheel.c.x, L.wheel.c.y + L.wheel.r + 6 * S, 14 * S, C(1, 1, 1, 0.7f * a), Align::Center);
   ui_.text(false, cam_.mode() == CamMode::TopDown ? "TOP DOWN" : "3ª PESSOA", L.camera.c.x, L.camera.c.y + L.camera.r + 6 * S, 16 * S, C(1, 1, 1, 0.7f * a), Align::Center);
   glassButton(ui_, L.pause.c, L.pause.r, in.pauseHeld, false, "pause", kAccent, a, 0.62f);
@@ -278,6 +288,7 @@ void Game::drawFuelGauge() {
 }
 
 void Game::drawPrompt() {
+  if(realTime_<subtitleUntil_&&(subtitleSound_?settings_.soundCaptions:settings_.subtitles)){promptAnim_=0;return;}
   if (!focusValid_ || panel_.open || wheel_.open || menu_ != MenuState::None || fadeAlpha_ > 0.3f) { promptAnim_ = std::max(0.0f, promptAnim_ - 0.1f); if (promptAnim_ <= 0) return; }
   else promptAnim_ = std::min(1.0f, promptAnim_ + 0.14f);
   float S = uiScale();
@@ -305,8 +316,9 @@ void Game::drawToasts(float dt) {
   while (!toasts_.empty() && toasts_.front().t > toasts_.front().dur + 0.5f) toasts_.pop_front();
   float a0 = 1.0f - 0.85f * wheel_.anim;
   float x = 40 * S, y = 104 * S;
-  for (const Toast& t : toasts_) {
-    float in = clamp(t.t / 0.25f, 0.0f, 1.0f), out = clamp((t.dur + 0.4f - t.t) / 0.4f, 0.0f, 1.0f);
+  for (size_t i=toasts_.size()>2?toasts_.size()-2:0;i<toasts_.size();++i) {
+    const Toast& t=toasts_[i];
+    float in = settings_.reducedMotion?1.0f:clamp(t.t / 0.25f, 0.0f, 1.0f), out = clamp((t.dur + 0.4f - t.t) / 0.4f, 0.0f, 1.0f);
     float a = std::min(in, out) * a0;
     if (a <= 0.01f) continue;
     float tw = ui_.textWidth(false, t.text, 26 * S);
@@ -389,8 +401,8 @@ void Game::drawHud(float dt, const InputFrame& in) {
 
 // ------------------------------------------------------------------------------------------------ panel
 void Game::drawPanel(float dt) {
-  panel_.anim += (1.0f - panel_.anim) * expDecay(14.0f, dt);
-  float S = uiScale();
+  panel_.anim = settings_.reducedMotion?1:panel_.anim+(1.0f-panel_.anim)*expDecay(14.0f,dt);
+  float S = std::min(uiScale(),screenH_/1000.0f);
   float a = panel_.anim;
   uiRects_.clear();
   ui_.rect(0, 0, screenW_, screenH_, C(0, 0, 0, 0.30f * a));
@@ -581,83 +593,102 @@ void Game::drawFullMap() {
 
 void Game::drawMenus(float dt) {
   if(menu_==MenuState::None)return;
-  float S=uiScale();uiRects_.clear();
-  ui_.gradient(0,0,screenW_,screenH_,C(0.025f,0.028f,0.031f,0.92f),C(0.06f,0.065f,0.07f,0.85f));
+  if(menuVisual_!=menu_){menuVisual_=menu_;menuAnim_=0;menuPage_=0;pressedUi_=-1;}
+  menuAnim_=settings_.reducedMotion?1.0f:std::min(1.0f,menuAnim_+dt*5.5f);
+  float S=std::min(uiScale(),std::min(screenH_/880.0f,screenW_/1450.0f));
+  float opacity=settings_.highContrast?0.99f:0.92f;
+  uiRects_.clear();
+  if(menu_==MenuState::Controls){drawControlEditor();return;}
+  ui_.gradient(0,0,screenW_,screenH_,C(0.018f,0.022f,0.025f,opacity),C(0.07f,0.075f,0.08f,opacity-0.06f));
   if(menu_==MenuState::Map){drawFullMap();return;}
-  float w=std::min(1000*S,screenW_-100*S),x=(screenW_-w)/2,y=60*S;
-  auto text=[&](const std::string& t,float yy,float size=30){ui_.text(false,t,x+28*S,yy,size*S,kWhite);};
-  auto button=[&](const std::string& label,int id,const std::string& sub="",bool enabled=true){
-    float h=sub.empty()?62*S:96*S;
-    ui_.rect(x,y,w,h,pressedUi_==id?C(1,1,1,0.18f):C(1,1,1,0.06f),6*S,1*S,C(1,1,1,0.08f));
-    ui_.text(false,label,x+28*S,y+16*S,28*S,enabled?kWhite:kMuted);
-    if(!sub.empty())ui_.text(false,sub,x+28*S,y+57*S,19*S,kMuted);
-    if(enabled)uiRects_.push_back({Vec4(x,y,w,h),id});
-    y+=h+10*S;
-  };
-  auto title=[&](const std::string&t){ui_.text(true,t,x,y,48*S,kWhite);y+=80*S;};
+  float left=48*S,split=screenW_*0.33f,x=split+28*S,w=screenW_-x-48*S,y=72*S;
+  ui_.rect(split,52*S,1.5f*S,screenH_-104*S,C(1,1,1,0.12f));
+  ui_.text(false,"BAIRRO  /  CIDADE VIVA",left,35*S,18*S,kMuted);
+  auto text=[&](const std::string& t,float yy,float size=24){for(const auto& line:wrapText(ui_,t,split-left-30*S,size*S,false)){ui_.text(false,line,left,yy,size*S,kMuted);yy+=size*1.35f*S;}};
+  struct Row{std::string label,sub;int id;bool enabled;};std::vector<Row> rows;
+  auto button=[&](const std::string& label,int id,const std::string& sub="",bool enabled=true){rows.push_back({label,sub,id,enabled});};
+  auto title=[&](const std::string& t){ui_.text(true,t,left,105*S,40*S,kWhite);};
   switch(menu_) {
     case MenuState::Main:
-      title("BAIRRO");text("Uma cidade. A sua história.",y,24);y+=70*S;
-      button("CONTINUAR",400,"",recentSlot()>=0);button("NOVO JOGO",401);button("CARREGAR JOGO",402);button("CONFIGURAÇÕES",202);button("SAIR",203);
-      break;
-    case MenuState::Slots: {
-      title(selectingNew_?"NOVO JOGO — SLOTS":"CARREGAR JOGO");
-      for(int i=0;i<4;++i){auto s=inspectSlot(i);std::string label="SAVE 0"+std::to_string(i+1)+(i==selectedSlot_?"  •":"");
-        std::string detail=s.exists?fmtMoney(s.money)+" • "+std::to_string((int)s.playtime/60)+" min • "+s.location+" • seed "+std::to_string(s.seed)+" • "+s.date:"Slot livre";
-        button(label,410+i,detail);}
-      auto s=inspectSlot(selectedSlot_);
-      button(selectingNew_?(s.exists?"SUBSTITUIR SLOT":"CRIAR NOVO SAVE"):"CARREGAR SLOT",420,"",selectingNew_||s.exists);
+      title("BAIRRO");text("Uma cidade. A sua história.",172*S,27);
+      text("Explore, encontre pessoas e construa sua próxima partida.",260*S);
+      button("CONTINUAR",400,"Retomar o último save",recentSlot()>=0);button("NOVO JOGO",401,"Escolher um slot e uma nova cidade");
+      button("CARREGAR JOGO",402,"Seus quatro slots de partida");button("CONFIGURAÇÕES",202);button("SAIR",203);break;
+    case MenuState::Slots:{
+      title(selectingNew_?"NOVO JOGO":"SEUS SAVES");text("Escolha um slot. A cidade pertence à seed da partida.",180*S);
+      for(int i=0;i<4;++i){auto s=inspectSlot(i);std::string detail="Slot livre";
+        if(s.exists&&!s.valid)detail="Arquivo inválido • sem backup recuperável";
+        else if(s.valid)detail=fmtMoney(s.money)+" • "+std::to_string((int)s.playtime/60)+" min • "+s.location+" • seed "+std::to_string(s.seed)+" • "+s.date+(s.recovered?" • backup disponível":"");
+        button("SAVE 0"+std::to_string(i+1)+(i==selectedSlot_?"  [selecionado]":""),410+i,detail);}
+      auto s=inspectSlot(selectedSlot_);button(selectingNew_?(s.exists?"SUBSTITUIR SLOT":"CRIAR NOVO SAVE"):"CARREGAR SLOT",420,"",selectingNew_||s.valid);
       if(s.exists)button("EXCLUIR SLOT",421,"",!sessionActive_||selectedSlot_!=activeSlot_);
       button("Voltar",304);break;
     }
     case MenuState::Confirm:
-      title(confirmDelete_?"EXCLUIR SAVE?":"SUBSTITUIR SAVE?");text("SAVE 0"+std::to_string(selectedSlot_+1)+" será removido. Esta ação não pode ser desfeita.",y,24);y+=90*S;
+      title(confirmDelete_?"EXCLUIR SAVE?":"SUBSTITUIR?");text("SAVE 0"+std::to_string(selectedSlot_+1)+" será removido. Confira o slot antes de confirmar.",180*S);
       button("Confirmar",430);button("Cancelar",431);break;
     case MenuState::Pause:
-      title("PAUSADO");button("MAPA",204);button("JOGO — CONTINUAR",200);button("INVENTÁRIO",205);button("CÓDIGOS",206);button("CONFIGURAÇÕES",202);button("SALVAR",201);button("MENU PRINCIPAL",207);break;
+      title("PAUSADO");text(world_.cityName,180*S,27);text(fmtMoney(moneyCents_)+" • "+std::to_string((int)time_/60)+" min",235*S);
+      text("SAVE 0"+std::to_string(activeSlot_+1)+"\nSeed "+std::to_string(worldSeed_),300*S);
+      button("CONTINUAR",200);button("MAPA",204);button("INVENTÁRIO",205);button("CÓDIGOS",206);button("CONFIGURAÇÕES",202);button("SALVAR PARTIDA",201);button("MENU PRINCIPAL",207);break;
     case MenuState::Inventory:
-      title("INVENTÁRIO");button(inventoryTab_ ? "ARMAS — ver consumíveis" : "CONSUMÍVEIS — ver armas", 520);
-      if(inventoryTab_) {
-        for(int i=0;i<kWeaponCount;++i) if(player_.owned[i])button(std::string(weaponDef(i).name)+(i==player_.weapon?" • equipada":"")+" • "+std::to_string(player_.mag[i])+" / "+std::to_string(player_.reserve[i]),530+i);
-        button("Voltar",304);break;
-      }
-      for(int i=1;i<kItemCount;++i)if(inventory_[i]>0)button(std::string(itemDef(i).name)+" ×"+std::to_string(inventory_[i])+" — usar",500+i);
-      if(std::all_of(inventory_+1,inventory_+kItemCount,[](int n){return n==0;})){text("Sem consumíveis. Visite uma loja.",y,24);y+=50*S;}
-      // Equipped weapon and ammunition remain visible without overflowing the consumable list.
-      text(std::string("Arma: ")+weaponDef(player_.weapon).name+" • "+std::to_string(player_.mag[player_.weapon])+" / "+std::to_string(player_.reserve[player_.weapon]),y,23);y+=56*S;
+      title("INVENTÁRIO");text("Escolha um consumível para usar ou uma arma para equipar.",180*S);
+      button(inventoryTab_?"ARMAS — ver consumíveis":"CONSUMÍVEIS — ver armas",520);
+      if(inventoryTab_){for(int i=0;i<kWeaponCount;++i)if(player_.owned[i])button(std::string(weaponDef(i).name)+(i==player_.weapon?" • equipada":""),530+i,std::to_string(player_.mag[i])+" / "+std::to_string(player_.reserve[i])+" munições");}
+      else {for(int i=1;i<kItemCount;++i)if(inventory_[i]>0)button(std::string(itemDef(i).name)+" ×"+std::to_string(inventory_[i]),500+i,"Usar consumível");
+        if(rows.size()==1)text("Sem consumíveis. Visite uma loja.",310*S);}
       button("Voltar",304);break;
-    case MenuState::Codes: {
-      title("CÓDIGOS");static const char* codes[]={"RECUPERAR VIDA","DAR ARMAS","MUNIÇÃO","DINHEIRO DE TESTE","REMOVER PROCURADO","ADICIONAR PROCURADO","REPARAR VEÍCULO","ENCHER TANQUE"};
+    case MenuState::Codes:{
+      title("CÓDIGOS");text("Ações imediatas para diversão e testes.",180*S);
+      static const char* codes[]={"RECUPERAR VIDA","DAR ARMAS","MUNIÇÃO","DINHEIRO DE TESTE","REMOVER PROCURADO","ADICIONAR PROCURADO","REPARAR VEÍCULO","ENCHER TANQUE"};
       for(int i=0;i<8;++i)button(codes[i],600+i);
       button("Voltar",304);break;
     }
-    case MenuState::Settings: {
-      title("CONFIGURAÇÕES");
-      static const char* tabs[]={"GRÁFICOS","ÁUDIO","CONTROLES","GAMEPLAY","ACESSIBILIDADE"};
-      float tw=w/5;for(int i=0;i<5;++i){ui_.rect(x+tw*i,y,tw-6*S,54*S,C(1,1,1,settingsTab_==i?0.2f:0.05f),4*S);ui_.text(false,tabs[i],x+tw*(i+0.5f),y+16*S,18*S,kWhite,Align::Center);uiRects_.push_back({Vec4(x+tw*i,y,tw-6*S,54*S),700+i});}y+=78*S;
-      if(settingsTab_==0){
-        button(std::string("Qualidade: ")+preset().name,303);
-        button("Resolução: "+std::to_string((int)(settings_.resolution*100))+"%",710);
-        button(std::string("Sombras: ")+(settings_.shadows?"ativadas":"desativadas"),301);
-        button("Vegetação: "+std::to_string((int)(settings_.vegetation*100))+"%",711);
-        button("Distância: "+std::to_string((int)(settings_.renderDistance*100))+"%",712);
-        button(std::string("Efeitos / bloom: ")+(settings_.effects?"ativados":"desativados"),713);
-        button(std::string("Resolução dinâmica: ")+(settings_.dynamicRes?"ativada":"desativada"),305);
-        button("Limite de FPS: "+std::to_string(settings_.fpsLimit),718);
-      }else if(settingsTab_==1)button("Volume: "+std::to_string((int)(settings_.volume*100))+"%",714);
-      else if(settingsTab_==2){button("Sensibilidade: "+fmtFloat(settings_.sensitivity,1)+"x",715);button(std::string("Inverter Y: ")+(settings_.invertY?"sim":"não"),300);}
+    case MenuState::Settings:{
+      title("AJUSTES");text("Personalize a apresentação e os controles. Alterações são salvas automaticamente.",180*S);
+      static const char* tabs[]={"Gráficos","Áudio","Controles","Jogo","Acesso"};float tw=w/5;
+      for(int i=0;i<5;++i){ui_.rect(x+tw*i,y,tw-5*S,52*S,C(1,1,1,settingsTab_==i?0.18f:0.045f),5*S);ui_.text(false,tabs[i],x+tw*(i+0.5f),y+16*S,20*S,kWhite,Align::Center);uiRects_.push_back({Vec4(x+tw*i,y,tw-5*S,52*S),700+i});}y+=75*S;
+      if(settingsTab_==0){button(std::string("Qualidade: ")+preset().name,303);button("Resolução: "+std::to_string((int)(settings_.resolution*100))+"%",710);
+        button(std::string("Sombras: ")+(settings_.shadows?"ativadas":"desativadas"),301);button("Vegetação: "+std::to_string((int)(settings_.vegetation*100))+"%",711);
+        button("Distância: "+std::to_string((int)(settings_.renderDistance*100))+"%",712);button(std::string("Efeitos: ")+(settings_.effects?"ativados":"desativados"),713);
+        button(std::string("Resolução dinâmica: ")+(settings_.dynamicRes?"ativada":"desativada"),305);button("Limite de FPS: "+std::to_string(settings_.fpsLimit),718);
+        const char* modes[]={"desligados","céu","costa / cena visível"};button(std::string("Reflexos: ")+modes[settings_.reflections],719);
+      }else if(settingsTab_==1){button("Volume: "+std::to_string((int)(settings_.volume*100))+"%",714);button(std::string("Legendas de sons: ")+(settings_.soundCaptions?"sim":"não"),724);}
+      else if(settingsTab_==2){button("Sensibilidade: "+fmtFloat(settings_.sensitivity,1)+"x",715);button(std::string("Inverter Y: ")+(settings_.invertY?"sim":"não"),300);
+        button("Tamanho dos controles: "+std::to_string((int)(settings_.controlScale*100))+"%",720);button("Opacidade: "+std::to_string((int)(settings_.controlOpacity*100))+"%",721);
+        button(std::string("Joystick: ")+(settings_.fixedJoystick?"fixo":"flutuante"),726);button(std::string("Layout canhoto: ")+(settings_.leftHanded?"sim":"não"),727);button("POSICIONAR CONTROLES",728);}
       else if(settingsTab_==3)button(std::string("Ciclo dia / noite: ")+(settings_.dayCycle?"ativo":"congelado"),716);
-      else {button("Escala da interface: "+std::to_string((int)(settings_.hudScale*100))+"%",717);button(std::string("Mostrar FPS: ")+(settings_.showFps?"sim":"não"),302);}
+      else {button("Escala da interface: "+std::to_string((int)(settings_.hudScale*100))+"%",717);button(std::string("Alto contraste: ")+(settings_.highContrast?"sim":"não"),722);
+        button(std::string("Legendas de diálogo: ")+(settings_.subtitles?"sim":"não"),723);button(std::string("Movimento reduzido: ")+(settings_.reducedMotion?"sim":"não"),725);button(std::string("Mostrar FPS: ")+(settings_.showFps?"sim":"não"),302);}
       button("Voltar",304);break;
     }
     default:break;
   }
-  (void)dt;
+  bool back=!rows.empty()&&rows.back().id==304;Row footer;if(back){footer=rows.back();rows.pop_back();}
+  float bottom=screenH_-125*S,available=bottom-y;bool detailed=std::any_of(rows.begin(),rows.end(),[](const Row&r){return !r.sub.empty();});
+  float rowH=(detailed?104:66)*S;int capacity=std::max(1,(int)(available/(rowH+10*S)));
+  menuPages_=std::max(1,((int)rows.size()+capacity-1)/capacity);menuPage_=clamp(menuPage_,0,menuPages_-1);
+  float slide=settings_.reducedMotion?0:18*S*(1-menuAnim_);
+  auto renderRow=[&](const Row& row,float yy,float height){
+    Color fill=pressedUi_==row.id?C(1,1,1,0.2f):C(1,1,1,0.06f+0.025f*menuAnim_);
+    if(row.id>=410&&row.id<414&&row.id-410==selectedSlot_)fill=C(0.25f,0.31f,0.34f,0.65f);
+    ui_.rect(x+slide,yy,w,height,fill,7*S,1*S,C(1,1,1,0.1f));
+    ui_.text(false,row.label,x+24*S+slide,yy+17*S,27*S,row.enabled?kWhite:kMuted);
+    if(!row.sub.empty()){float sy=yy+54*S;int count=0;for(const auto& line:wrapText(ui_,row.sub,w-48*S,18*S,false)){if(count++>=2)break;ui_.text(false,line,x+24*S+slide,sy,18*S,kMuted);sy+=22*S;}}
+    if(row.enabled)uiRects_.push_back({Vec4(x+slide,yy,w,height),row.id});
+  };
+  for(int i=menuPage_*capacity;i<std::min((int)rows.size(),(menuPage_+1)*capacity);++i){renderRow(rows[i],y,rowH);y+=rowH+10*S;}
+  if(back)renderRow(footer,screenH_-78*S,58*S);
+  if(menuPages_>1){float py=screenH_-122*S;float bw=120*S;
+    for(int dir=0;dir<2;++dir){float bx=x+(dir? w-bw:0);ui_.rect(bx,py,bw,35*S,C(1,1,1,0.11f),4*S);ui_.text(false,dir?"Próxima":"Anterior",bx+12*S,py+7*S,18*S,kWhite);uiRects_.push_back({Vec4(bx,py,bw,35*S),790+dir});}
+    ui_.text(false,std::to_string(menuPage_+1)+" / "+std::to_string(menuPages_),x+w/2,py+7*S,18*S,kMuted,Align::Center);}
+  ui_.text(false,"0.3.0  •  "+std::string(sessionActive_?"Partida em andamento":"Pronto para explorar"),left,screenH_-45*S,17*S,kMuted);
 }
 
 void Game::menuAction(int id) {
   if(id==304){
-    if(menu_==MenuState::Settings){writeSettings();menu_=settingsBack_;}
+    if(menu_==MenuState::Controls){writeSettings();menu_=MenuState::Settings;controlDrag_=-1;}
+    else if(menu_==MenuState::Settings){writeSettings();menu_=settingsBack_;}
     else if(menu_==MenuState::Slots)menu_=MenuState::Main;
     else menu_=MenuState::Pause;
   }else if(id==200)menu_=MenuState::None;
@@ -679,7 +710,11 @@ void Game::menuAction(int id) {
   else if(id==520)inventoryTab_=1-inventoryTab_;
   else if(id>=530&&id<530+kWeaponCount) {equipWeapon(id-530);toast(std::string("Equipada: ")+weaponDef(id-530).name,"bag");}
   else if(id>=600&&id<608)executeCode(id-600);
-  else if(id>=700&&id<705)settingsTab_=id-700;
+  else if(id>=700&&id<705){settingsTab_=id-700;menuPage_=0;}
+  else if(id==790)menuPage_=std::max(0,menuPage_-1);
+  else if(id==791)menuPage_=std::min(menuPages_-1,menuPage_+1);
+  else if(id==728){menu_=MenuState::Controls;controlDrag_=-1;}
+  else if(id==810){for(auto& p:settings_.controlPos)p={-1,-1};settings_.controlScale=1;settings_.leftHanded=false;settings_.fixedJoystick=false;writeSettings();}
   else if(id==901)mapZoom_=std::min(8.0f,mapZoom_*1.4f);
   else if(id==902)mapZoom_=std::max(1.0f,mapZoom_/1.4f);
   else if(id==903){
@@ -691,7 +726,7 @@ void Game::menuAction(int id) {
     if(id==300)settings_.invertY=!settings_.invertY;
     if(id==301)settings_.shadows=!settings_.shadows;
     if(id==302)settings_.showFps=!settings_.showFps;
-    if(id==303)settings_.quality=(settings_.quality+1)%4;
+    if(id==303){settings_.quality=(settings_.quality+1)%4;settings_.reflections=settings_.quality>=2?2:(settings_.quality==1?1:0);}
     if(id==305)settings_.dynamicRes=!settings_.dynamicRes;
     if(id==710)settings_.resolution=settings_.resolution<0.99f?std::min(1.0f,settings_.resolution+0.1f):0.6f;
     if(id==711)settings_.vegetation=settings_.vegetation<0.99f?std::min(1.0f,settings_.vegetation+0.25f):0.25f;
@@ -701,6 +736,15 @@ void Game::menuAction(int id) {
     if(id==715)settings_.sensitivity=settings_.sensitivity<1.99f?settings_.sensitivity+0.2f:0.4f;
     if(id==716)settings_.dayCycle=!settings_.dayCycle;
     if(id==718)settings_.fpsLimit=settings_.fpsLimit==30?60:30;
+    if(id==719)settings_.reflections=(settings_.reflections+1)%3;
+    if(id==720)settings_.controlScale=settings_.controlScale<1.39f?settings_.controlScale+0.1f:0.7f;
+    if(id==721)settings_.controlOpacity=settings_.controlOpacity<0.99f?settings_.controlOpacity+0.1f:0.3f;
+    if(id==722)settings_.highContrast=!settings_.highContrast;
+    if(id==723)settings_.subtitles=!settings_.subtitles;
+    if(id==724)settings_.soundCaptions=!settings_.soundCaptions;
+    if(id==725)settings_.reducedMotion=!settings_.reducedMotion;
+    if(id==726)settings_.fixedJoystick=!settings_.fixedJoystick;
+    if(id==727){settings_.leftHanded=!settings_.leftHanded;for(auto& p:settings_.controlPos)p={-1,-1};}
     if(id==717)settings_.hudScale=settings_.hudScale<1.34f?settings_.hudScale+0.1f:0.75f;
     applySettings();writeSettings();
   }
@@ -709,13 +753,14 @@ void Game::menuAction(int id) {
 void Game::handleUiPointers(const InputFrame& in) {
   auto hit=[&](Vec2 p){for(auto it=uiRects_.rbegin();it!=uiRects_.rend();++it){const auto&r=it->first;if(p.x>=r.x&&p.x<=r.x+r.z&&p.y>=r.y&&p.y<=r.y+r.w)return it->second;}return -1;};
   for(const auto&p:in.ui){
-    if(p.pressed){pressedUi_=hit(p.pos);if(menu_==MenuState::Map&&pressedUi_==900){mapDragging_=true;mapDrag_=p.pos;}}
+    if(p.pressed){pressedUi_=hit(p.pos);if(menu_==MenuState::Controls&&pressedUi_>=800&&pressedUi_<809)controlDrag_=pressedUi_-800;if(menu_==MenuState::Map&&pressedUi_==900){mapDragging_=true;mapDrag_=p.pos;}}
+    if(menu_==MenuState::Controls&&controlDrag_>=0&&p.down){settings_.controlPos[controlDrag_]={clamp(p.pos.x/screenW_,0.05f,0.95f),clamp(p.pos.y/screenH_,0.12f,0.9f)};if(controlDrag_==8)settings_.fixedJoystick=true;}
     if(menu_==MenuState::Map&&mapDragging_&&p.down){
       float size=std::min(screenH_-180*uiScale(),screenW_-460*uiScale());
       mapCenter_=mapCenter_-(p.pos-mapDrag_)*(2*mapExtent_/mapZoom_/size);mapDrag_=p.pos;
       mapCenter_.x=clamp(mapCenter_.x,-mapExtent_,mapExtent_);mapCenter_.y=clamp(mapCenter_.y,-mapExtent_,mapExtent_);
     }
-    if(p.released){int id=hit(p.pos);mapDragging_=false;
+    if(p.released){int id=hit(p.pos);mapDragging_=false;if(controlDrag_>=0){controlDrag_=-1;writeSettings();pressedUi_=-1;continue;}
       if(id>=0&&id==pressedUi_){if(menu_!=MenuState::None)menuAction(id);else if(panel_.open&&id<100)selectPanelOption(id);}
       pressedUi_=-1;
     }
@@ -733,7 +778,7 @@ void Game::drawDebug() {
 }
 
 void Game::buildUi(gfx::FrameData& fd, float dt) {
-  ui_.begin(&fd, &assets_, screenW_, screenH_, uiScale());
+  ui_.begin(&fd, &assets_, screenW_, screenH_, uiScale(),settings_.highContrast);
   InputFrame in;   // draw uses the polled state stored by frame(); rebuild a lightweight view for visuals
   in = useScripted_ ? scripted_ : InputFrame();
   if (!useScripted_) {
@@ -741,11 +786,12 @@ void Game::buildUi(gfx::FrameData& fd, float dt) {
     // non-destructive snapshot kept in lastVisual_.
   }
   in = visualInput_;
-  if (sessionActive_ && menu_ == MenuState::None) drawHud(dt, in);
-  else drawToasts(dt);
+  if (sessionActive_ && menu_ == MenuState::None && !panel_.open) drawHud(dt, in);
+
   if (wheel_.anim > 0.01f) drawWheel(dt);
   if (panel_.open) drawPanel(dt);
-  if (menu_ != MenuState::None) drawMenus(dt);
+  if (menu_ != MenuState::None){drawMenus(dt);drawToasts(dt);}
+  drawSubtitles();
   drawDebug();
   ui_.end();
 }

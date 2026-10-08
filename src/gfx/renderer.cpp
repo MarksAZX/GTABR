@@ -46,7 +46,7 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
     vkGetPhysicalDeviceFormatProperties(ctx_.phys, f, &fp);
     return (fp.optimalTilingFeatures & feat) == feat;
   };
-  depthFormat_ = fmtOk(VK_FORMAT_D32_SFLOAT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ? VK_FORMAT_D32_SFLOAT
+  depthFormat_ = fmtOk(VK_FORMAT_D32_SFLOAT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? VK_FORMAT_D32_SFLOAT
                                                                                               : VK_FORMAT_D24_UNORM_S8_UINT;
   shadowFormat_ = fmtOk(VK_FORMAT_D32_SFLOAT, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
                                                   VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
@@ -109,7 +109,7 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   plMesh_ = mkPl({layoutGlobalsB_, layoutTex3_, layoutBones_}, 96, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plUi_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
   plBlur_ = mkPl({layoutEmpty_, layoutTex_}, 16, VK_SHADER_STAGE_FRAGMENT_BIT);
-  plComposite_ = mkPl({layoutEmpty_, layoutTex2_}, 64, VK_SHADER_STAGE_FRAGMENT_BIT);
+  plComposite_ = mkPl({layoutGlobalsA_, layoutTex3_}, 64, VK_SHADER_STAGE_FRAGMENT_BIT);
 
   // shadow sampler (hardware compare)
   VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -274,8 +274,8 @@ bool Renderer::createPasses() {
     at[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     at[1] = at[0];
     at[1].format = depthFormat_;
-    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     VkAttachmentReference cref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference dref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sp{};
@@ -289,8 +289,8 @@ bool Renderer::createPasses() {
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT),
-        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)};
+        dep(0, VK_SUBPASS_EXTERNAL, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)};
     VkRenderPassCreateInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
     ri.attachmentCount = 2; ri.pAttachments = at; ri.subpassCount = 1; ri.pSubpasses = &sp; ri.dependencyCount = 2; ri.pDependencies = deps;
     VK_CHECK(vkCreateRenderPass(dev, &ri, nullptr, &scenePass_));
@@ -766,9 +766,8 @@ void Renderer::createRenderTargets() {
 
   sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                 depthFormat_ == VK_FORMAT_D32_SFLOAT ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                                                       : (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
+  sceneDepth_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, depthFormat_, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                 VK_IMAGE_ASPECT_DEPTH_BIT);
   VkImageView atts[2] = {sceneColor_.view, sceneDepth_.view};
   fi.renderPass = scenePass_;
   fi.attachmentCount = 2;
@@ -808,12 +807,13 @@ void Renderer::createRenderTargets() {
   VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   ai.descriptorPool = pool_;
   ai.descriptorSetCount = 1;
-  ai.pSetLayouts = &layoutTex2_;
+  ai.pSetLayouts = &layoutTex3_;
   VK_CHECK(vkAllocateDescriptorSets(dev, &ai, &compositeSet_));
-  VkDescriptorImageInfo ii[2] = {{lin, sceneColor_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-                                 {lin, blurUp_.back().img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
-  VkWriteDescriptorSet w[2]{};
-  for (int i = 0; i < 2; ++i) {
+  VkDescriptorImageInfo ii[3] = {{lin, sceneColor_.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                 {lin, blurUp_.back().img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                 {getSampler(SamplerKind::ClampNearest),sceneDepth_.view,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL}};
+  VkWriteDescriptorSet w[3]{};
+  for (int i = 0; i < 3; ++i) {
     w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w[i].dstSet = compositeSet_;
     w[i].dstBinding = (uint32_t)i;
@@ -821,7 +821,7 @@ void Renderer::createRenderTargets() {
     w[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     w[i].pImageInfo = &ii[i];
   }
-  vkUpdateDescriptorSets(dev, 2, w, 0, nullptr);
+  vkUpdateDescriptorSets(dev, 3, w, 0, nullptr);
 }
 
 void Renderer::setRenderScale(float s) {
@@ -1244,6 +1244,7 @@ bool Renderer::renderFrame(const FrameData& fd) {
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &sc);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeComposite_);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 0, 1, &fr.globalsA, 0, nullptr);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, plComposite_, 1, 1, &compositeSet_, 0, nullptr);
     float pcv[16] = {doBlur ? fd.blur : 0.0f, fd.fade, fd.vignette, outIsSrgb_ ? 1.0f : 0.0f,
                      fd.exposure * (1.0f - 0.45f * fd.dim), (doBlur || doBloom) ? fd.bloom : 0.0f, fd.bloomThreshold,

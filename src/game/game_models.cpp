@@ -453,10 +453,17 @@ void Game::emitModels(gfx::FrameData& fd, float dt) {
     int room = world_.interiorAt(player_.pos.x, player_.pos.y);
     for (const Vec3& l : world_.interiorLights) {
       if (room < 0 || !world_.interiors[room].bounds.inflated(0.5f).contains(l.x, l.z)) continue;
-      pendingLights_.push_back({l, {0, -1, 0}, {3.0f, 2.9f, 2.7f}, 7.5f, -2.0f, (l - Vec3{player_.pos.x, 1.5f, player_.pos.y}).length()});
+      Vec3 temperature={2.6f,2.65f,2.7f};
+      int shop=world_.interiors[room].shop;
+      if(shop>=0&&world_.shops[shop].kind==ShopKind::Padaria)temperature={3.0f,2.55f,2.1f};
+      pendingLights_.push_back({l, {0, -1, 0}, temperature, 6.5f, -2.0f, (l - Vec3{player_.pos.x, 1.5f, player_.pos.y}).length()});
     }
   }
 
+  if(indoors){int room=world_.interiorAt(player_.pos.x,player_.pos.y);
+    if(room>=0){int shop=world_.interiors[room].shop;if(shop>=0){Vec3 p=world_.shops[shop].clerk+Vec3{0,2.35f,1.0f};
+      pendingLights_.push_back({p,{0,-1,0},{1.55f,1.35f,1.1f},3.8f,-2.0f,(p-Vec3{player_.pos.x,1.5f,player_.pos.y}).length()});}}
+  }
   // keep the most relevant lights within the preset budget
   std::sort(pendingLights_.begin(), pendingLights_.end(), [](const PendingLight& a, const PendingLight& b) { return a.dist < b.dist; });
   int n = std::min<int>((int)pendingLights_.size(), std::min(preset().maxLights, gfx::kMaxLights));

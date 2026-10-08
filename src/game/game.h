@@ -41,6 +41,11 @@ struct Settings {
   bool effects = true;
   bool dayCycle = true;
   int fpsLimit = 30;
+  float controlScale = 1.0f, controlOpacity = 0.8f;
+  bool fixedJoystick = false, leftHanded = false;
+  bool subtitles = true, soundCaptions = false, highContrast = false, reducedMotion = false;
+  int reflections = 1; // 0 off, 1 analytic sky, 2 coastal screen-space reflections
+  Vec2 controlPos[9] = {{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1},{-1,-1}};
 };
 
 // Graphics presets: every field changes real work done per frame.
@@ -105,8 +110,8 @@ struct Panel {
   int scroll = 0;
 };
 
-enum class MenuState { None, Main, Slots, Confirm, Pause, Settings, Map, Inventory, Codes };
-struct SaveSlot { bool exists = false; uint32_t seed = 0; int money = 0; float playtime = 0; std::string date, location; };
+enum class MenuState { None, Main, Slots, Confirm, Pause, Settings, Map, Inventory, Codes, Controls };
+struct SaveSlot { bool exists = false; bool valid = false, recovered = false; uint32_t seed = 0; int money = 0; float playtime = 0; std::string date, location; };
 
 struct Waypoint { bool active = false; Vec3 pos; std::string name; };
 
@@ -152,6 +157,8 @@ class Game {
   }
   const World& world() const { return world_; }
   Panel& panel() { return panel_; }
+  bool uiButtonBounds(int id,Vec4& bounds) const {for(const auto& item:uiRects_)if(item.second==id){bounds=item.first;return true;}return false;}
+  InputLayout controlLayout() const {return makeLayout();}
   std::vector<Interactable>& focusList() { return nearby_; }
   const Interactable* focus() const { return focus_.id >= 0 || focusValid_ ? &focus_ : nullptr; }
   bool focusValid() const { return focusValid_; }
@@ -215,6 +222,9 @@ class Game {
   // ---- panels / dialogs (game_actions.cpp)
   void openPanel(Panel p);
   void closePanel();
+  void subtitle(const std::string& text,const std::string& speaker="",bool sound=false);
+  void drawSubtitles();
+  void drawControlEditor();
   void openFuelPanel(int pumpId);
   void openShopPanel(const char* portrait, int shop = -1);
   void openAttendantPanel();
@@ -333,6 +343,14 @@ class Game {
   std::vector<std::pair<Vec4, int>> uiRects_;   // clickable rects built while drawing panels/menus: (x,y,w,h) -> index
   float panelScrollVel_ = 0;
   int pressedUi_ = -1;
+  MenuState menuVisual_ = MenuState::None;
+  float menuAnim_ = 1;
+  int menuPage_ = 0, menuPages_ = 1;
+  int controlDrag_ = -1;
+  std::string subtitleText_, subtitleSpeaker_;
+  float subtitleUntil_ = 0;
+  bool subtitleSound_ = false;
+  float receiptUntil_ = 0;
   float sliderDrag_ = -1;
   int activeSlider_ = -1;
 

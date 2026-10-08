@@ -324,7 +324,7 @@ void Game::updatePolice(float dt) {
   }
   // siren audio: one loop following the nearest responding car
   if (anySiren) {
-    if (!sirenHandle_) sirenHandle_ = audio_.loopStart("siren", sirenPos, 0.5f);
+    if (!sirenHandle_){sirenHandle_ = audio_.loopStart("siren", sirenPos, 0.5f);if(settings_.soundCaptions)subtitle("Sirene próxima","Polícia",true); }
     audio_.loopUpdate(sirenHandle_, sirenPos, 0.55f);
   } else if (sirenHandle_) { audio_.loopStop(sirenHandle_); sirenHandle_ = 0; }
 }

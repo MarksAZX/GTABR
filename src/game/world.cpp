@@ -81,9 +81,19 @@ class Gen {
         if (x1 - x0 < 1e-4f || z1 - z0 < 1e-4f) continue;
         MeshBuilder b = mb((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, tint);
         b.groundRect(x0, z0, x1, z1, y, layer, tile);
+        auto blendWet=[&](MeshBuilder& builder){if(layer==mat::sand_wet){
+          auto* mesh=builder.mesh();
+          for(size_t i=mesh->v.size()-4;i<mesh->v.size();++i){auto& v=mesh->v[i];
+            float distance=w_.coastSide==0?-v.p[2]-w_.shoreline:w_.coastSide==1?v.p[0]-w_.shoreline:w_.coastSide==2?v.p[2]-w_.shoreline:-v.p[0]-w_.shoreline;
+            float wet=clamp((distance+3.0f)/3.0f,0.0f,1.0f);wet=wet*wet*(3-2*wet);
+            v.color=packRGBA8(tint.x,tint.y,tint.z,wet);
+          }
+        }};
+        blendWet(b);
         if (lod) {
           MeshBuilder l = lodb((x0 + x1) * 0.5f, (z0 + z1) * 0.5f, tint);
           l.groundRect(x0, z0, x1, z1, y, layer, tile);
+          blendWet(l);
         }
       }
   }
@@ -154,7 +164,9 @@ class Gen {
     auto wallSeg = [&](int side, float x0, float z0, float x1, float z1) {
       float len = std::sqrt((x1 - x0) * (x1 - x0) + (z1 - z0) * (z1 - z0));
       if (side == frontSide) {
-        b.setTint({1, 1, 1});
+        Rng finishRng(w_.seed^(uint32_t)(int32_t)(r.cx()*133+r.cz()*191));
+        float finish=finishRng.range(0.94f,1.0f);
+        b.setTint({finish,finish,finish});
         b.wall(x0, z0, x1, z1, 0.0f, h, frontLayer, 0.003f, 0.997f, 1.0f - vFrac, 1.0f, 0.8f, 1.0f);
       } else {
         b.setTint(sideLayer_ == mat::brick_raw ? Vec3{1, 1, 1} : tint);
@@ -165,6 +177,15 @@ class Gen {
     wallSeg(E, r.x1, r.z1, r.x1, r.z0);
     wallSeg(N, r.x1, r.z0, r.x0, r.z0);
     wallSeg(W, r.x0, r.z0, r.x0, r.z1);
+    // Shallow relief at roof and floor lines; the distant representation remains a single box.
+    if((frontLayer>=mat::house_yellow&&frontLayer<=mat::apt_bands)||frontLayer==mat::apt_tower||frontLayer==mat::house_periferia_a||frontLayer==mat::house_periferia_b){
+      b.setTint(tint*0.8f);
+      int levels=std::min(7,std::max(1,int(h/3.1f)));
+      for(int level=1;level<=levels;++level){float y=level==levels?h:level*3.1f;
+        if(frontSide==N||frontSide==S){float z=frontSide==N?r.z0:r.z1;b.box(AABB({r.x0,y-0.10f,z-0.08f},{r.x1,y+0.03f,z+0.08f}),mat::concrete,mat::concrete,2);}
+        else{float x=frontSide==W?r.x0:r.x1;b.box(AABB({x-0.08f,y-0.10f,r.z0},{x+0.08f,y+0.03f,r.z1}),mat::concrete,mat::concrete,2);}
+      }
+    }
     // far LOD: one tinted box per building
     MeshBuilder l = lodb(r.cx(), r.cz(), tint * 0.9f);
     l.box(AABB({r.x0, 0, r.z0}, {r.x1, h, r.z1}), mat::wall_paint, mat::roof_laje, 4.0f);
@@ -876,12 +897,12 @@ class Gen {
     // sand: slopes gently down to the water line
     float sandFrom = prom, sandTo = beachDepth_;
     RectF sand = coastR(sA, sandFrom, sB, sandTo);
-    ground(sand, 0.06f, mat::sand, 4.0f, {1.0f, 0.98f, 0.95f});
+    ground(coastR(sA,sandFrom,sB,sandTo-3.0f), 0.06f, mat::sand, 4.0f, {1.0f, 1.0f, 1.0f});
     w_.walkable.push_back(sand);
     w_.mapSand.push_back(sand);
     // wet sand band at the water line
     RectF wet = coastR(sA, sandTo - 3.0f, sB, sandTo);
-    ground(wet, 0.065f, mat::sand_wet, 4.0f, {1.0f, 1.0f, 1.0f}, false);
+    ground(wet, 0.06f, mat::sand_wet, 4.0f, {1.0f, 1.0f, 1.0f});
     // beach furniture: umbrellas with chairs, lifeguard tower, kiosks (barracas), volleyball net
     for (float s = sA + 10.0f; s < sB - 10.0f; s += rng_.range(9.0f, 15.0f)) {
       float t = rng_.range(prom + 6.0f, sandTo - 8.0f);
@@ -908,7 +929,7 @@ class Gen {
     for (float s = sA - 60.0f; s < sB + 60.0f; s += World::kChunk) {
       float s1 = std::min(s + World::kChunk, sB + 60.0f);
       for (float d = 0; d < seaDepth;) {
-        float step = d < 24.0f ? 3.0f : (d < 60.0f ? 8.0f : 20.0f);
+        float step = d < 9.0f ? 1.5f : (d < 24.0f ? 3.0f : (d < 60.0f ? 8.0f : 20.0f));
         float d1 = std::min(seaDepth, d + step);
         for (float ss = s; ss < s1 - 1e-3f; ss += step) {
           float ss1 = std::min(s1, ss + step);
@@ -1209,6 +1230,7 @@ class Gen {
     for (float lx = X0 + 2.5f; lx < X1 - 1.0f; lx += 4.0f)
       for (float lz = Z0 + 2.0f; lz < Z1 - 1.0f; lz += 3.0f) {
         cb.ceiling(lx - 0.6f, lz - 0.2f, lx + 0.6f, lz + 0.2f, HGT - 0.01f, mat::white, 1.0f);
+        for(size_t i=w_.interiorCeiling.v.size()-4;i<w_.interiorCeiling.v.size();++i)w_.interiorCeiling.v[i].n[3]=64;
         w_.interiorLights.push_back({lx, HGT - 0.2f, lz});
       }
   }

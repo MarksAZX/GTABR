@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "../core/fileio.h"
+#include "../core/save_store.h"
 #include "../core/log.h"
 #include "game.h"
 
@@ -16,13 +17,13 @@ std::string Game::savePath() const { return fileio::saveDir() + "/slot_" + std::
 
 bool Game::saveGame() {
   if (phase_ != Phase::Playing || !sessionActive_ || activeSlot_ < 0) return false;
+  if(fadeThen_ || player_.entering || player_.exiting){toast("Aguarde a transição para salvar", "save");return false;}
   std::ostringstream o;
   o.precision(std::numeric_limits<float>::max_digits10);
-  o << "version=4\nseed=" << worldSeed_ << "\ngenerator=1\n";
+  o << "version=5\nseed=" << worldSeed_ << "\ngenerator=1\n";
   o << "savedAt=" << std::time(nullptr) << "\nlocation=" << (player_.indoors ? "Interior" : world_.cityName) << "\n";
   o << "wanted=" << wanted_ << "\nheat=" << wantedHeat_ << "\npurchases=" << purchases_ << "\ntutorial=" << tutorialStep_ << "\n";
   o << "seen=" << sinceSeen_ << "\nlastKnownX=" << wantedLastKnown_.x << "\nlastKnownZ=" << wantedLastKnown_.y << "\n";
-  o << "health=" << (player_.dead ? 100.0f : player_.health) << "\n";
 
   o << "money=" << moneyCents_ << "\n";
   o << "playerX=" << player_.pos.x << "\nplayerZ=" << player_.pos.y << "\nplayerYaw=" << player_.yaw << "\n";
@@ -42,7 +43,7 @@ bool Game::saveGame() {
     << "\nset_quality=" << settings_.quality << "\nset_dynres=" << (settings_.dynamicRes ? 1 : 0) << "\ntime_of_day=" << timeOfDay_ << "\nset_hudScale=" << settings_.hudScale << "\nset_showFps=" << (settings_.showFps ? 1 : 0) << "\n";
   o << "playtime=" << time_ << "\n";
   std::string s = o.str();
-  bool ok = fileio::writeFileAtomic(savePath(), s.data(), s.size());
+  bool ok = save_store::write(savePath(), s);
   if (ok) { std::string slot = std::to_string(activeSlot_); fileio::writeFileAtomic(fileio::saveDir() + "/recent.txt", slot.data(), slot.size()); writeSettings(); }
   if (!ok) LOGW("save failed: %s", savePath().c_str());
   return ok;
@@ -50,7 +51,8 @@ bool Game::saveGame() {
 
 bool Game::loadGame() {
   std::string text;
-  if (!fileio::readFile(savePath(), text)) return false;
+  bool recovered=false;
+  if (!save_store::read(savePath(), text,&recovered)) return false;
   std::istringstream in(text);
   std::string line;
   std::unordered_map<std::string, std::string> kv;
@@ -106,10 +108,10 @@ bool Game::loadGame() {
   settings_.shadows = num("set_shadows", 1) > 0.5f;
   settings_.quality = clamp((int)num("set_quality", 2), 0, 3);
   settings_.dynamicRes = num("set_dynres", 1) != 0;
-  timeOfDay_ = (float)num("time_of_day", 10.0);
+  timeOfDay_ = std::fmod(std::max(0.0f,num("time_of_day",10.0f)),24.0f);
   settings_.hudScale = num("set_hudScale", 1.0f);
   settings_.showFps = num("set_showFps", 0) > 0.5f;
-  time_ = num("playtime", 0);
+  time_ = std::max(0.0f,num("playtime", 0));
   cam_.init(num("camera", 0) > 0.5f ? CamMode::ThirdPerson : CamMode::TopDown);
   cam_.setTopDownZoom(num("camZoom", 30.0f));
   bool indoors = num("indoors", 0) > 0.5f;
@@ -117,6 +119,7 @@ bool Game::loadGame() {
   if (!world_.inInterior(pos.x, pos.y) && !world_.playArea.contains(pos.x, pos.y)) pos = {world_.spawnPlayer.x, world_.spawnPlayer.z};
   teleportPlayer(pos, num("playerYaw", player_.yaw));
   player_.swimming = world_.waterDepth(pos.x, pos.y) > 0.9f;
+  player_.swimBlend=player_.swimming?1.0f:0.0f;
   if (player_.swimming) player_.y = world_.waterLevel - 0.85f;
   player_.indoors = indoors && world_.inInterior(pos.x, pos.y);
   int cv = (int)num("currentVehicle", -1);
@@ -127,12 +130,22 @@ bool Game::loadGame() {
     player_.pos = vehicles_[cv].pos;
   }
   readSettings();
+  if(recovered)toast("Save recuperado do backup", "save");
   LOGI("Game loaded: money=%d, vehicle=%d", moneyCents_, cv);
   return true;
 }
 
 void Game::onBackground() {
-  if (phase_ == Phase::Playing && sessionActive_) saveGame();
+  if (phase_ == Phase::Playing && sessionActive_) {
+    // Settle an in-flight interaction before Android suspends the process.
+    if(fadeThen_){auto commit=std::move(fadeThen_);fadeThen_=nullptr;commit();fadeAlpha_=fadeTarget_=0;}
+    if(player_.entering||player_.exiting)updatePlayer(0.75f,InputFrame{});
+    if(player_.vehicle>=0&&player_.vehicle<(int)vehicles_.size()){
+      const auto& vehicle=vehicles_[player_.vehicle];player_.pos=vehicle.pos;player_.yaw=player_.targetYaw=vehicle.yaw;
+      player_.y=world_.heightAt(vehicle.pos.x,vehicle.pos.y);
+    }
+    saveGame();
+  }
   writeSettings();
   input_.reset();
 }

@@ -65,6 +65,7 @@ struct GlobalsUBO {
   Vec4 camPos, camRight, camUp, camFwd;
   Vec4 sunDir, sunColor, ambSky, ambGround, fog, params;
   Vec4 sky0, sky1, cascade, lightInfo;
+  Vec4 reflectionInfo, waterBounds;
   LightUBO lights[kMaxLights];
 };
 

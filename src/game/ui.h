@@ -23,7 +23,7 @@ enum class Align { Left, Center, Right };
 
 class UiPainter {
  public:
-  void begin(gfx::FrameData* fd, const Assets* a, float w, float h, float scale);
+  void begin(gfx::FrameData* fd, const Assets* a, float w, float h, float scale, bool highContrast=false);
   void end();
   float width() const { return w_; }
   float height() const { return h_; }
@@ -51,6 +51,7 @@ class UiPainter {
   gfx::FrameData* fd_ = nullptr;
   const Assets* a_ = nullptr;
   float w_ = 0, h_ = 0, scale_ = 1;
+  bool highContrast_ = false;
   gfx::TexHandle cur_;
 };
 

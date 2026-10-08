@@ -13,12 +13,13 @@ int main(){bool sides[5]={};uint64_t prev=0;
     prev=ha;sides[a.coastSide+1]=true;
     for(const auto& sh:a.shops){if(sh.stock.empty()||sh.interior<0||sh.interior>=4||a.interiorAt(sh.clerk.x,sh.clerk.z)!=sh.interior)return 2;}
     for(const auto& c:a.chunks){
-      bool sea=false,seaLod=false;
-      for(const auto& v:c.mesh.v){for(float p:v.p)if(!std::isfinite(p))return 3;if(v.layer==31&&v.n[1]<0)return 4;if(v.layer==31&&a.coastSide>=0&&a.sea.contains(v.p[0],v.p[2]))sea=true;}
-      for(const auto& v:c.lod.v)if(v.layer==31)seaLod=true;
+      bool sea=false,seaLod=false,wet=false,wetLod=false;
+      for(const auto& v:c.mesh.v){for(float p:v.p)if(!std::isfinite(p))return 3;if(v.layer==41)wet=true;if(v.layer==31&&v.n[1]<0)return 4;if(v.layer==31&&a.coastSide>=0&&a.sea.contains(v.p[0],v.p[2]))sea=true;}
+      for(const auto& v:c.lod.v){if(v.layer==31)seaLod=true;if(v.layer==41)wetLod=true;}
       if(sea&&!seaLod)return 6;
+      if(wet&&!wetLod)return 7;
     }
   }
   for(bool side:sides)if(!side)return 5;
-  puts("24 seeds: deterministic meshes/maps, four functioning shop definitions, all coast directions, finite geometry, upward water normals, sea present in HLOD");return 0;
+  puts("24 seeds: deterministic meshes/maps, four functioning shop definitions, all coast directions, finite geometry, upward water normals, sea and wet beach present in HLOD");return 0;
 }

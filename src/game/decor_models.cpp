@@ -12,7 +12,10 @@ void tube(MeshBuilder& b,Vec3 a,Vec3 c,float r0,float r1,int sides,int layer){
     b.quad(a+x*r0,a+z*r0,c+z*r1,c+x*r1,{0,0},{1,0},{1,1},{0,1},layer);}
 }
 void crown(MeshBuilder& b,Vec3 center,Vec3 size,int sides,int rings){
-  auto point=[&](float t,float p){return center+Vec3{std::sin(t)*std::cos(p)*size.x,std::cos(t)*size.y,std::sin(t)*std::sin(p)*size.z};};
+  auto point=[&](float t,float p){
+    float phase=center.x*1.7f+center.z*2.1f;
+    float lobes=1+0.13f*std::sin(3*p+phase)*std::sin(t)+0.08f*std::cos(5*p-2*t+phase);
+    return center+Vec3{std::sin(t)*std::cos(p)*size.x*lobes,std::cos(t)*size.y+0.08f*size.y*std::sin(p+phase)*std::sin(t),std::sin(t)*std::sin(p)*size.z*lobes};};
   for(int j=0;j<rings;++j)for(int i=0;i<sides;++i){float t=0.02f+(kPi-0.04f)*j/rings,t1=0.02f+(kPi-0.04f)*(j+1)/rings,p=i*kTau/sides,p1=(i+1)*kTau/sides;
     b.quad(point(t,p),point(t,p1),point(t1,p1),point(t1,p),{0,0},{1,0},{1,1},{0,1},mat::foliage,0.88f,0.88f,1,1);}
 }
