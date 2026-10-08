@@ -588,6 +588,7 @@ void Game::drawSettingsTab(float x, float y, float w, float h) {
     case 2: {
       slider("Sensibilidade da câmera", "Arrastar para girar", s.sensitivity, 0.4f, 2.0f, 1020, fmtFloat(s.sensitivity, 2) + "x");
       toggle("Inverter eixo Y", "Terceira pessoa", s.invertY, 3020);
+      toggle("Câmera isométrica", "Top Down vira vista isométrica", s.isometric, 3090);
       slider("Tamanho dos controles", "Botões e joystick", s.hudScale, 0.75f, 1.35f, 1021, pct(s.hudScale));
       slider("Opacidade dos controles", "Quanto os botões aparecem sobre a cena", s.hudOpacity, 0.3f, 1.0f, 1022, pct(s.hudOpacity));
       toggle("Mira assistida", "Ajuda a acertar alvos próximos", s.aimAssist, 3021);
@@ -853,6 +854,7 @@ void Game::applySettingStep(int id) {
     case 3005: s.showFps = !s.showFps; break;
     case 3010: s.muted = !s.muted; break;
     case 3020: s.invertY = !s.invertY; break;
+    case 3090: s.isometric = !s.isometric; break;
     case 3021: s.aimAssist = !s.aimAssist; break;
     case 3030: s.weatherMode = (s.weatherMode + 1) % 4; break;
     case 3031: s.dayCycle = (s.dayCycle + 1) % 3; dayRateOverridden_ = false; break;

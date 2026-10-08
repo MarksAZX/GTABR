@@ -41,6 +41,7 @@ struct Settings {
   // controls
   float sensitivity = 1.0f;
   bool invertY = false;
+  bool isometric = false;   // top-down view as a true isometric (45 degree, long lens) view
   float hudScale = 1.0f;
   float hudOpacity = 1.0f;
   bool aimAssist = true;
@@ -280,6 +281,7 @@ class Game {
   float wetness() const { return wetness_; }
   float timeOfDay() const { return timeOfDay_; }
   void setQuality(int q) { settings_.quality = q; applySettings(); }
+  void setIsometric(bool on) { settings_.isometric = on; applySettings(); }
  private:
   int dirIndex(float objYaw, int n) const;
 

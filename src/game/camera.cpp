@@ -40,8 +40,21 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   float sens = 0.0028f * sensitivity;
   // ---- user input applies to the active mode
   bool dragging = in.userDragging || std::fabs(in.look.x) + std::fabs(in.look.y) > 0.01f;
+  isoBlend_ += ((isometric ? 1.0f : 0.0f) - isoBlend_) * expDecay(4.0f, dt);
+  if (first_) isoBlend_ = isometric ? 1.0f : 0.0f;
   if (mode_ == CamMode::TopDown) {
-    tdYaw_ = wrapAngle(tdYaw_ + in.look.x * sens);
+    if (isoBlend_ > 0.5f) {
+      // isometric: dragging swings the view, and it settles on the nearest of the four classic diagonals
+      isoYaw_ += in.look.x * sens;
+      if (!(in.userDragging || std::fabs(in.look.x) > 0.01f)) {
+        float snap = std::round((isoYaw_ - 0.7853982f) / 1.5707963f) * 1.5707963f + 0.7853982f;
+        isoYaw_ = lerpAngle(isoYaw_, snap, expDecay(5.0f, dt));
+      }
+      isoYaw_ = wrapAngle(isoYaw_);
+      tdYaw_ = isoYaw_;
+    } else {
+      tdYaw_ = wrapAngle(tdYaw_ + in.look.x * sens);
+    }
     tdDist_ = clamp(tdDist_ - in.zoomDelta * 0.05f, 14.0f, 52.0f);
   } else {
     tpYaw_ = wrapAngle(tpYaw_ + in.look.x * sens);
@@ -92,15 +105,20 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   float speedZoom = in.driving ? clamp(std::fabs(in.speed) / 30.0f, 0.0f, 1.0f) * 0.85f : (in.speed > 4.0f ? 0.12f : 0.0f);
   tdSpeedZoom_ += (speedZoom - tdSpeedZoom_) * expDecay(speedZoom > tdSpeedZoom_ ? 1.2f : 0.6f, dt);
   if (first_) tdSpeedZoom_ = speedZoom;
-  float tdDist = tdDist_ * (in.indoors ? 0.62f : 1.0f) * (1.0f + tdSpeedZoom_);
+  // isometric: a long lens (narrow fov) from further back, which flattens perspective like a true isometric projection
+  const float isoFov = 15.0f * kDeg2Rad, isoPitch = 38.0f * kDeg2Rad;
+  const float tdPitchBase = lerp(kTdPitch, isoPitch, isoBlend_);
+  const float tdFovBase = lerp(kTdFov, isoFov, isoBlend_);
+  const float lensK = std::tan(kTdFov * 0.5f) / std::tan(tdFovBase * 0.5f);
+  float tdDist = tdDist_ * lerp(1.0f, lensK, isoBlend_) * (in.indoors ? 0.62f : 1.0f) * (1.0f + tdSpeedZoom_);
   // look over buildings: if a building between the camera and the focus would hide it, raise the pitch
   if (t < 0.99f && !in.indoors) {
     Vec3 back = -forwardFromYaw(lerpAngle(tdYaw_, tpYaw_, t));
-    float tanP = std::tan(kTdPitch + tdPitchLift_);
+    float tanP = std::tan(tdPitchBase + tdPitchLift_);
     float need = 0;
     for (float h : {3.0f, 6.0f, 9.0f, 13.0f}) {
       float d = phys::raycast(w, {focus_.x, focus_.z}, {back.x, back.z}, tdDist, h);
-      if (d < tdDist && d * std::tan(kTdPitch) < h + 0.5f) need = std::max(need, std::atan2(h + 1.0f, std::max(d, 0.5f)) - kTdPitch);
+      if (d < tdDist && d * std::tan(tdPitchBase) < h + 0.5f) need = std::max(need, std::atan2(h + 1.0f, std::max(d, 0.5f)) - tdPitchBase);
     }
     (void)tanP;
     need = clamp(need, 0.0f, 16.0f * kDeg2Rad);
@@ -129,9 +147,9 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
     // sweep the shorter way
     yaw = tdYaw_ + angleDiff(tdYaw_, tpYaw_) * t;
   }
-  pitch_ = lerp(kTdPitch + tdPitchLift_, tpPitch_, t);
+  pitch_ = lerp(tdPitchBase + tdPitchLift_, tpPitch_, t);
   dist_ = std::exp(lerp(std::log(tdDist), std::log(tpDist), t));
-  fov_ = lerp(kTdFov, kTpFov + (in.driving ? clamp(in.speed / 40.0f, 0.0f, 1.0f) * 6.0f * kDeg2Rad : 0.0f), t);
+  fov_ = lerp(tdFovBase, kTpFov + (in.driving ? clamp(in.speed / 40.0f, 0.0f, 1.0f) * 6.0f * kDeg2Rad : 0.0f), t);
   yaw_ = yaw;
 
   Vec3 fwdH = forwardFromYaw(yaw_);
@@ -146,7 +164,7 @@ void CameraRig::compute(const CameraInput& in, const World& w, float aspect, flo
   first_ = false;
 
   view_ = Mat4::lookAt(eye_, focus_, {0, 1, 0});
-  float zn = lerp(1.0f, 0.2f, t), zf = 420.0f;
+  float zn = lerp(1.0f, 0.2f, t), zf = 520.0f;
   proj_ = Mat4::perspective(fov_, aspect, zn, zf);
   viewProj_ = proj_ * view_;
   frustum_.fromViewProj(viewProj_);

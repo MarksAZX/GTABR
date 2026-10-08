@@ -44,9 +44,11 @@ class CameraRig {
   Vec3 focus() const { return focus_; }
   float fov() const { return fov_; }
   float topDownZoom() const { return tdDist_; }
+  float isoAmount() const { return isoBlend_ * (1.0f - blendEased_); }
   void setTopDownZoom(float z) { tdDist_ = clamp(z, 14.0f, 52.0f); }
   float sensitivity = 1.0f;
   bool invertY = false;
+  bool isometric = false;   // top-down becomes a 45-degree isometric view (fixed yaw steps, long lens, 4 snap angles)
 
  private:
   CamMode mode_ = CamMode::TopDown;
@@ -56,6 +58,8 @@ class CameraRig {
   float tdSpeedZoom_ = 0;      // smoothed extra distance from vehicle speed
   float tdPitchLift_ = 0;      // extra pitch to look over buildings that hide the focus
   float tdIdle_ = 0;
+  float isoBlend_ = 0;         // 0 = classic top down, 1 = isometric (eased so toggling in settings glides)
+  float isoYaw_ = 0.7853982f;  // current isometric yaw (snaps to the nearest 90 degrees after a drag)
   float tpYaw_ = 0, tpPitch_ = 16.0f * kDeg2Rad, tpDist_ = 5.4f;
   float idleTimer_ = 0;
   // outputs

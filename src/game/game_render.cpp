@@ -165,7 +165,7 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   g.sunColor = {day_.sunColor.x, day_.sunColor.y, day_.sunColor.z, day_.sunDisk};
   g.ambSky = {day_.ambSky.x, day_.ambSky.y, day_.ambSky.z, 0};
   g.ambGround = {day_.ambGround.x, day_.ambGround.y, day_.ambGround.z, 0};
-  g.fog = {day_.fog.x, day_.fog.y, day_.fog.z, lerp(day_.fogDensity, 0.0f, ind)};
+  g.fog = {day_.fog.x, day_.fog.y, day_.fog.z, lerp(day_.fogDensity, 0.0f, ind) * lerp(1.0f, 0.2f, cam_.isoAmount())};
   g.params = {day_.exposure, 1.25f / smSize, day_.night, ind};
   g.sky0 = {day_.zenith.x, day_.zenith.y, day_.zenith.z, day_.cloudCover};
   g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};

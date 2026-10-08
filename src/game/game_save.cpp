@@ -193,7 +193,7 @@ bool Game::saveSettings() const {
   o << "quality=" << s.quality << "\ndynamicRes=" << s.dynamicRes << "\nshadows=" << s.shadows << "\ndrawDistance=" << s.drawDistance
     << "\nbloom=" << s.bloom << "\nweatherFx=" << s.weatherFx << "\nbrightness=" << s.brightness << "\nshowFps=" << s.showFps
     << "\nmaster=" << s.master << "\nsfx=" << s.sfx << "\nambience=" << s.ambience << "\nmuted=" << s.muted
-    << "\nsensitivity=" << s.sensitivity << "\ninvertY=" << s.invertY << "\nhudScale=" << s.hudScale << "\nhudOpacity=" << s.hudOpacity
+    << "\nsensitivity=" << s.sensitivity << "\ninvertY=" << s.invertY << "\nisometric=" << s.isometric << "\nhudScale=" << s.hudScale << "\nhudOpacity=" << s.hudOpacity
     << "\naimAssist=" << s.aimAssist << "\nweatherMode=" << s.weatherMode << "\ndayCycle=" << s.dayCycle << "\nshowMinimap=" << s.showMinimap
     << "\nhints=" << s.hints << "\nautosave=" << s.autosave << "\ntextScale=" << s.textScale << "\nhighContrast=" << s.highContrast
     << "\nreduceMotion=" << s.reduceMotion << "\nreduceFlashes=" << s.reduceFlashes << "\n";
@@ -220,6 +220,7 @@ bool Game::loadSettings() {
   s.muted = numOf(kv, "muted", 0) > 0.5f;
   s.sensitivity = clamp(numOf(kv, "sensitivity", 1.0f), 0.4f, 2.0f);
   s.invertY = numOf(kv, "invertY", 0) > 0.5f;
+  s.isometric = numOf(kv, "isometric", 0) > 0.5f;
   s.hudScale = clamp(numOf(kv, "hudScale", 1.0f), 0.75f, 1.35f);
   s.hudOpacity = clamp(numOf(kv, "hudOpacity", 1.0f), 0.3f, 1.0f);
   s.aimAssist = numOf(kv, "aimAssist", 1) > 0.5f;

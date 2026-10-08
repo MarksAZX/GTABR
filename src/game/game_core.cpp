@@ -512,6 +512,7 @@ void Game::updatePlaying(float dtReal, const InputFrame& in) {
     ci.shake = settings_.reduceMotion ? 0.0f : cameraShake_;
     cam_.sensitivity = settings_.sensitivity;
     cam_.invertY = settings_.invertY;
+    cam_.isometric = settings_.isometric;
     if (!panel_.open && !wheel_.open) cam_.update(dtReal, ci, world_, screenW_ / std::max(1.0f, screenH_));
     else { CameraInput frozen = ci; frozen.look = {}; frozen.zoomDelta = 0; cam_.update(dtReal, frozen, world_, screenW_ / std::max(1.0f, screenH_)); }
     cameraShake_ = std::max(0.0f, cameraShake_ - dtReal * 2.5f);

@@ -171,15 +171,15 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       if (n.interior || n.police || k >= 6) continue;
       n.archetype = arch[k + 1];
       n.role = 0; n.stationary = true; n.state = NpcState::Idle; n.stateTimer = 1e6f; n.path.clear();
-      n.pos = c + fwd * 3.2f + rgt * (-5.0f + 2.0f * k);
-      n.yaw = yawFromDir(-fwd);
+      n.pos = c + Vec2{-5.0f + 2.0f * k, -4.0f};
+      n.yaw = 3.14159f;
       ++k;
     }
     g.toggleCamera();
     b.idle(70);
     b.shot("lineup_idle");
     // walking: send them forward along the camera axis
-    for (auto& n : g.npcs()) if (!n.interior && !n.police && n.stationary) { n.stationary = false; n.state = NpcState::Walk; n.path = {n.pos + fwd * 25.0f}; n.pathIdx = 0; n.speed = 1.4f; n.stateTimer = 1e6f; }
+    for (auto& n : g.npcs()) if (!n.interior && !n.police && n.stationary) { n.stationary = false; n.state = NpcState::Walk; n.path = {n.pos + Vec2{0, 25.0f}}; n.pathIdx = 0; n.speed = 1.4f; n.stateTimer = 1e6f; }
     b.idle(25);
     b.shot("lineup_walk");
     return 0;
@@ -861,6 +861,14 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       b.shot(std::string("held_walk_") + weaponDef(order[k]).key);
       b.idle(30);
     }
+    return 0;
+  }
+  if (name == "iso") {
+    b.idle(40);
+    b.shot("iso_off");
+    g.setIsometric(true);
+    b.idle(120);
+    b.shot("iso_on");
     return 0;
   }
   if (name == "char") {
