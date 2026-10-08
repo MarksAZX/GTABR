@@ -77,6 +77,9 @@ struct Bot {
       in.runHeld = run;
       step(in, 1);
     }
+    LOGW("walkTo (%.1f, %.1f) timed out: player at (%.2f, %.2f)", target.x, target.y, g.player().pos.x, g.player().pos.y);
+    { std::vector<int> ids; Vec2 p = g.player().pos; g.world().queryColliders(p.x - 2, p.y - 2, p.x + 2, p.y + 2, ids);
+      for (int id : ids) { const Collider& c = g.world().colliders[id]; LOGW("  near collider kind %d [%.1f,%.1f]-[%.1f,%.1f] y %.1f..%.1f", (int)c.kind, c.box.mn.x, c.box.mn.z, c.box.mx.x, c.box.mx.z, c.box.mn.y, c.box.mx.y); } }
     return false;
   }
   bool driveTo(Vec2 target, float tol, int maxFrames, float maxSpeed = 12.0f) {
