@@ -24,6 +24,8 @@ layout(set = 0, binding = 0, std140) uniform Globals {
   vec4 sky1;        // rgb horizon, w = cloud brightness
   vec4 cascade;     // x = split distance, y = cascade count, z = fog height falloff, w = wetness
   vec4 lightInfo;   // x = light count
+  vec4 probeRect;   // x0, z0, 1/width, 1/depth of the ambient probe grid
+  vec4 probeInfo;   // x = enabled, y = ground layer height, z = rooftop layer height
   Light lights[16];
 } g;
 

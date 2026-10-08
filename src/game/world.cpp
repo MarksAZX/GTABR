@@ -1718,6 +1718,90 @@ static void scatterDecals(World& w, uint32_t seed) {
   }
 }
 
+// Ray casts against the building / wall boxes and the tree crowns around every probe (static, done once per city).
+static void bakeProbes(World& w) {
+  ProbeGrid& pg = w.probes;
+  pg.cell = 4.0f;
+  RectF area = w.playArea.inflated(6.0f);
+  pg.x0 = area.x0;
+  pg.z0 = area.z0;
+  pg.w = std::max(2, (int)std::ceil(area.w() / pg.cell) + 1);
+  pg.h = std::max(2, (int)std::ceil(area.h() / pg.cell) + 1);
+  pg.rgba.assign((size_t)4 * pg.w * pg.h * 4, 255);
+  // 52 directions: Fibonacci sphere (skip the lower pole cap: the ground is handled as bounce, not as an occluder)
+  std::vector<Vec3> dirs;
+  const int N = 64;
+  for (int i = 0; i < N; ++i) {
+    float y = 1.0f - 2.0f * (i + 0.5f) / N;
+    float r = std::sqrt(std::max(0.0f, 1.0f - y * y));
+    float a = i * 2.3999632f;
+    Vec3 d{std::cos(a) * r, y, std::sin(a) * r};
+    if (d.y > -0.12f) dirs.push_back(d);
+  }
+  struct Crown { Vec3 c; float r; };
+  std::vector<Crown> crowns;
+  for (const DecorInstance& d : w.decor)
+    if (d.kind == DecorKind::Tree && d.species >= 0 && d.species != 5) crowns.push_back({d.pos + Vec3{0, 4.6f * d.scale, 0}, 2.3f * d.scale});
+  std::vector<int> near;
+  const float maxDist = 40.0f;
+  auto transmission = [&](Vec3 o, Vec3 d) {
+    float t = 1.0f;
+    float inv[3] = {std::fabs(d.x) > 1e-6f ? 1.0f / d.x : 1e30f, std::fabs(d.y) > 1e-6f ? 1.0f / d.y : 1e30f, std::fabs(d.z) > 1e-6f ? 1.0f / d.z : 1e30f};
+    float x1 = o.x + d.x * maxDist, z1 = o.z + d.z * maxDist;
+    w.queryColliders(std::min(o.x, x1) - 1.0f, std::min(o.z, z1) - 1.0f, std::max(o.x, x1) + 1.0f, std::max(o.z, z1) + 1.0f, near);
+    for (int ci : near) {
+      const Collider& c = w.colliders[ci];
+      if (c.kind != ColKind::Building && c.kind != ColKind::Wall) continue;
+      float tn = 0.0f, tf = maxDist;
+      bool hit = true;
+      const float lo[3] = {c.box.mn.x, c.box.mn.y, c.box.mn.z}, hi[3] = {c.box.mx.x, c.box.mx.y, c.box.mx.z}, org[3] = {o.x, o.y, o.z};
+      const float dd[3] = {d.x, d.y, d.z};
+      for (int k = 0; k < 3 && hit; ++k) {
+        if (std::fabs(dd[k]) < 1e-6f) { if (org[k] < lo[k] || org[k] > hi[k]) hit = false; continue; }
+        float t0 = (lo[k] - org[k]) * inv[k], t1 = (hi[k] - org[k]) * inv[k];
+        if (t0 > t1) std::swap(t0, t1);
+        tn = std::max(tn, t0); tf = std::min(tf, t1);
+        if (tn > tf) hit = false;
+      }
+      if (hit) return 0.0f;
+    }
+    for (const Crown& cr : crowns) {
+      Vec3 oc = o - cr.c;
+      float b = oc.dot(d), cc = oc.dot(oc) - cr.r * cr.r;
+      float disc = b * b - cc;
+      if (disc > 0 && -b + std::sqrt(disc) > 0 && -b - std::sqrt(disc) < maxDist) t *= 0.55f;   // foliage lets some sky through
+    }
+    return t;
+  };
+  const Vec3 faces[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+  for (int layer = 0; layer < 2; ++layer)
+    for (int j = 0; j < pg.h; ++j)
+      for (int i = 0; i < pg.w; ++i) {
+        float x = pg.x0 + i * pg.cell, z = pg.z0 + j * pg.cell;
+        float gy = w.heightAt(x, z);
+        Vec3 o{x, gy + (layer == 0 ? pg.groundY : pg.upperY), z};
+        // inside a building box the probe is solid: treat as fully open (interiors use their own lamp ambient)
+        float sum[6] = {}, wsum[6] = {};
+        for (const Vec3& d : dirs) {
+          float tr = transmission(o, d);
+          for (int f = 0; f < 6; ++f) {
+            float wgt = std::max(0.0f, d.dot(faces[f]));
+            if (f == 3) wgt = 0.0f;   // down face: always ground bounce
+            if (f != 2 && f != 3 && d.y < -0.05f) wgt *= 0.0f;
+            sum[f] += wgt * tr;
+            wsum[f] += wgt;
+          }
+        }
+        float v[6];
+        for (int f = 0; f < 6; ++f) v[f] = wsum[f] > 1e-4f ? clamp(sum[f] / wsum[f], 0.0f, 1.0f) : 0.0f;
+        size_t base = ((size_t)(layer * 2) * pg.h + j) * pg.w * 4 + (size_t)i * 4;
+        size_t base2 = ((size_t)(layer * 2 + 1) * pg.h + j) * pg.w * 4 + (size_t)i * 4;
+        auto q = [](float a) { return (uint8_t)clamp(a * 255.0f + 0.5f, 0.0f, 255.0f); };
+        pg.rgba[base + 0] = q(v[0]); pg.rgba[base + 1] = q(v[1]); pg.rgba[base + 2] = q(v[2]); pg.rgba[base + 3] = q(v[3]);
+        pg.rgba[base2 + 0] = q(v[4]); pg.rgba[base2 + 1] = q(v[5]); pg.rgba[base2 + 2] = 255; pg.rgba[base2 + 3] = 255;
+      }
+}
+
 void buildWorld(World& w, uint32_t seed) {
   w = World();
   w.seed = seed;
@@ -1726,6 +1810,7 @@ void buildWorld(World& w, uint32_t seed) {
   scatterDecals(w, seed);
   for (auto& c : w.chunks) c.bounds = c.mesh.bounds;
   w.buildGrid();
+  bakeProbes(w);
 }
 
 void renderMinimap(const World& w, std::vector<uint8_t>& rgba, int size, float extent) {

@@ -920,6 +920,7 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
   }
   if (name == "decals") {
     // street wear and wall decals: walk the first street of the city in both cameras
+    if (getenv("GTABR_Q")) g.setQuality(atoi(getenv("GTABR_Q")));
     const World& w = g.world();
     printf("decals in the city: %zu\n", w.decals.size());
     Vec2 at{0, 0};
@@ -951,6 +952,21 @@ int runScenario(const std::string& name, Game& g, gfx::Renderer& r, gfx::FrameDa
       b.idle(40);
       b.shot("decals_wall");
       break;
+    }
+    return 0;
+  }
+  if (name == "probes") {
+    const World& w = g.world();
+    const ProbeGrid& pg = w.probes;
+    Vec2 pp = g.player().pos;
+    printf("probe grid %dx%d origin %.1f,%.1f cell %.1f ; player %.1f,%.1f\n", pg.w, pg.h, pg.x0, pg.z0, pg.cell, pp.x, pp.y);
+    for (int dz = -2; dz <= 2; ++dz) {
+      for (int dx = -2; dx <= 2; ++dx) {
+        int i = (int)std::round((pp.x - pg.x0) / pg.cell) + dx, j = (int)std::round((pp.y - pg.z0) / pg.cell) + dz;
+        size_t base = ((size_t)0 * pg.h + j) * pg.w * 4 + (size_t)i * 4;
+        printf("[%3d %3d %3d %3d] ", pg.rgba[base], pg.rgba[base + 1], pg.rgba[base + 2], pg.rgba[base + 3]);
+      }
+      printf("\n");
     }
     return 0;
   }

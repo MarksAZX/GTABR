@@ -3,6 +3,7 @@
 #include "globals.glsl"
 layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
 #include "shadowing.glsl"
+#include "probes.glsl"
 layout(location = 0) in vec2 vP;
 layout(location = 1) in vec2 vAK;
 layout(location = 2) in vec3 vWorld;
@@ -176,7 +177,8 @@ void main() {
   vec3 N = normalize(vNormal);
   float sh = shadowTerm(vWorld) * (1.0 - g.params.w);
   float NoL = max(dot(N, g.sunDir.xyz), 0.0);
-  vec3 amb = mix(g.ambGround.rgb, g.ambSky.rgb, N.y * 0.5 + 0.5);
+  float skyVis;
+  vec3 amb = probeAmbient(vWorld + N * 0.3, N, skyVis);
   vec3 lit = albedo * (g.sunColor.rgb * NoL * sh / PI + amb) + evalLights(vWorld, N, V, albedo, vec3(0.04), rough);
   // sky glints on slick surfaces (oil, wet) and a touch on metal covers
   vec3 R = reflect(-V, N);

@@ -81,7 +81,8 @@ bool Renderer::init(const RendererConfig& cfg, const SurfaceFactory& surfaceFact
   VkShaderStageFlags vf = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
   layoutGlobalsA_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr}});
   layoutGlobalsB_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, vf, nullptr},
-                              {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
+                              {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+                              {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutEmpty_ = mkLayout({});
   layoutTex_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}});
   layoutTex2_ = mkLayout({{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -776,6 +777,7 @@ void Renderer::createRenderTargets() {
     w.pImageInfo = &ii;
     vkUpdateDescriptorSets(dev, 1, &w, 0, nullptr);
   }
+  bindProbeSets();
 
   sceneColor_ = ctx_.createImage(sceneW_, sceneH_, 1, 1, hdrFormat_,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -857,6 +859,27 @@ void Renderer::createRenderTargets() {
   // composite set: scene + final blurred level + AO / sky mask
   compositeSet_ = allocSet(layoutTex3_, {VkDescriptorImageInfo{lin, sceneColor_.view, RO}, VkDescriptorImageInfo{lin, blurUp_.back().img.view, RO},
                                          VkDescriptorImageInfo{lin, aoB_.view, RO}});
+}
+
+void Renderer::bindProbeSets() {
+  if (!dummyArray_.valid()) return;
+  const TexRes& t = textures_[probeTex_.valid() ? probeTex_.id : dummyArray_.id];
+  for (int i = 0; i < kFrames; ++i) {
+    VkDescriptorImageInfo ii{t.sampler, t.img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = frames_[i].globalsB;
+    w.dstBinding = 2;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w.pImageInfo = &ii;
+    vkUpdateDescriptorSets(ctx_.device, 1, &w, 0, nullptr);
+  }
+}
+
+void Renderer::setProbeGrid(TexHandle t) {
+  vkDeviceWaitIdle(ctx_.device);   // the previous grid may still be in flight
+  probeTex_ = t;
+  bindProbeSets();
 }
 
 void Renderer::setRenderScale(float s) {

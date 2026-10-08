@@ -94,6 +94,16 @@ struct ShopDef {
 // ground; graffiti, grime streaks and posters on walls). kind matches shaders/decal.frag; vertical decals face 'yaw'.
 struct SurfaceDecal { Vec3 pos; float yaw = 0, hx = 1, hz = 1, alpha = 1; int kind = 2; bool vertical = false; };
 
+// Baked ambient visibility probes: per cell, two heights (ground, rooftop level), six faces each (+x -x +y -y +z -z) giving how
+// much of that hemisphere sees open sky instead of buildings, walls or tree crowns. The shaders turn it into local ambient
+// light (dark narrow streets, bright squares, shaded courtyards) and into specular occlusion for the sky reflection.
+struct ProbeGrid {
+  float x0 = 0, z0 = 0, cell = 4.0f, upperY = 7.0f, groundY = 1.3f;
+  int w = 0, h = 0;
+  std::vector<uint8_t> rgba;   // 4 layers of w*h*4: [ground +x -x +y -y][ground +z -z (unused)(unused)][upper ...][upper ...]
+  bool valid() const { return w > 0 && h > 0 && !rgba.empty(); }
+};
+
 struct World {
   static constexpr float kChunk = 32.0f;
   static constexpr float kSidewalkH = 0.14f;
@@ -117,6 +127,7 @@ struct World {
   MeshData interiorCeiling;
   gfx::MeshHandle interiorCeilingHandle;
   std::vector<SurfaceDecal> decals;
+  ProbeGrid probes;
   std::vector<Vec3> lampLights;    // street lamp heads (night lights)
   std::vector<Vec3> interiorLights;
 

@@ -321,6 +321,7 @@ class Game {
   bool entitiesReady_ = false;
   NavMesh navOutdoor_, navIndoor_;
   gfx::TexHandle mapTex_;
+  gfx::TexHandle probeTex_;   // baked ambient visibility probes of the current city
   float mapExtent_ = 96.0f;
   uint32_t worldSeed_ = 1;      // seed of the current city (saved per slot)
   float lodDistance_ = 1e9f;  // chunks farther than this draw their HLOD mesh

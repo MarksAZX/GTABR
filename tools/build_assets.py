@@ -208,6 +208,69 @@ SURFACE = {
 }
 
 
+def _voronoi(size, cells, seed):
+    """periodic cellular noise: returns (distance to the nearest feature point, random id) on a size x size grid"""
+    rng = np.random.default_rng(seed)
+    pts = rng.random((cells, cells, 2)).astype(np.float32)
+    ids = rng.random((cells, cells)).astype(np.float32)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / size * cells
+    cy, cx = np.floor(yy).astype(int), np.floor(xx).astype(int)
+    best = np.full((size, size), 9.0, np.float32)
+    bid = np.zeros((size, size), np.float32)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            gy, gx = (cy + dy) % cells, (cx + dx) % cells
+            fy = cy + dy + pts[gy, gx, 1]
+            fx = cx + dx + pts[gy, gx, 0]
+            d = np.sqrt((yy - fy) ** 2 + (xx - fx) ** 2)
+            m = d < best
+            best = np.where(m, d, best)
+            bid = np.where(m, ids[gy, gx], bid)
+    return best, bid
+
+
+def micro_height(name, size, seed):
+    """Authored micro relief (periodic) added on top of the height recovered from the albedo: aggregate, stucco grain,
+    corrugation, wood grain, ripples... so each material has real surface structure at close range."""
+    n1 = fbm_tile(size, seed, 4)
+    n2 = fbm_tile(size, seed + 101, 3, 0.7)
+    xx = np.arange(size, dtype=np.float32)[None, :] / size
+    yy = np.arange(size, dtype=np.float32)[:, None] / size
+    if name in ("asphalt", "asphalt_cracked", "garage_floor"):
+        d, i = _voronoi(size, 56, seed)
+        return (np.clip(1.0 - d * 1.7, 0, 1) ** 1.5 * (0.5 + i * 0.7)) * 0.9 + (n2 - 0.5) * 0.3
+    if name in ("sidewalk", "pedra_port", "concrete", "roof_laje"):
+        d, i = _voronoi(size, 90, seed)
+        return (n1 - 0.5) * 0.5 + (np.clip(1.0 - d * 2.0, 0, 1) * 0.25 * i) + (n2 - 0.5) * 0.3
+    if name in ("wall_paint", "wall_dark", "house_periferia_a", "house_periferia_b", "white"):
+        return (n1 - 0.5) * 0.35 + (n2 - 0.5) * 0.35   # fine stucco grain
+    if name in ("roof_tile",):
+        return np.abs(np.sin(np.pi * xx * 10.0 + 0.4 * np.sin(yy * 6.2832 * 2))) ** 0.6 * 0.9 + (n2 - 0.5) * 0.2
+    if name in ("roof_metal", "roof_fiber"):
+        return (0.5 + 0.5 * np.sin(2 * np.pi * xx * 14.0)) * 0.9 + (n2 - 0.5) * 0.1
+    if name == "metal":
+        return np.sin(2 * np.pi * yy * 80.0 + n1 * 3.0) * 0.12 + (n2 - 0.5) * 0.1   # brushed
+    if name in ("wood", "shelf"):
+        return (0.5 + 0.5 * np.sin(2 * np.pi * (yy * 18.0 + n1 * 1.6))) * 0.5 + (n2 - 0.5) * 0.15
+    if name == "sand":
+        return (0.5 + 0.5 * np.sin(2 * np.pi * (yy * 9.0 + n1 * 0.8))) * 0.25 + (n2 - 0.5) * 0.35
+    if name in ("grass",):
+        g = fbm_tile(size, seed + 7, 5, 0.8)
+        return (g - 0.5) * 0.9
+    if name in ("bark",):
+        return np.abs(np.sin(2 * np.pi * (xx * 14.0 + n1 * 1.5))) * 0.7
+    if name in ("dirt",):
+        d, i = _voronoi(size, 70, seed)
+        return np.clip(1.0 - d * 1.5, 0, 1) * 0.5 + (n1 - 0.5) * 0.6
+    if name in ("brick_raw", "house_brick"):
+        return (n2 - 0.5) * 0.5
+    return None
+
+
+# metalness of the layers that are bare metal (the world shader reads the same table)
+METAL_LAYERS = {"metal": 0.25, "roof_metal": 0.75}
+
+
 def derive_normal_rough(arr, name, size=512):
     """Height from luminance (high-passed so baked lighting does not become slopes) -> tangent-space normal,
     roughness from base + local detail, cavity from the height high-pass. Declared as derived, not scanned."""
@@ -218,6 +281,10 @@ def derive_normal_rough(arr, name, size=512):
     lum = f[..., 0] * 0.299 + f[..., 1] * 0.587 + f[..., 2] * 0.114
     low = ndimage.gaussian_filter(lum, 18, mode="wrap")
     h = ndimage.gaussian_filter(lum - low, 0.8, mode="wrap")
+    mh = micro_height(name, size, 1000 + sum(ord(c) for c in name))
+    if mh is not None:
+        hs = float(np.std(h)) + 1e-4
+        h = h + (mh - mh.mean()) * hs * 1.1
     dx = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) * 0.5 * strength * (size / 64.0)
     dy = (np.roll(h, -1, 0) - np.roll(h, 1, 0)) * 0.5 * strength * (size / 64.0)
     nz = 1.0 / np.sqrt(dx * dx + dy * dy + 1.0)

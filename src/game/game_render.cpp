@@ -171,6 +171,12 @@ void Game::setupGlobals(gfx::FrameData& fd) {
   g.sky1 = {day_.horizon.x, day_.horizon.y, day_.horizon.z, day_.cloudBright};
   g.cascade = {0.0f, (float)std::max(1, qp.shadowCascades), 0.045f, wetness_};
   g.lightInfo = {0, 0, 0, 0};
+  {
+    const ProbeGrid& pg = world_.probes;
+    bool on = probeTex_.valid() && pg.valid();
+    g.probeRect = on ? Vec4{pg.x0 - pg.cell * 0.5f, pg.z0 - pg.cell * 0.5f, 1.0f / (pg.w * pg.cell), 1.0f / (pg.h * pg.cell)} : Vec4{0, 0, 1, 1};
+    g.probeInfo = {on ? 1.0f : 0.0f, pg.groundY, pg.upperY, 0.0f};
+  }
   fd.drawShadows = shadowsOn && ind < 0.5f && day_.shadowStrength > 0.01f;
   fd.shadowCascades = std::max(1, qp.shadowCascades);
   fd.vignette = 0.26f;

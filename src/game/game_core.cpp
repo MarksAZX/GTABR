@@ -72,6 +72,15 @@ void Game::buildWorldGpu() {
   for (auto& c : world_.chunks) { totTris += c.mesh.idx.size() / 3; totVerts += c.mesh.v.size(); lodTris += c.lod.idx.size() / 3; }
   LOGI("World meshes: %zu chunks, %zu verts, %zu tris (HLOD %zu tris), ~%.1f MB vertex data", world_.chunks.size(), totVerts, totTris, lodTris,
        (totVerts * sizeof(gfx::WorldVertex) + totTris * 12) / 1048576.0);
+  // baked ambient probes -> 4-layer array texture the world, model and decal shaders sample
+  if (world_.probes.valid()) {
+    gfx::TextureData td;
+    td.format = gfx::TexFormat::RGBA8_UNORM;
+    td.width = (uint32_t)world_.probes.w; td.height = (uint32_t)world_.probes.h; td.layers = 4; td.mips = 1;
+    td.bytes = world_.probes.rgba;
+    probeTex_ = r_->createTexture(td, gfx::SamplerKind::ClampLinear);
+    r_->setProbeGrid(probeTex_);
+  }
   // The CPU meshes stay in memory; only the small HLOD meshes are always on the GPU. Full-detail chunks become resident around the
   // player (streamChunks), so GPU memory is bounded however large the city is.
   for (auto& c : world_.chunks) {
@@ -160,6 +169,9 @@ void Game::destroyWorldGpu() {
   if (world_.interiorCeilingHandle.valid()) r_->destroyMesh(world_.interiorCeilingHandle);
   if (mapTex_.valid()) r_->destroyTexture(mapTex_);
   mapTex_ = {};
+  r_->setProbeGrid({});
+  if (probeTex_.valid()) r_->destroyTexture(probeTex_);
+  probeTex_ = {};
   for (int* h : {&surfHandle_, &rainHandle_, &sirenHandle_})
     if (*h) { audio_.loopStop(*h); *h = 0; }
   waypoint_ = Waypoint();

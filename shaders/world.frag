@@ -5,6 +5,7 @@ layout(set = 0, binding = 1) uniform sampler2DArrayShadow uShadow;
 layout(set = 1, binding = 0) uniform sampler2DArray uMat;    // albedo
 layout(set = 1, binding = 1) uniform sampler2DArray uMatN;   // rg = normal xy, b = roughness, a = cavity / AO
 #include "shadowing.glsl"
+#include "probes.glsl"
 #include "material_ids.glsl"
 #include "water.glsl"
 layout(location = 0) in vec3 vWorld;
@@ -128,7 +129,10 @@ void main() {
   vec3 L = g.sunDir.xyz;
   vec3 H = normalize(L + V);
   float NoL = max(dot(N, L), 0.0), NoV = max(dot(N, V), 1e-3), NoH = max(dot(N, H), 0.0), VoH = max(dot(V, H), 0.0);
-  vec3 f0 = vec3(0.04);
+  // bare metal layers (shutters, metal roofs, rails): coloured specular, no diffuse - values mirror METAL_LAYERS in build_assets.py
+  float metal = (layerId == MAT_ROOF_METAL) ? 0.75 : ((layerId == MAT_METAL) ? 0.25 : 0.0);   // painted street furniture only a little
+  vec3 f0 = mix(vec3(0.04), albedo, metal);
+  albedo *= 1.0 - metal;
   float a = rough * rough;
   float indoor = g.params.w;
   float sh = shadowTerm(vWorld) * (1.0 - indoor);
@@ -136,9 +140,12 @@ void main() {
 
   // ambient: hemisphere irradiance + analytic sky reflection
   float hemi = N.y * 0.5 + 0.5;
-  vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
+  float skyVis;
+  vec3 irr = probeAmbient(vWorld, N, skyVis);
   vec3 R = reflect(-V, N);
-  vec3 env = skyRadiance(R, 0.0) * (1.0 - 0.6 * a);
+  float specVis;
+  probeAmbient(vWorld, R, specVis);
+  vec3 env = skyRadiance(R, 0.0) * (1.0 - 0.6 * a) * mix(0.15, 1.0, specVis * specVis);
   vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
   irr = mix(irr, lamp, indoor);
   env = mix(env, lamp * 0.6, indoor);

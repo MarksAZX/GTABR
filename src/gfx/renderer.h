@@ -65,6 +65,8 @@ struct GlobalsUBO {
   Vec4 camPos, camRight, camUp, camFwd;
   Vec4 sunDir, sunColor, ambSky, ambGround, fog, params;
   Vec4 sky0, sky1, cascade, lightInfo;
+  Vec4 probeRect;   // x0, z0, 1/width, 1/depth of the ambient probe grid (world metres)
+  Vec4 probeInfo;   // x = enabled, y = ground layer height offset, z = rooftop layer height offset, w = unused
   LightUBO lights[kMaxLights];
 };
 
@@ -165,6 +167,8 @@ class Renderer {
   bool hasSwapchain() const { return swapchain_ != VK_NULL_HANDLE || cfg_.headless; }
 
   TexHandle createTexture(const TextureData& td, SamplerKind sampler);
+  // Ambient visibility probes (2D array, 4 layers); pass an invalid handle to switch them off.
+  void setProbeGrid(TexHandle t);
   TexHandle createTextureRGBA(uint32_t w, uint32_t h, const uint8_t* rgba, bool srgb, bool mips, SamplerKind sampler);
   MeshHandle createMesh(const WorldVertex* v, size_t nv, const uint32_t* idx, size_t ni);
   void destroyMesh(MeshHandle h);
@@ -263,6 +267,8 @@ class Renderer {
   VkDescriptorSet aoDepthSet_ = VK_NULL_HANDLE, aoBlurSet_ = VK_NULL_HANDLE;
   uint32_t aoW_ = 0, aoH_ = 0;
   bool aoSupported_ = false;
+  TexHandle probeTex_;
+  void bindProbeSets();
   VkSampler shadowSampler_ = VK_NULL_HANDLE;
   VkDescriptorSet sceneSet_ = VK_NULL_HANDLE;  // composite set (scene + blurred)
   VkDescriptorSet sceneSampleSet_ = VK_NULL_HANDLE;  // scene only (blur chain input)

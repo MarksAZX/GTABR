@@ -6,6 +6,7 @@ layout(set = 1, binding = 0) uniform sampler2D uAlbedo;   // rgb albedo, a = pai
 layout(set = 1, binding = 1) uniform sampler2D uNormal;   // tangent-space normal
 layout(set = 1, binding = 2) uniform sampler2D uORM;      // glTF metallic-roughness: g = roughness, b = metallic
 #include "shadowing.glsl"
+#include "probes.glsl"
 // tint.rgb = paint colour, tint.a = recolour amount; params: x = emissive (lights), y = clear coat, z = roughness scale, w = fade
 layout(push_constant) uniform PC { mat4 model; vec4 tint; vec4 params; } pc;
 layout(location = 0) in vec3 vWorld;
@@ -72,9 +73,12 @@ void main() {
     direct += D_GGX(NoH, ca) * V_SmithJointApprox(NoV, NoL, ca) * Fc * g.sunColor.rgb * NoL * sh * cc;
   }
   float hemi = N.y * 0.5 + 0.5;
-  vec3 irr = mix(g.ambGround.rgb, g.ambSky.rgb, hemi);
+  float skyVis;
+  vec3 irr = probeAmbient(vWorld + N * 0.3, N, skyVis);
   vec3 R = reflect(-V, N);
-  vec3 env = skyRadiance(R, 0.0);
+  float specVis;
+  probeAmbient(vWorld + N * 0.3, R, specVis);
+  vec3 env = skyRadiance(R, 0.0) * mix(0.15, 1.0, specVis * specVis);
   vec3 lamp = vec3(1.0, 0.94, 0.84) * (0.75 + 0.25 * N.y);
   irr = mix(irr, lamp, indoor);
   env = mix(env, lamp * 0.6, indoor);
