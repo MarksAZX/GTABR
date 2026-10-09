@@ -455,6 +455,23 @@ void Game::copThink(Npc& c, float dt) {
       if (c.weapon == kWpnBaton && (wanted_ >= 3 || (wanted_ >= 2 && d > 8.0f) || (isFirearm(player_.weapon) && player_.aimHold > 0))) c.weapon = kWpnPistol;
       // armed response: shoot at level 3 or when the suspect has a firearm out / is shooting
       bool shoot = isFirearm(c.weapon) && (wanted_ >= 3 || (isFirearm(player_.weapon) && player_.aimHold > 0) || wanted_ >= 2 && d > 8.0f);
+      // a car (often their own patrol car) between the officer and the suspect: step out to the side for a clear shot
+      if (shoot && d < 24.0f) {
+        Vec2 to = pp - c.pos, dirN = to / std::max(d, 1e-3f);
+        const Vehicle* block = nullptr;
+        for (const Vehicle& v : vehicles_) {
+          if (v.despawn || player_.vehicle == v.id) continue;
+          float t = (v.pos - c.pos).dot(dirN);
+          if (t < 0.5f || t > d - 0.5f) continue;
+          if ((c.pos + dirN * t - v.pos).length() < 1.7f) { block = &v; break; }
+        }
+        if (block) {
+          Vec2 side{-dirN.y, dirN.x};
+          if (side.dot(c.pos - block->pos) < 0) side = side * -1.0f;
+          moveTo(c.pos + side * 3.0f + dirN * 1.0f, 3.0f);
+          break;
+        }
+      }
       if (shoot && d < 24.0f) {
         c.speed = 0;
         c.yaw = lerpAngle(c.yaw, yawFromDir(pp - c.pos), expDecay(10.0f, dt));
